@@ -1,4 +1,4 @@
-"""Actual verl BaseTool adapter. Runtime integration is not yet verified.
+"""Actual verl BaseTool adapter, smoke-tested against the pinned verl on vp.
 
 Install a compatible verl environment before importing this module. There is no
 mock fallback: missing dependencies should fail rather than simulate integration.

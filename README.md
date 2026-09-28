@@ -10,6 +10,8 @@
 - [第一课：把临床推理变成可训练的问题](docs/lessons/001-clinical-reasoning-as-an-environment.md)
 - [第二讲：一条临床推理轨迹如何变成训练信号](docs/lessons/002-one-clinical-trajectory.md)
 - [第三讲：沿代码接入 verl](docs/lessons/003-verl-code-walkthrough.md)
+- [第四讲：H200 上第一次真实参数更新](docs/lessons/004-first-real-gpu-update.md)
+- [远端环境与复现记录](experiments/002-remote-h200.md)
 - [基础设施选择与验证边界](docs/design/002-infrastructure.md)
 - [最小 Agent 设计](docs/design/001-minimal-agent.md)
 - [讨论记录与索引](docs/discussions/README.md)
@@ -30,7 +32,7 @@
 
 ## 当前状态
 
-已实现可运行的合成病例查询与终局评分，6 项标准库测试通过。已固定 verl 源码并编写工具适配器；尚未运行 verl 集成、模型推理或训练，也未创建远程仓库。
+已实现合成病例查询与终局评分，6 项测试通过。远端 `vp` 的 H200 已验证真实 verl 工具与 GRPO 接口，并用 Qwen3-0.6B 做了一次受限 A/B 判断的参数更新。完整多轮 Agent 训练与临床评估尚未完成；未创建远程 Git 托管仓库。
 
 从仓库根目录运行，不需要安装新依赖：
 
@@ -39,6 +41,6 @@ python3 scripts/demo_case.py
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-这是预设动作的领域 demo，不能当成模型 rollout。CPU 依赖安装未获批准，候选依赖尚未解析锁定；GPU 环境等待规格确认。
+这是预设动作的本地领域 demo。真实 GPU 示范见 `scripts/demo_gpu_update.py`，在 `vp:/home/user/nanoAstra/.venv` 中运行。远端依赖版本已保存；本地没有安装训练依赖。
 
 项目用于研究与学习。起步实验使用合成或明确允许使用的去标识化病例，不将真实患者可识别信息、凭据或模型权重提交到 Git。

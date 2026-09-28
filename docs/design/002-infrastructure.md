@@ -1,6 +1,6 @@
 # 基础设施选择：verl + nanoAstra 任务扩展
 
-日期：2026-09-28。用户要求代码驱动教学、复用公开框架，并确认已有远程 GPU；型号、数量、显存、软件环境和访问方式尚未知。
+日期：2026-09-28。用户要求代码驱动教学、复用公开框架，随后授权 `ssh vp`：1×H200。独立执行目录 `/home/user/nanoAstra`；环境与结果见实验 002。
 
 ## 选择与范围
 
@@ -34,13 +34,14 @@
 | --- | --- |
 | 固定上游源码 | 已下载并阅读；未修改 |
 | 领域查询、评分和数据行生成 | 标准库脚本已运行；6 项测试通过 |
-| BaseTool 适配器与 YAML | 已按固定源码编写；未在 verl runtime 实例化 |
-| CPU GRPO 集成 probe | 已写；未运行 |
-| 模型推理、完整 ToolAgentLoop、GPU 训练 | 未运行 |
-| 依赖锁定 | 只固定了上游 SHA；CPU 包约束未完成解析，没有 uv.lock |
+| BaseTool 适配器与 YAML | 在远端通过真实 registry/lifecycle probe |
+| CPU GRPO 集成 probe | 远端通过 |
+| 真实模型与单步 GPU 更新 | Qwen3-0.6B、受限 A/B 判断已通过 |
+| 完整 ToolAgentLoop、分布式 trainer | 未运行 |
+| 版本记录 | 上游 SHA、模型 snapshot、远端包版本 freeze 已保存；没有 uv.lock |
 
 本地依赖安装请求被用户拒绝，因此没有换途径安装依赖。`pyproject.toml` 的 CPU extra 是后续候选环境，不是已验证安装方案。现有标准库示例支持本机 Python 3.9；verl 集成目标为 Python 3.11/3.12。
 
 ## 远端下一步
 
-先获取 GPU 型号、数量、显存、CUDA/驱动与已有环境信息，再选模型、推理后端和依赖组合。先做工具/GRPO probe，然后验证一条真实模型 rollout，最后开展一个小训练步。不要把 CPU probe 通过写成多轮训练已通过。
+已完成工具/GRPO probe 和受限动作的模型单步更新。接下来让模型自主查询，验证完整多轮 tokenization、mask、终止与评分，再接入 trainer。不要把 probe 或单步更新写成完整多轮训练已通过。
