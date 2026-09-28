@@ -2,7 +2,7 @@
 
 教材面向有基础模型训练经验的学习者。每课围绕具体任务与代码讲解：定义 → 机制 → 数值实例 → snippet → 输出 → 失败模式。
 
-## 四课主线
+## 课程主线
 
 | 课程 | 主问题 | 代码或证据 |
 | --- | --- | --- |
@@ -10,6 +10,8 @@
 | [2. 轨迹与策略梯度](002-one-clinical-trajectory.md) | 最终奖励怎样影响前面的动作？ | REINFORCE、return、mask 小张量 |
 | [3. verl 调用链](003-verl-code-walkthrough.md) | 样本如何经过工具与评分器？ | 真实 registry/BaseTool/reward 接口 |
 | [4. H200 真实更新](004-first-real-gpu-update.md) | 每个 tensor 怎样形成一次参数更新？ | Qwen 实测与数值复核 |
+
+| [5. 分阶段急诊病例](005-realistic-clinical-case.md) | 新证据怎样改变诊断和确定性？ | 真实格式的合成病历、时间隔离、工具回放 |
 
 ## 按概念查找
 
@@ -39,7 +41,7 @@
 
 ## 代码验证范围
 
-42 个 Python 片段通过 AST 解析；其中 29 个作为可运行片段在 vp 现有环境中执行，输出保存到 [snippet 记录](../../experiments/results/003-lesson-snippets.json)。有上下文依赖的方法片段与故意错误的片段没有被当成独立程序运行。
+前四课的 42 个 Python 片段通过 AST 解析；其中 29 个作为可运行片段在 vp 现有环境中执行，输出保存到 [snippet 记录](../../experiments/results/003-lesson-snippets.json)。有上下文依赖的方法片段与故意错误的片段没有被当成独立程序运行。
 
 [数学检查](../../scripts/verify_lesson_math.py) 另使用真实 verl 验证组内标准化、分组错误、mask、裁剪和梯度；[结果](../../experiments/results/003-lesson-math.json) 与 [验证说明](../../experiments/003-teaching-verification.md) 可核对。
 

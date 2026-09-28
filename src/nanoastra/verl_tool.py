@@ -16,12 +16,18 @@ from nanoastra.clinical import ALLOWED_FIELDS, read_record
 class ClinicalRecordTool(BaseTool):
     def __init__(self, config, tool_schema):
         super().__init__(config, tool_schema)
+        fields = config.get("record_fields", list(ALLOWED_FIELDS))
+        if not isinstance(fields, list) or not fields or not all(isinstance(x, str) for x in fields):
+            raise ValueError("record_fields must be a nonempty list of field names.")
+        if set(fields) & {"label", "ground_truth", "instructor_only", "reference_diagnosis"}:
+            raise ValueError("Answer keys are not queryable record fields.")
+        self._allowed_fields = tuple(fields)
         self._records = {}
 
     async def create(self, instance_id=None, **kwargs):
         # The pinned ToolAgentLoop calls create(create_kwargs=...) per tool call.
         source = kwargs["create_kwargs"]["record"]
-        if not isinstance(source, dict) or set(source) - set(ALLOWED_FIELDS):
+        if not isinstance(source, dict) or set(source) - set(self._allowed_fields):
             raise ValueError("Tool context must contain only permitted record fields.")
         if not all(isinstance(value, str) for value in source.values()):
             raise ValueError("Record values must be strings.")
@@ -36,7 +42,7 @@ class ClinicalRecordTool(BaseTool):
         if not isinstance(parameters, dict) or set(parameters) != {"field"}:
             result = {"status": "invalid_arguments"}
         else:
-            result = read_record(self._records[instance_id], parameters["field"])
+            result = read_record(self._records[instance_id], parameters["field"], self._allowed_fields)
         # Zero tool reward: terminal correctness is scored separately.
         # No query-cost penalty until its end-to-end aggregation is verified.
         return ToolResponse(text=json.dumps(result)), 0.0, {"record_queries": 1}

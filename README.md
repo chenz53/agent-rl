@@ -13,6 +13,7 @@
 - [第二讲：一条临床推理轨迹如何变成训练信号](docs/lessons/002-one-clinical-trajectory.md)
 - [第三讲：沿代码接入 verl](docs/lessons/003-verl-code-walkthrough.md)
 - [第四讲：H200 上第一次真实参数更新](docs/lessons/004-first-real-gpu-update.md)
+- [第五讲：更接近真实急诊的分阶段病例](docs/lessons/005-realistic-clinical-case.md)
 - [远端环境与复现记录](experiments/002-remote-h200.md)
 - [教材代码与数学验证](experiments/003-teaching-verification.md)
 - [基础设施选择与验证边界](docs/design/002-infrastructure.md)
@@ -35,12 +36,13 @@
 
 ## 当前状态
 
-已实现合成病例查询与终局评分，6 项测试通过。远端 `vp` 的 H200 已验证真实 verl 工具与 GRPO 接口，并用 Qwen3-0.6B 做了一次受限 A/B 判断的参数更新。完整多轮 Agent 训练与临床评估尚未完成；未创建远程 Git 托管仓库。
+已实现合成病例查询与终局评分，11 项测试通过。远端 `vp` 的 H200 已验证真实 verl 工具与 GRPO 接口，并用 Qwen3-0.6B 做了一次受限 A/B 判断的参数更新。完整多轮 Agent 训练与临床评估尚未完成；未创建远程 Git 托管仓库。
 
 从仓库根目录运行，不需要安装新依赖：
 
 ```sh
 python3 scripts/demo_case.py
+python3 scripts/demo_realistic_case.py --stage initial
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 

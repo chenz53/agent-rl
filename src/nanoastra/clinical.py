@@ -28,8 +28,8 @@ DEMO_CASE = Case(
 )
 
 
-def read_record(record: Mapping[str, str], field: object) -> dict:
-    if not isinstance(field, str) or field not in ALLOWED_FIELDS:
+def read_record(record: Mapping[str, str], field: object, allowed_fields=ALLOWED_FIELDS) -> dict:
+    if not isinstance(field, str) or field not in allowed_fields:
         return {"status": "invalid_field"}
     if field not in record:
         return {"status": "unavailable", "field": field}

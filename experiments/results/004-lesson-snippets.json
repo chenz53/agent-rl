@@ -1,0 +1,17 @@
+[
+  {
+    "block": 1,
+    "passed": true,
+    "stdout": "6.0 True\n"
+  },
+  {
+    "block": 2,
+    "passed": true,
+    "stdout": "D0 09:40\n【尚未完成】截至 D0 09:40 尚无肺动脉增强 CT（CTPA）报告可读取。此状态不是阴性检查，也不会因为反复调用本工具而自动生成结果。\ninvalid_field\n"
+  },
+  {
+    "block": 3,
+    "passed": true,
+    "stdout": ""
+  }
+]
