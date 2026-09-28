@@ -1,0 +1,151 @@
+{
+  "parsed_blocks": 42,
+  "executed_blocks": 29,
+  "outputs": [
+    {
+      "lesson": "001-clinical-reasoning-as-an-environment.md",
+      "block": 1,
+      "stdout": ""
+    },
+    {
+      "lesson": "001-clinical-reasoning-as-an-environment.md",
+      "block": 2,
+      "stdout": ""
+    },
+    {
+      "lesson": "001-clinical-reasoning-as-an-environment.md",
+      "block": 3,
+      "stdout": ""
+    },
+    {
+      "lesson": "001-clinical-reasoning-as-an-environment.md",
+      "block": 4,
+      "stdout": ""
+    },
+    {
+      "lesson": "001-clinical-reasoning-as-an-environment.md",
+      "block": 5,
+      "stdout": ""
+    },
+    {
+      "lesson": "001-clinical-reasoning-as-an-environment.md",
+      "block": 6,
+      "stdout": "0.8\n"
+    },
+    {
+      "lesson": "001-clinical-reasoning-as-an-environment.md",
+      "block": 7,
+      "stdout": "{'field': 'test_x', 'value': 'negative'}\n1\n"
+    },
+    {
+      "lesson": "001-clinical-reasoning-as-an-environment.md",
+      "block": 8,
+      "stdout": "{'status': 'unavailable', 'field': 'test_x'}\n{'status': 'invalid_field'}\n"
+    },
+    {
+      "lesson": "001-clinical-reasoning-as-an-environment.md",
+      "block": 9,
+      "stdout": "set()\n"
+    },
+    {
+      "lesson": "001-clinical-reasoning-as-an-environment.md",
+      "block": 10,
+      "stdout": "0.9\n"
+    },
+    {
+      "lesson": "001-clinical-reasoning-as-an-environment.md",
+      "block": 11,
+      "stdout": "0.09999999999999987\n"
+    },
+    {
+      "lesson": "001-clinical-reasoning-as-an-environment.md",
+      "block": 12,
+      "stdout": ""
+    },
+    {
+      "lesson": "001-clinical-reasoning-as-an-environment.md",
+      "block": 13,
+      "stdout": "['exposure', 'test_x']\n{'style': 'rule', 'ground_truth': 'B'}\n"
+    },
+    {
+      "lesson": "002-one-clinical-trajectory.md",
+      "block": 1,
+      "stdout": "1.0\n"
+    },
+    {
+      "lesson": "002-one-clinical-trajectory.md",
+      "block": 2,
+      "stdout": "0.16000000000000003\n-1.83258146374831\n"
+    },
+    {
+      "lesson": "002-one-clinical-trajectory.md",
+      "block": 3,
+      "stdout": "[0.9, 0.95, 1.0]\n"
+    },
+    {
+      "lesson": "002-one-clinical-trajectory.md",
+      "block": 4,
+      "stdout": "1.2000000476837158\ntensor([-0.6000, -0.6000, -0.6000])\n"
+    },
+    {
+      "lesson": "002-one-clinical-trajectory.md",
+      "block": 5,
+      "stdout": "tensor([-0.1500, -0.1500, -0.0000, -0.0000, -0.1500, -0.1500])\n"
+    },
+    {
+      "lesson": "003-verl-code-walkthrough.md",
+      "block": 1,
+      "stdout": "tool_agent\nSynthetic patient: fever and cough. Candidate labels are A and B.\n{'get_clinical_record': {'create_kwargs': {'record': {'exposure': 'positive', 'test_x': 'negative'}}}}\n{'style': 'rule', 'ground_truth': 'B'}\n"
+    },
+    {
+      "lesson": "003-verl-code-walkthrough.md",
+      "block": 2,
+      "stdout": "{\n  \"type\": \"function\",\n  \"function\": {\n    \"name\": \"get_clinical_record\",\n    \"description\": \"Read one available field from the current synthetic case.\",\n    \"parameters\": {\n      \"type\": \"object\",\n      \"properties\": {\n        \"field\": {\n          \"type\": \"string\",\n          \"description\": \"The record field to retrieve.\",\n          \"enum\": [\n            \"exposure\",\n            \"test_x\"\n          ]\n        }\n      },\n      \"required\": [\n        \"field\"\n      ]\n    }\n  }\n}\nClinicalRecordTool\nget_clinical_record\n"
+    },
+    {
+      "lesson": "003-verl-code-walkthrough.md",
+      "block": 6,
+      "stdout": "{\"status\": \"ok\", \"field\": \"test_x\", \"value\": \"negative\"}\n0.0 {'record_queries': 1}\n0\n"
+    },
+    {
+      "lesson": "003-verl-code-walkthrough.md",
+      "block": 8,
+      "stdout": "{'score': 1.0, 'accuracy': 1.0, 'format_valid': 1.0}\n{'score': 0.0, 'accuracy': 0.0, 'format_valid': 1.0}\n{'score': 0.0, 'accuracy': 0.0, 'format_valid': 0.0}\n"
+    },
+    {
+      "lesson": "003-verl-code-walkthrough.md",
+      "block": 9,
+      "stdout": "[0.0, 0.0, 0.0, 0.0]\n[0.8660238981246948, 0.8660238981246948, -0.8660238981246948, -0.8660238981246948]\n"
+    },
+    {
+      "lesson": "004-first-real-gpu-update.md",
+      "block": 3,
+      "stdout": "1.0 [0.8892068150507271, 0.1107931849492729]\n2.0 [0.7391069906746117, 0.2608930093253883]\n4.0 [0.627303520187413, 0.37269647981258697]\n"
+    },
+    {
+      "lesson": "004-first-real-gpu-update.md",
+      "block": 5,
+      "stdout": "4.174288272857666\n0.11857917714965788\n"
+    },
+    {
+      "lesson": "004-first-real-gpu-update.md",
+      "block": 9,
+      "stdout": "0.125 0.3415650255319866\n-0.36596145593026536 2.5617301915118578\n"
+    },
+    {
+      "lesson": "004-first-real-gpu-update.md",
+      "block": 11,
+      "stdout": "1.1999999999999997\n"
+    },
+    {
+      "lesson": "004-first-real-gpu-update.md",
+      "block": 12,
+      "stdout": "-2.7755575615628914e-17 [0.1601081369694911, -0.1601081369694911]\n"
+    },
+    {
+      "lesson": "004-first-real-gpu-update.md",
+      "block": 15,
+      "stdout": "0.192745 0.500402 0.693147\n"
+    }
+  ]
+}

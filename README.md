@@ -6,12 +6,15 @@
 
 ## 从这里开始
 
+- [教材目录与概念索引](docs/lessons/README.md)
+
 - [学习路线](docs/roadmap.md)
 - [第一课：把临床推理变成可训练的问题](docs/lessons/001-clinical-reasoning-as-an-environment.md)
 - [第二讲：一条临床推理轨迹如何变成训练信号](docs/lessons/002-one-clinical-trajectory.md)
 - [第三讲：沿代码接入 verl](docs/lessons/003-verl-code-walkthrough.md)
 - [第四讲：H200 上第一次真实参数更新](docs/lessons/004-first-real-gpu-update.md)
 - [远端环境与复现记录](experiments/002-remote-h200.md)
+- [教材代码与数学验证](experiments/003-teaching-verification.md)
 - [基础设施选择与验证边界](docs/design/002-infrastructure.md)
 - [最小 Agent 设计](docs/design/001-minimal-agent.md)
 - [讨论记录与索引](docs/discussions/README.md)

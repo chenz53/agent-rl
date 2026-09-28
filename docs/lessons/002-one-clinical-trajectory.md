@@ -1,86 +1,234 @@
-# 第二讲：一条临床推理轨迹，如何变成训练信号
+# 第二讲：从一条交互轨迹到策略梯度
 
-本讲接续第一课的环境定义。目标：理解观测、动作与奖励在一次 rollout 中的位置，并看清终局奖励的信用分配问题。
+[第一课](001-clinical-reasoning-as-an-environment.md) 定义了环境。本课要解释：模型选择查询、观察结果、再给答案，这整段过程为何能用一个最终奖励来训练？又为什么这个奖励不足以告诉我们每一步的贡献？
 
-## 1. 先定义一个足够小的世界
+本课多轮轨迹是教学构造。已运行的 H200 实验只优化最后的 A/B 判断；不要把二者合并描述成已完成的多轮训练。
 
-用一个完全合成的病例：患者主诉发热、咳嗽。为专注训练机制，候选诊断用 A、B 表示，下面的信息与标签关系是人为设定，不代表医学规律。
+## 1. 把 rollout 展开，而不是只写一句“Agent 与环境交互”
 
-环境私有信息包括：
+一个 episode 是任务从 reset 到结束的运行区间；rollout 是让策略在环境中实际运行并收集结果的过程；trajectory τ 是该过程保存下来的数据序列。这些词有时在代码里被混用，我们这里区分它们。
 
-- 初始主诉：发热、咳嗽。
-- 可查询病史：某项暴露史为阳性。
-- 可查询检查：已有检查 X 的结果为阴性。
-- 用于评分的隐藏标签：B。
+用统一工具 `get_clinical_record` 写一条轨迹：
 
-Agent 起初只看到主诉、可用工具及预算。标签 B 不进入 prompt，也不能通过工具读取。
+| t | 动作前模型可见历史 h_t | 模型动作 a_t | 新观测 o_{t+1} | 步骤奖励 r_t |
+| --- | --- | --- | --- | --- |
+| 0 | 主诉 | 查询 exposure | positive | 0 |
+| 1 | 主诉、第一次查询及结果 | 查询 test_x | negative | 0 |
+| 2 | 上述全部历史 | 回答 B | 结束标志 | 1 |
 
-这里的查询是读取已经存在的记录。我们暂不模拟疾病演变或真实检查的后果。
+如果给查询加成本，前两个 r_t 可以变成 -0.05；本表先只用终局正确性奖励。
 
-**病例内容可以静态，但完整环境状态不是只有病例：它还包括已披露信息、剩余预算与是否终止。** reset 必须同时重置这些内容。
+用标准库构造一个可检查的记录例子：
 
-## 2. 一次 rollout
+```python
+trajectory = [
+    {"action": {"field": "exposure"}, "observation": "positive", "reward": 0.0},
+    {"action": {"field": "test_x"}, "observation": "negative", "reward": 0.0},
+    {"action": {"answer": "B"}, "observation": "terminated", "reward": 1.0},
+]
+print(sum(step["reward"] for step in trajectory))  # 1.0
+```
 
-| 步骤 | Agent 产生的动作 | 环境返回 |
-| --- | --- | --- |
-| 0 | `get_history("exposure")` | 暴露史阳性 |
-| 1 | `get_result("X")` | 检查 X 阴性 |
-| 2 | `final_answer("B")` | 终止；评分器给出 R=1 |
+真实训练还需要保存策略版本、原始 generated token IDs、采样 log-probabilities、mask 和终止原因。只存一段自然语言对话，不足以可靠重建训练 batch。
 
-只有最终诊断匹配隐藏标签才得 1 分，否则为 0。这是教学用奖励，不代表充分的临床质量评价。
+## 2. 轨迹概率：策略和环境各负责哪一部分
 
-模型第 1 步的输入已经包含第 0 步得到的信息。因此，我们优化的不只是最后的答案分布，还包括决定后续能看到什么的查询策略，以及停止策略。
-
-## 3. 哪些内容产生 policy-gradient 项？
-
-用 a_t 表示一次完整动作，用 h_t 表示产生该动作前可见的历史。模型定义 πθ(a_t | h_t)。文本动作还可以继续分解成生成 token 的条件概率乘积。
-
-在这个例子中：
-
-| 内容 | 进入上下文 | 作为策略生成动作计算 log-probability |
-| --- | --- | --- |
-| 初始病例与工具定义 | 是 | 否 |
-| 模型生成的查询名称及参数 | 是 | 是 |
-| 工具返回的病史和结果 | 是 | 否 |
-| 模型生成的最终答案 | 是 | 是 |
-
-这里讨论纯 policy-gradient 目标。如果另外加 SFT 辅助损失，需要单独定义其训练位置。工具返回虽然不作为采样动作计算 log-probability，仍然会通过后续生成的条件上下文影响参数梯度。
-
-**模型可以在固定的工具反馈上学习如何行动；工具本身不需要可微。**
-
-## 4. 终局奖励怎样影响前面的查询？
-
-对当前策略采样的完整轨迹，先看最简单的 REINFORCE 估计，暂不加入 PPO 裁剪或 KL：
+条件于任务 x，令工具环境为 E：
 
 \[
-\widehat g=(R-b)\sum_{t=0}^{2}\nabla_\theta\log\pi_\theta(a_t\mid h_t).
+p_\theta(\tau\mid x,E)
+=p_E(o_0\mid x)\prod_{t=0}^{T-1}
+\pi_\theta(a_t\mid h_t)P_E(o_{t+1}\mid h_t,a_t).
 \]
 
-这里 b 是不依赖本次采样动作的 baseline，更新时视为常数。它用于降低方差；不能任意使用依赖动作的 baseline 而仍宣称保持无偏。
+πθ 是模型选择动作的概率；P_E 是环境产生新观测的概率。病例读取通常是确定性的：给定正确字段，返回固定值，对这条实际返回的条件概率是 1。其他环境可以有随机性，例如检索返回波动或模拟器随机响应。
 
-假设 b=0.4，这条成功轨迹的系数就是 0.6。梯度估计给三个已采样动作的 log-probability 都乘上正权重，包括两次查询。
+**人为数值例子：**三次模型动作的条件概率依次为 0.4、0.5、0.8；环境返回确定，则这条轨迹的策略部分概率为：
 
-但这没有证明每次查询都有帮助。假如查询暴露史完全无用，只是碰巧出现在成功轨迹中，它也获得了正权重。由于参数共享，不能进一步保证一次联合更新后每个具体动作的概率都单调增加。
+```python
+from math import log
+probs = [0.4, 0.5, 0.8]
+print(probs[0] * probs[1] * probs[2])  # 0.16
+print(sum(log(p) for p in probs))     # 约 -1.832581
+```
 
-**终局奖励对整条轨迹给出统计上的学习信号，不会自动提供逐步因果解释。** 后续我们讨论 advantage、critic、过程奖励和反事实实验，都要回到这个问题。
+0.8 是“已经查询并看到结果后回答 B”的概率，不是“只看主诉时回答 B”的概率。忽略条件上下文会把不同策略问题混在一起。
 
-公式背景：[Sutton 等人的策略梯度论文](https://proceedings.neurips.cc/paper/1999/hash/464d828b85b0bed98e80ade0a5c43b0f-Abstract.html)；baseline 与 REINFORCE 见 [Sutton 与 Barto 教材第 13 章](https://www.incompleteideas.net/book/bookdraft2018mar21.pdf)。本例与数值由导师构造，不是论文实验结果。
+## 3. 为什么环境不需要可微
 
-## 5. 为什么正确率一个指标不够？
+本课的策略梯度推导取有限 episode、γ=1。第四节会给出一般 return 的定义；若改成折扣目标，需要一致处理时间权重，不能只替换一个 return 公式就认为整套推导不变。
 
-比较两个策略：
+目标是提升期望回报：
 
-- 每次都查询全部允许信息，再回答。
-- 根据当前信息选择少量查询，必要时继续，否则停止。
+\[
+J(\theta)=E_{\tau\sim p_\theta}[R(\tau)].
+\]
 
-如果二者正确率一样，而奖励只看最终是否正确，它们可以得到一样的期望奖励。RL 没有被要求偏好高效的信息获取。
+在 reward 和环境转移没有直接 θ 依赖、并满足通常的可微与积分交换条件下，使用 likelihood-ratio identity：
 
-给查询加成本可以改变这个目标，但成本系数过大又可能鼓励过早回答。因此先分别记录正确率、查询次数、预算耗尽率和不同难度上的表现，再研究如何组合奖励。
+\[
+\nabla J=\sum_\tau R(\tau)\nabla p_\theta(\tau)
+=E_\tau[R(\tau)\nabla\log p_\theta(\tau)].
+\]
 
-## 本轮问题
+如果环境分布固定，log 轨迹概率的显式参数梯度来自模型动作项：
 
-假设某类病例中，模型只看初始主诉就有 80% 的正确率；做一次查询后可以达到 95%。每次查询扣 0.05 分，答对得 1 分，答错得 0 分。
+\[
+\nabla\log p_\theta(\tau)=\sum_t\nabla\log\pi_\theta(a_t\mid h_t).
+\]
 
-在这些数值成立且只允许“直接回答”或“查询一次后回答”的玩具设定下，期望奖励偏好哪个策略？实际训练中，即使查询确实更好，模型仍可能学不会查询——你认为可能卡在哪个环节？
+我们不对数据库结果“positive”求导，而对“选择了这个查询”的概率求导。环境反馈仍然非常重要：它改变后续 history 和最终 reward，进而影响采样到什么梯度。
 
-本轮不预先给出答案，用于区分目标定义正确与策略能否通过采样学到它。
+这并不是环境分布对学习没有影响。随着策略改变，访问到的 history 分布也改变；策略梯度的轨迹期望正包含这种影响。
+
+## 4. reward 与 return-to-go：未来结果为什么影响早期动作
+
+给定步骤奖励 `[-0.05,-0.05,1]`，γ=1，从每个动作开始累计的 return-to-go 分别为 `[0.90,0.95,1.00]`。
+
+独立小例子：
+
+```python
+rewards = [-0.05, -0.05, 1.0]
+gamma = 1.0
+returns = [
+    sum((gamma ** (k-t)) * rewards[k] for k in range(t, len(rewards)))
+    for t in range(len(rewards))
+]
+print(returns)  # [0.9, 0.95, 1.0]
+```
+
+第 0 步动作影响后面整个过程，所以其 return 包含后续成功奖励；第 2 步不应该为发生在它之前的查询成本承担因果影响。用 return-to-go 去掉过去奖励，可以降低无用噪声，而不改变标准 on-policy 策略梯度的期望。
+
+只在最终给 1 分且 γ=1 时，三个动作的 return 都是 1。这不意味着它们贡献相等，只意味着这份反馈没有提供更细的区分。
+
+## 5. baseline：为什么“比通常表现好多少”比原始 reward 更有用
+
+最简单的 REINFORCE 梯度估计为 `R × Σ∇logπ`。每个回报都乘上动作 log-probability 的梯度；即使所有轨迹回报都差不多，也会有很大采样噪声。
+
+加入不依赖当前采样动作的 baseline b(h_t)：
+
+\[
+\hat g=\sum_t(G_t-b(h_t))\nabla\log\pi_\theta(a_t\mid h_t).
+\]
+
+为什么可以减掉它？对固定 h，动作概率加起来是 1：
+
+\[
+E_{a\sim\pi}[b(h)\nabla\log\pi(a\mid h)]
+=b(h)\sum_a\nabla\pi(a\mid h)
+=b(h)\nabla1=0.
+\]
+
+因此，在上述条件下 baseline 项期望为 0，可以改善方差而不改变梯度期望。若 baseline 是学习到的 value，policy loss 中通常将它视为常量，value 自己通过独立目标训练。
+
+**具体数值：**假设某类起始上下文通常成功率 0.4，我们先用 b=0.4：
+
+| 结果 | R | R−b | 对采样动作项的权重 |
+| --- | --- | --- | --- |
+| 成功 | 1 | +0.6 | 正权重 |
+| 失败 | 0 | −0.4 | 负权重 |
+
+没有 baseline 时，R=0 的失败轨迹在这个最简单估计里贡献为 0。加入 baseline 后失败也能提供负权重；这不代表它凭空增加了真实信息，而是改变了估计器的方差结构。
+
+GRPO 的同组均值含有当前样本自己的 reward，再除以同组标准差。它不是本节“严格动作无关 baseline”证明的直接套用，不能因此宣称所有 GRPO 估计都严格无偏。后续用组内相对信号解释它，不把两种估计混为一谈。
+
+## 6. 写成 loss：为什么是负号
+
+我们通常用优化器最小化 loss，而 J 是要最大化的期望回报。在当前策略采样、仅作一次局部梯度解释时，可以写：
+
+\[
+L=-\sum_t\operatorname{stopgrad}(G_t-b_t)\log\pi_\theta(a_t\mid h_t).
+\]
+
+下面使用彼此独立的 log-probability 变量，演示 loss 对这些中间变量的导数；它们不是一个完整归一化策略，也不是模型参数：
+
+```python
+import torch
+logp = torch.tensor([-1.0, -0.7, -0.3], requires_grad=True)
+weight = torch.tensor([0.6, 0.6, 0.6])
+loss = -(weight.detach() * logp).sum()
+loss.backward()
+print(loss.item())   # 约 1.2
+print(logp.grad)     # tensor([-0.6, -0.6, -0.6])
+```
+
+梯度下降会在这个局部视角中推高这些 log-probability。但真实模型参数共享，一个 batch 更新不保证每个动作概率都单调增加。
+
+若对旧策略采到的 batch 重复更新，不能一直当作每次都是当前策略新样本。PPO/GRPO 的 ratio 等机制用于构造受控 surrogate；第四讲会实际计算。
+
+这里的 **on-policy** 指数据由要优化的当前策略采样；**off-policy** 指数据来自不同的行为策略。比如采样时 P(B)=0.2，经过几次更新后 P(B)=0.8，同一个旧 batch 已经不是新策略下的原始样本。PPO 常先采一批数据，再固定采样时的概率做若干小步更新；称它是 on-policy 家族，不意味着这些小步之间的分布完全没变。
+
+## 7. 信用分配：成功轨迹里的无用动作也会拿到正权重
+
+假设第一步查询 exposure 实际与任务标签独立，第二步 test_x 才有帮助。该轨迹最终成功，使用上面的终局权重时，第一步仍拿到 +0.6。
+
+策略梯度不是逐步因果归因算法。大量轨迹中无用查询可能不再与额外收益关联；加入成本也会改变它的净价值，但单条成功轨迹本身没有告诉训练器哪一步必要。
+
+要判断查询是否有帮助，可比较在相同起始信息下：允许/禁止该查询、替换查询结果、固定后续策略等条件。但反事实对照必须明确定义；直接删除一段文本后让模型重新回答，也改变了后续行为，不能自动解释为该查询的纯因果贡献。
+
+## 8. 一个工具动作如何变成 token-level log-probability
+
+一次 JSON 工具调用是 token 序列 y_1...y_m：
+
+\[
+\log\pi_\theta(a\mid h)=\sum_{j=1}^{m}\log p_\theta(y_j\mid h,y_{<j}).
+\]
+
+如果用终局权重给整次动作里的 token 同一个 advantage，是在提高/降低这段 sampled sequence 的概率。它并不意味着每个 token 在语义上同样关键。
+
+这里有个常见工程错误：把生成文本 decode 后再 encode，认为必定还原相同 token IDs。特殊 token、模板、空格和 tokenizer 行为可能打破这一点。训练记录应优先保留推理时的原始 sampled IDs 与对应 log-probability。
+
+更细的难点是预测位置对齐：causal LM 第 k 个位置的 logits 预测下一个 token，不能不作 shift 就拿同一位置的 token 当 label。
+
+## 9. attention mask 与 response/loss mask 是不同东西
+
+考虑下面六个**人工 token 位置**：
+
+```text
+位置              0       1        2       3       4       5
+来源            查询名   参数     工具值   工具值   答案前缀  B
+attention mask    1       1        1       1       1       1
+response mask     1       1        0       0       1       1
+```
+
+attention mask 说这些位置是不是有效上下文；response mask 说哪些 sampled action 位置进入策略目标。工具值需要被模型读到，所以不是从 attention 中删除，只是不作为策略采样动作计算 policy loss。
+
+用独立 log-probability 变量演示：
+
+```python
+import torch
+logp = torch.tensor([-1., -1., -1., -1., -1., -1.], requires_grad=True)
+mask = torch.tensor([1., 1., 0., 0., 1., 1.])
+advantage = 0.6
+loss = -(logp * advantage * mask).sum() / mask.sum()
+loss.backward()
+print(logp.grad)
+# tensor([-0.15, -0.15, 0., 0., -0.15, -0.15])
+```
+
+这些 0 只说明工具位置不作为独立动作 likelihood 项。工具 token 的 embedding、表示和注意力仍可能通过后续答案的 loss 收到参数梯度；不要把 mask=0 理解成模型完全不学习如何读取工具信息。
+
+本例除以有效动作 token 数 4。若错误地除以总长度 6，每段工具文本的长度都会改变 loss 的缩放。不同的 token-mean/sequence-mean 聚合策略也会改变长短轨迹的相对权重，必须读具体实现。
+
+## 10. 把理论变成需要保存的数据
+
+| 字段 | 例子 | 少了它会出现什么问题 |
+| --- | --- | --- |
+| task/prompt 标识 | 同一病例和同一可见上下文的版本 | GRPO 分组错误 |
+| 策略版本 | rollout 时 checkpoint/step | 不清楚数据是否过旧 |
+| 生成 token IDs | 模型原始采样结果 | decode/re-encode 后概率错位 |
+| 采样 log-probabilities | 每个动作 token 的旧策略概率 | ratio 的分母不可信 |
+| response mask | assistant=1，工具/填充=0 | 在环境输出上错误训练策略 |
+| 最终分数及诊断指标 | score、format_valid、tool_error | 把格式失败或工具故障混为任务失败 |
+| stop reason | 回答完成/预算/超时 | 无法判断失败的来源 |
+
+已有 probe 用的是人工 token 位置，真实多轮模型轨迹尚需后续验证。下一讲沿 verl 的工具、数据与 reward 调用链，说明这些概念落在哪些代码接口上。
+
+## 11. 自检与答案线索
+
+- **为什么只给最终 reward 也能训练前面的查询？** 轨迹 likelihood 含有查询概率，score-function 梯度把最终 return 乘回这些 log-probability 梯度。
+- **为什么工具不需要可微？** 优化的是选择动作的概率，不是直接对数据库求导。
+- **为什么把工具位置 mask 掉不会让模型“看不见工具”？** attention/context 与 policy-loss 位置承担不同职责。
+- **为什么一个成功轨迹不足以证明所有步骤有效？** reward 缺少逐步反事实信息，终局权重会同时作用于有用和无用的 sampled actions。
+
+理论背景：[Sutton 等人的策略梯度论文](https://proceedings.neurips.cc/paper/1999/hash/464d828b85b0bed98e80ade0a5c43b0f-Abstract.html)。本文推导与玩具代码是教学解释，不是该论文的实验结果。
