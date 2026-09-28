@@ -1,16 +1,16 @@
-# 学习路线
+# Learning roadmap
 
-每个单元包含：问题定义 → 数学机制 → 最小实现或手工轨迹 → 失败分析 → 检验理解。
+Each unit follows task definition, mechanism, implementation or worked trajectory, failure analysis, and an understanding check. Documentation is English; discussion may be Chinese.
 
-| 单元 | 核心问题 | 实践里程碑 |
+| Unit | Core question | Practical milestone |
 | --- | --- | --- |
-| 1. 临床推理环境 | 哪些信息隐藏？什么动作能改变可见信息？何时停止？ | 环境契约与合成轨迹 |
-| 2. 基线与评估 | 模型究竟缺知识、缺信息，还是缺策略？ | 固定评估集及无 RL 基线 |
-| 3. 轨迹与策略梯度 | 环境反馈怎样影响梯度？动作与 token 如何对应？ | rollout 数据格式、mask 与最小目标函数 |
-| 4. PPO / GRPO 与信用分配 | 优势估计、重要性比率、裁剪与 KL 如何作用？ | 可核对的更新与诊断日志 |
-| 5. 数据与探索 | 如何获得有信息量的成功和失败？ | 难度分析与采样消融 |
-| 6. 真实训练系统 | 工具长尾、策略滞后和失败重试如何影响训练？ | 可复现的小规模训练闭环 |
-| 7. 科学有效性 | 如何区分奖励优化和临床推理能力提升？ | 独立评估、泄漏审计和失败报告 |
-| 8. 研究复现 | 哪个机制真正带来收益？哪些结论不成立？ | 论文拆解与受控复现实验 |
+| 1. Oncology data and environment | What is knowable at the index? What can the agent query? | CSV contract, as-of view, outcome isolation |
+| 2. Baselines and evaluation | Is the limitation knowledge, information, or strategy? | Non-RL baselines and independent evaluation |
+| 3. Trajectories and gradients | How do tool interactions affect policy gradients? | Original tokens, likelihoods, masks, returns |
+| 4. PPO/GRPO and credit | What do relative advantage, ratio, clipping, and KL do? | Auditable updates and diagnostics |
+| 5. Data and exploration | How do we collect informative successes and failures? | Sampling and task-difficulty ablations |
+| 6. Training systems | How do latency, retries, and policy lag change learning? | Reproducible small training loop |
+| 7. Scientific validity | Does reward improvement represent better prognosis? | Censoring-aware evaluation, calibration, leakage audit |
+| 8. Research reproduction | Which mechanism actually explains a gain? | Controlled replication and failure report |
 
-教学深度取决于实际讨论。优先理解目标函数与数据流，再选择框架；不将框架 API 熟练度等同于掌握 RL。
+Prioritize the objective and data flow over API familiarity. Progress follows understanding and verified experiments, not a fixed promise of expertise.

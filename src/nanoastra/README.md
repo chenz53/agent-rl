@@ -1,8 +1,11 @@
-# 实现目录
+# Domain implementation
 
-- `clinical.py`：病例信息边界、查询与 verl 数据行。
-- `reward.py`：自定义终局评分。
-- `verl_tool.py`：真实 BaseTool 子类，已在远端通过 registry/lifecycle smoke test。
-- `upstream.py`：检查并载入固定上游源码。
+- `oncology.py`: gzip CSV contract and patient/index-specific clinical views.
+- `oncology_outcomes.py`: evaluator-only follow-up and horizon labels.
+- `clinical.py`: original artificial case, generic allowed-field lookup, and toy verl row.
+- `verl_tool.py`: genuine BaseTool adapter with a configurable field allowlist.
+- `case_replay.py`: historical emergency-case stages.
+- `reward.py`: artificial A/B scorer; not an oncology scoring function.
+- `upstream.py`: validate and activate the pinned upstream checkout.
 
-领域 demo 和工具/GRPO 集成已验证；受限 A/B 的真实 Qwen 参数更新见实验 002。完整多轮 Agent/训练尚未实现。
+The implementation provides data boundaries and probes. It does not yet implement an autonomous clinical agent or complete training loop.

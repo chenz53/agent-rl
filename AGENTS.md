@@ -1,17 +1,17 @@
-# nanoAstra 工作约定
+# nanoAstra working agreements
 
-- 这是中文 Agentic RL 教学与实现仓库。学习者有多年基础模型训练经验，跳过通用深度学习入门；必要时严谨补充 RL 基础。
-- 主线是临床推理 Agent；解释须联系数学机制、实现、失败模式和可区分假设的实验。
-- 用户偏好结合真实代码教学并复用公共框架。当前选用固定 SHA 的 verl；nanoAstra 只实现领域扩展，不重复实现通用训练基础设施。
-- 教材必须详细讲透概念，不写成提纲。每个关键概念给出定义与动机、具体实例、逐步过程、code snippet、数值/张量形状与输出解释、常见错误。明确区分实测、假设和重建演示；读者不应靠自行补齐中间推导才能理解。
-- 代码片段标明是否可独立运行或需要上下文，尽可能在现有环境核验。修改课程片段顺序后审查 `scripts/check_lesson_snippets.py` 的选择表。对话仍简短，但教材深度优先满足用户要求。
-- 用户授权通过 `ssh vp` 做远端示范：1×H200，执行目录 `/home/user/nanoAstra`，独立 `.venv`。此前本地依赖安装被拒绝，仍不要重试本地安装；远端独立环境已按新授权安装。
-- 远端 verl 工具/GRPO probe 和 Qwen3-0.6B 的一次受限 A/B 参数更新已通过。不要将其描述为完整多轮 Agent 训练或临床能力提升；详见实验 002。
-- 每轮实质性教学或项目讨论后，将新讨论保存到 `docs/discussions/`；用户原话、导师原话、讨论摘要必须明确区分。不要把摘要标为逐字记录，也不要虚构历史。
-- 同步相关课程、设计、代码和 `PROGRESS.md`；保留决策的历史与理由。所有本项目产物放在本仓库内。
-- 论文结论、导师解释、项目假设必须区分。标明来源与检索日期；临床知识与标准需要独立核验。
-- 未运行的实验、未验证的设计不得写成完成结果。课程按理解与实验进展推进，不以固定时间承诺专家水平。
-- 在实际选定数据前核实用途和许可。不要提交患者可识别信息、凭据、模型权重或大规模生成轨迹。
-- 不修改父项目 `sources/` 中的同步参考材料。未经用户要求不创建远程仓库或公开发布。
-
-- 临床教学病例应包含连贯时间线、具体病史/体征/检查、竞争诊断与缺失信息；分离初诊信息和后续报告，避免答案泄漏。新病例 ed-0001 是合成记录回放，未接入医学 reward 或自主多轮训练。
+- All repository documentation must be in English. Conversation with the user may be in Chinese. Historical Chinese dialogue is represented by clearly labeled English translations or summaries, never falsely labeled verbatim English quotes; prior originals remain in Git history.
+- The learner has years of foundation-model training experience. Skip generic deep-learning introductions; explain necessary RL foundations rigorously.
+- The active application is cancer prognosis from clinical `csv.gz` exports. Start with data contracts, patient/time boundaries, longitudinal evidence, missingness, and censoring. Keep the old A/B and emergency examples only for historical reproducibility.
+- Use concrete code and existing public infrastructure. The current base is the fixed verl SHA; nanoAstra implements domain data, tools, and evaluation rather than another general RL framework.
+- Lessons must explain definitions, motivation, mechanisms, worked examples, code, outputs/tensor shapes, and failure modes. Distinguish measurements, reconstructed numerical demonstrations, and hypotheses. Do not replace explanations with outlines.
+- Mark standalone versus contextual snippets. Audit `scripts/check_lesson_snippets.py` when changing lesson block order. Keep conversational updates concise, while retaining detailed teaching materials.
+- Remote demonstrations via `ssh vp` are authorized: one H200, `/home/user/nanoAstra`, isolated `.venv`. A previous local dependency installation was rejected; do not retry local installation. Use existing remote dependencies.
+- The real verl tool/GRPO probe and one constrained Qwen3-0.6B A/B update passed. This is not complete multi-turn training or clinical capability improvement. See experiment 002.
+- Archive substantive discussions under `docs/discussions/`, clearly separating translated user statements, tutor summaries, and experiment evidence. Do not invent historical conversation.
+- Keep related lessons, design, implementation, and PROGRESS synchronized. Preserve the history and rationale of changed decisions.
+- Distinguish paper claims, tutor interpretation, and project assumptions. Clinical knowledge and external standards require source checks and dates.
+- Never report unrun experiments as completed. No promise of expertise on a fixed schedule.
+- Check source permissions before using actual data. Do not commit identifiable patient data, credentials, weights, or bulk rollouts. Current fixtures are entirely synthetic and not clinically validated.
+- Do not modify the parent project's read-only `sources/`. Do not create or publish a remote Git repository without a user request.
+- The current record tools are read-only projections, not dynamic patient simulators. Do not imply that querying orders a test, advances time, or implements a validated clinical reward.

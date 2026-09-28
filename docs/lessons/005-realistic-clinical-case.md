@@ -1,142 +1,101 @@
-# 第五讲：急诊胸痛与气促——从记录获取到诊断更新
+# Lesson 5: Historical emergency case and staged diagnostic evidence
 
-本例全部为教学构造，人物、时间、数值和报告不对应真实患者。它比原 A/B 病例更接近急诊病历的信息结构，但尚未经独立临床专家审核，不是经过验证的医学 benchmark。指南用于核对临床逻辑；病历内容不是从指南或患者记录中复制的。
+**Superseded application:** the active case is now [oncology prognosis from clinical CSVs](006-oncology-prognosis-from-csv.md). This English teaching record preserves the earlier case's rationale and reproducibility. The fixture and original experiment outputs retain their original language and are historical data, not current documentation.
 
-## 1. 先读交接，而不是答案
+All people, dates, values, and reports are invented. The case was checked for consistency against public guidelines but has not undergone independent clinical review or benchmark validation.
 
-**D0 09:40，急诊交接。**
+## 1. Initial handoff, D0 09:40
 
-58 岁女性，因“气促约 1 天，今晨右侧胸痛加重”就诊。患者 3 天前开始干咳、乏力，昨晚走动时感觉气不够用，今日约 06:30 出现明显右侧胸痛，深吸气和咳嗽时加重。社区门诊初步考虑下呼吸道感染，给了一次口服阿莫西林/克拉维酸，随后因持续气促转诊。
+A 58-year-old woman presents with approximately one day of dyspnea and worsening right-sided chest pain since 06:30. She has had dry cough and fatigue for three days. Pain worsens with deep inspiration and coughing. A community clinic initially suspected lower respiratory infection, gave one dose of amoxicillin/clavulanate, and referred her for persistent breathlessness.
 
-09:10 分诊：体温 37.8°C，心率 112 次/分，呼吸 26 次/分，血压 124/76 mmHg，室内空气 SpO₂ 91%。急诊团队已于 09:14 给予鼻导管氧气 2 L/min；09:25 SpO₂ 为 95%，血压仍稳定。患者清醒，能完整说句子，但呼吸急促。
+At 09:10: temperature 37.8 C, heart rate 112/min, respiratory rate 26/min, blood pressure 124/76 mmHg, and room-air oxygen saturation 91%. The clinical team started nasal oxygen at 2 L/min at 09:14; saturation reached 95% at 09:25. She remains alert and able to speak in full sentences, with rapid breathing.
 
-此时请先回答：**哪些问题需要优先澄清？目前能下多确定的诊断？** “已经给氧”是已发生事实；模型不应把这一动作写成自己执行的干预。
+Oxygen administration is an existing clinical event, not an action performed by the record-reading agent. The initial model view contains the handoff; detailed records must be queried.
 
-## 2. 病历中的信息是怎样逐步出现的
+## 2. Evidence available through records
 
-下面是可查询的记录。实际 Agent 起初只得到上一节的交接，必须通过工具读取这些字段。表内时间是记录产生或返回的时间，不能与模型查询时间混为一谈。
-
-| 记录与时间 | 内容 |
+| Record | Findings |
 | --- | --- |
-| 09:20 详细问诊 | 无晕厥、咯血、端坐呼吸或明显脓痰。患者提到左小腿近 3 天发紧，原以为是术后恢复，因此最初未主动说。 |
-| 09:22 风险病史 | 18 天前做过左膝关节镜半月板手术；术后前 5 天主要在床或椅上活动，此后步行仍少于平常。BMI 31。既往高血压，无已知心衰、慢性肺病、既往静脉血栓或活动性恶性肿瘤；未用雌激素。 |
-| 09:24 用药核对 | 平时氨氯地平，术后偶用对乙酰氨基酚，目前无抗凝药。无已知碘对比剂过敏；无记录到的活动性出血，切口干燥。 |
-| 09:25 查体 | 右肺底少量细湿啰音，心动过速。左小腿同一位置周径比右侧大 3 cm，有轻度凹陷性水肿和深静脉走行区域压痛。 |
-| 09:17 心电图 | 窦性心动过速，111 次/分，无明确急性 ST 段抬高；没有既往心电图可比较。 |
-| 09:35 化验返回 | WBC 12.4×10⁹/L，中性粒细胞 78%，CRP 48 mg/L；Hb 12.1 g/dL，血小板 267×10⁹/L。肌酐 0.84 mg/dL，eGFR 82；乳酸 1.4 mmol/L。hs-cTnI 5 ng/L（上参考限 18），NT-proBNP 112 pg/mL（报告参考 <125）。无动态复查。 |
-| 09:37 胸片报告 | 右下肺外周斑片状密度增高，少量右侧胸腔积液；无气胸或明显肺水肿。报告提示非特异表现，感染、局灶性肺不张等需结合临床。 |
-| 09:38 D-dimer 返回 | 2.8 mg/L FEU，实验室界值 <0.50。这个项目在详细血栓风险问诊前已被开立。 |
-| 微生物与缺失检查 | 流感 A/B、SARS-CoV-2 核酸阴性；未采血培养，无合格痰标本。下肢静脉超声未完成；09:40 尚无 CTPA 报告。 |
+| Detailed history, 09:20 | No syncope, hemoptysis, orthopnea, or substantial purulent sputum. Left calf tightness for three days, initially attributed to postoperative recovery. |
+| Risk history, 09:22 | Left knee arthroscopic meniscal surgery 18 days earlier; mostly bed/chair activity for five days, then reduced walking. BMI 31, hypertension; no known prior VTE, active malignancy, heart failure, chronic lung disease, or estrogen use. |
+| Medication review | Amlodipine and occasional acetaminophen; no current anticoagulant. No known contrast allergy or recorded active bleeding. |
+| Examination, 09:25 | Right basal crackles and tachycardia. Left calf 3 cm larger than right, mild pitting edema, and tenderness along the deep venous distribution. Dry surgical wound. |
+| ECG, 09:17 | Sinus tachycardia at 111/min, no definite acute ST elevation, no prior comparison. |
+| Labs returned 09:35 | WBC 12.4x10^9/L, neutrophils 78%, CRP 48 mg/L, Hb 12.1 g/dL, platelets 267x10^9/L. Creatinine 0.84 mg/dL, eGFR 82, lactate 1.4. hs-cTnI 5 ng/L (upper reference 18), NT-proBNP 112 pg/mL (report reference <125); no serial values. |
+| Chest X-ray, 09:37 | Peripheral right basal opacity and small right pleural effusion; no pneumothorax or obvious pulmonary edema. Nonspecific appearance. |
+| D-dimer, 09:38 | 2.8 mg/L FEU, routine threshold <0.50; ordered before detailed thrombotic risk history. |
+| Missing/limited tests | Leg ultrasound not performed. No CTPA report at 09:40. Influenza and SARS-CoV-2 tests negative; no blood culture or suitable sputum sample. |
 
-这里不是“每多查一项就离答案更近”的机械谜题。炎症指标和胸片可能使人继续沿着感染解释；新增的手术、活动减少和单侧下肢体征则要求重新分配诊断优先级。重复查询未完成的 CT 不会获得新信息。
+## 3. How to update the assessment
 
-## 3. 教师解析：证据怎样改变判断
+Infection is a plausible initial hypothesis given cough, low fever, inflammatory markers, crackles, and opacity. These findings are not uniquely diagnostic. PE can present with pleuritic pain, hypoxemia, and nonspecific radiographic changes. [ESC/ERS guideline](https://academic.oup.com/eurheartj/article/41/4/543/5556136).
 
-### 3.1 初始印象为什么合理，又为什么不够
+The added surgery, reduced mobility, tachycardia, and unilateral tender swelling change the priority of thromboembolic evaluation. They do not themselves prove PE or an ultrasound-confirmed DVT. Persistence after one antibiotic dose is not evidence of treatment failure.
 
-干咳、低热、白细胞和 CRP 升高、肺底啰音及胸片阴影，都使肺部感染成为合理的鉴别诊断。但这些表现没有唯一病因；不能把“能够解释”直接替换成“已经证实”。肺栓塞也可能出现胸膜性胸痛、低氧和非特异胸片异常，外周梗死相关改变能进一步造成混淆。[ESC/ERS 指南](https://academic.oup.com/eurheartj/article/41/4/543/5556136)
-
-一次抗菌药之后仍有症状，只说明当前症状仍在，不能被叙述成“抗感染治疗失败，所以排除肺炎”。这里刻意保留真实转诊常见的早期处置，而不把它设计成诊断捷径。
-
-### 3.2 新信息改变的是优先级，不是直接产生确诊
-
-近期手术、活动减少、心动过速以及有压痛的单侧小腿肿胀，使静脉血栓栓塞成为必须优先评估的解释。此时可以说“高度怀疑肺栓塞，左下肢 DVT 可疑”；不能说“超声已证实 DVT”，因为根本没有这份报告。
-
-用 NICE 的两级 PE Wells 路径核对本例：临床 DVT 体征 3 分，心率 >100 加 1.5 分，过去 4 周手术或制动这一项加 1.5 分，已达到 6 分。手术和制动属于同一项，不能加两遍；这里还没有加入“其他诊断不如 PE 可能”的主观 3 分项。>4 属于 PE likely，进入及时影像评估路径，而非等待另一次 D-dimer 来决定是否继续。[NICE NG158](https://www.nice.org.uk/guidance/ng158/chapter/recommendations)
+Under the NICE two-level PE Wells pathway, clinical DVT signs contribute 3, heart rate over 100 contributes 1.5, and recent surgery or immobilization contributes 1.5. The subtotal is 6 without using the subjective alternative-diagnosis item. Surgery and immobilization are one item, not two. A score above 4 enters the PE-likely pathway; it is not a diagnosis or a percent probability. [NICE NG158](https://www.nice.org.uk/guidance/ng158/chapter/recommendations).
 
 ```python
-# 可独立运行；说明本例评分结构，不是通用医学评分服务。
 items = {"clinical_dvt_signs": 3.0, "hr_over_100": 1.5,
          "recent_surgery_or_immobility": 1.5}
-subtotal = sum(items.values())
-print(subtotal, subtotal > 4)  # 6.0 True
+print(sum(items.values()))  # 6.0
 ```
 
-6 分不是“患病概率为 60%”，也不是确诊标签。评分在这里帮助选择诊断路径；模型仍需保留怀疑与确诊的区别。
+D-dimer elevation alone is not diagnostic, and postoperative patients frequently have positive results. [ASH diagnosis guideline](https://ashpublications.org/bloodadvances/article/2/22/3226/16134/American-Society-of-Hematology-2018-guidelines-for).
 
-### 3.3 阳性、阴性、未检查是不同的证据状态
-
-D-dimer 升高不能单独确诊 PE，术后背景尤其容易出现阳性，因此不能把本例的 2.8 当成特异性证据。[ASH 诊断指南](https://ashpublications.org/bloodadvances/article/2/22/3226/16134/American-Society-of-Hematology-2018-guidelines-for)
-
-| 已知事实 | 合理表达 | 不成立的跳跃 |
+| Fact | Supported statement | Unsupported inference |
 | --- | --- | --- |
-| D-dimer 升高 | 与怀疑相容，不能独立确诊 | “已经确诊 PE” |
-| 下肢超声未完成 | DVT 尚未影像证实 | “超声阴性”或“超声阳性” |
-| 病毒检测阴性 | 所检测病原项目阴性 | “所有感染已排除” |
-| 初次肌钙蛋白在参考范围 | 当前这一份检测无升高 | “所有急性冠脉病变已排除” |
-| 血压稳定、仍需吸氧 | 当前无低血压，持续评估 | “没有风险，可以直接出院” |
+| Elevated D-dimer | Compatible with concern; not definitive | PE already confirmed |
+| No ultrasound | DVT not imaged | Positive or negative ultrasound |
+| Selected viral tests negative | Those assays negative | All infection excluded |
+| One normal-range troponin | That measurement not elevated | Every acute coronary condition excluded |
+| Stable blood pressure, oxygen requirement | Current observations | Automatically safe outpatient disposition |
 
-**09:40 的示范性结论：** 当前优先考虑急性肺栓塞，依据为胸膜性胸痛、低氧和心动过速，结合近期手术、活动减少及单侧下肢体征。肺部感染仍在鉴别中，但不足以解释并消除血栓栓塞风险。尚无确诊影像，应由临床团队继续监测并及时完成针对性诊断评估；同时核对检查可行性、出血风险及后续处理需求。本例肾功能与过敏记录可供检查决策参考，但不等于完成所有评估。
+An appropriate 09:40 assessment prioritizes suspected PE, cites the acquired evidence, retains infection in the differential, and calls for timely clinical diagnostic/risk evaluation. It does not invent an imaging result or prescribe a simulated treatment.
 
-这是教师撰写的示范答案，不是模型实测输出。这里不指定药物剂量，也不把所有真实处置细节伪装成已在模拟器执行。
+## 4. Follow-up at D0 10:35
 
-## 4. 时间推进后，答案应该怎样更新
+The clinical team has arranged CTPA outside the record-reader. It was performed at 10:18 and reported at 10:32: adequate study, bilateral lower-lobe segmental pulmonary arterial filling defects, right subpleural wedge-shaped opacity interpreted as infarct-related change, small right effusion, RV/LV about 0.85, and no obvious RV enlargement. Echocardiography remains unperformed.
 
-教学程序切换至 **D0 10:35**。临床团队已在前阶段后安排检查；这不是调用“读取记录”工具产生的动作效果。
+Current observations are BP 122/78, HR 108, RR 24, saturation 95% on the same oxygen. The segmental CTPA findings provide diagnostic evidence for acute PE; stable blood pressure and lack of obvious RV enlargement do not alone complete risk assessment. [ESC/ERS guideline](https://academic.oup.com/eurheartj/article/41/4/543/5556136).
 
-10:18 完成 CTPA，10:32 报告：检查质量可，肺动脉显影满意。双侧下叶段肺动脉腔内充盈缺损；右下叶胸膜下楔形实变，结合血管所见考虑肺梗死相关改变，伴少量右侧胸腔积液。RV/LV 径比约 0.85，无明显右心室扩大。尚无超声心动图。
+The key update is from suspicion to imaging-supported diagnosis. Leg DVT remains unconfirmed. Certainty about one conclusion does not automatically transfer to related conclusions.
 
-10:35：BP 122/78 mmHg，HR 108 次/分，RR 24 次/分，SpO₂ 95%（仍为鼻导管 2 L/min）。
+## 5. Preserve the information boundary in code
 
-**更新后的示范结论：** 技术质量可接受的 CTPA 出现段肺动脉充盈缺损，支持急性肺栓塞确诊；右下叶改变考虑相关肺梗死。左下肢 DVT 仍未影像证实。没有明显右心扩大与血压稳定，不能独立完成风险分层或出院判断，仍需综合临床状态及相关评估。[ESC/ERS 指南](https://academic.oup.com/eurheartj/article/41/4/543/5556136)
+The [fixture](../../cases/ed-0001.json) has shared records, stage-specific records, and instructor-only annotations. [case_replay.py](../../src/nanoastra/case_replay.py) projects only the selected stage into tool context. Never pass the complete fixture to the model and ask it to pretend it has not seen the answer.
 
-注意两个变化：PE 从“高度怀疑”变成“有影像依据的确诊”；DVT 没有随之自动变成确诊。一个结论变得确定，不意味着所有相关结论都获得相同确定性。
-
-## 5. 代码如何保留这个诊断过程
-
-病例事实在 [cases/ed-0001.json](../../cases/ed-0001.json)。`shared_records` 放共同记录，`stages` 放当前阶段可用内容，`instructor_only` 放教师参考。不能把整个 JSON 塞进模型 prompt，再要求模型“假装不知道答案”。
-
-[case_replay.py](../../src/nanoastra/case_replay.py) 使用显式投影，仅把当前阶段的交接和允许读取的记录传入工具。以下片段可从仓库根目录用 `PYTHONPATH=src python3` 运行：
+With `PYTHONPATH=src python3`:
 
 ```python
 from nanoastra.case_replay import load_case, project_case
 from nanoastra.clinical import read_record
-
 view = project_case(load_case(), "initial")
 records = view["tools_kwargs"]["get_clinical_record"]["create_kwargs"]["record"]
-print(view["clock"])                       # D0 09:40
-print(read_record(records, "ctpa_report", view["record_fields"])["value"])
+print(view["clock"])  # D0 09:40
 print(read_record(records, "instructor_only", view["record_fields"])["status"])
+# invalid_field
 ```
 
-预期：第一条 CT 查询得到“尚未完成”的文本；读取教师字段得到 `invalid_field`。正常读取记录的 `status` 表示工具读取成功，不代表该检查是阳性、阴性或已经完成；这些状态要从返回的记录理解。后续若设计结构化临床 observation，应把检查状态另设字段。
+The CTPA field initially contains a pending-status message. A successful record lookup (`status=ok`) does not itself mean the clinical test was performed or positive. Reading the same field again does not advance the clock.
 
 ```python
-# 接上一个片段；阶段由运行程序明确指定，不由模型查询推进。
 later = project_case(load_case(), "followup")
 later_records = later["tools_kwargs"]["get_clinical_record"]["create_kwargs"]["record"]
-assert "腔内充盈缺损" not in records["ctpa_report"]
-assert "腔内充盈缺损" in later_records["ctpa_report"]
-assert "未完成" in later_records["leg_ultrasound"]
+assert records["ctpa_report"] != later_records["ctpa_report"]
+assert "instructor_only" not in later_records
 ```
-
-本地不安装依赖即可查看完整记录：
 
 ```sh
 python3 scripts/demo_realistic_case.py --stage initial
 python3 scripts/demo_realistic_case.py --stage followup --fields ctpa_report leg_ultrasound
 ```
 
-在已有 vp 环境中，命令加 `--verl` 即使用真实 verl registry 与 BaseTool。字段 schema 见 [realistic_case_tools.yaml](../../configs/realistic_case_tools.yaml)。脚本按预设字段查询，**没有 LLM 自动推理，没有下单动作，没有新训练**。
+In vp, add `--verl` to use the real registry/BaseTool. Queries are scripted; there is no LLM inference, test ordering, automatic clinical score, or new training.
 
-## 6. 这个病例给 RL 设计带来的实际问题
+## 6. What this taught us about reward
 
-原来的 A/B reward 只适合最小机制实验。若直接奖励最终出现“肺栓塞”四字，那么初诊时无证据地猜中、虚构超声结果、以及读完证据后准确更新的三条轨迹都可能得到同样奖励。这样训练出的策略未必在做可信的临床推理。
+A reward for merely mentioning PE could treat unsupported guessing, fabricated ultrasound evidence, and properly updated reasoning as equivalent. Candidate evaluation dimensions are stage consistency, evidence fidelity, recognition of important risks, useful information acquisition, and remaining uncertainty. A particular arbitrary query order should not be required if another order acquires adequate evidence.
 
-这里先提出待验证的评价维度，不任意编造权重或声称已实现医学评分器：
+The fixture is two fixed record snapshots. It does not simulate waiting, costs, deterioration, treatment effects, or resource constraints. Multiple contrasting cases and independently reviewed evaluation criteria would be needed before serious assessment.
 
-1. **阶段一致性：** 09:40 是否区分怀疑和确诊？10:35 是否利用新影像更新？
-2. **证据忠实性：** 引用的报告是否确实已经读到？是否把未检查写成阴性？
-3. **风险识别：** 是否因初始感染印象忽略需要及时评估的血栓栓塞线索？
-4. **合理的信息获取：** 是否获取会改变判断的信息？不要奖励一种任意固定查询顺序；同样充分的证据可以通过不同顺序获得。
-5. **剩余不确定性：** CT 返回后是否仍承认 DVT 未证实、风险评估尚未完整？
-
-具体反例：模型只读胸片便写“肺炎，门诊观察”，与读完所有记录却写“超声已确诊 DVT”，属于不同错误。单个最终诊断准确率会遗漏这种差异。未来需要专家审核的评价规范、多个病例及相互矛盾的对照病例，才能测试模型究竟依赖证据还是记住这个病例的答案。
-
-本实现是**有两个固定时间切片的记录回放**。它尚未模拟检查等待、检查成本、患者恶化、治疗响应或资源约束。加入这些机制之前，不能把本例说成已经具备真实世界临床环境动力学。
-
-## 7. 建议的课堂练习
-
-先只读初始交接，写下准备查询的前三类记录及理由；再读风险史与查体，明确哪条新信息改变了优先级。最后比较两阶段结论：列出“新增证据”“改变的结论”“仍不能下的结论”。重点是可审查的证据与结论关系，不要求输出冗长的内部思维独白。
-
-来源核对日期：2026-09-28。验证过程见 [实验 004](../../experiments/004-realistic-case.md)。
+Exercise: compare initial and follow-up conclusions, listing new evidence, changed conclusions, and conclusions that remain unsupported. The objective is auditable evidence-to-claim reasoning rather than a long private reasoning transcript. Original verification is in [experiment 004](../../experiments/004-realistic-case.md).

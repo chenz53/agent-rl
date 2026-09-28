@@ -1,113 +1,47 @@
-# 2026-09-28：前两轮导师教学正文
+# Early tutor responses: English rendering
 
-以下保留前两轮导师最终回答正文；用户原话与决策见 [讨论记录](2026-09-28-kickoff.md)。这是历史记录，其中的起点和方案已随用户反馈调整。
+This is an English rendering of the two early teaching responses, not verbatim English conversation. The original Chinese text is preserved in Git history. The initial proposals evolved after user feedback; the current application is oncology prognosis.
 
-## 导师回答 1
+## Response 1: initial teaching approach
 
-可以。我会以导师的方式带你学：**建立直觉 → 推导机制 → 实现训练 → 分析失败 → 阅读与检验论文**。目标是让你能独立设计训练方案、诊断问题，并判断一个研究结论是否可靠。
+The proposed sequence was intuition, mechanism, implementation, failure analysis, and critical paper reading. The goal was independent training design, diagnosis of failures, and judgment about research reliability.
 
-我先把 Agentic RL 理解为：**用强化学习训练能进行多步决策、调用工具、与环境交互的 LLM Agent**。如果你也想覆盖机器人或物理环境，我们可以扩展。
+Agentic RL was introduced as training an LLM that makes multiple decisions, uses tools, and interacts with an environment. The initial roadmap covered:
 
-我们按下面这条路线推进，不急着堆论文：
+| Area | Question | Practical artifact |
+| --- | --- | --- |
+| RL foundations | What are states, actions, rewards, and delayed consequences? | A hand-computable environment |
+| Optimization | Why do policy gradients work? What do values, advantages, and exploration solve? | REINFORCE and PPO examples |
+| LLM RL | How do tokens, SFT, KL, and GRPO connect? | A sampling-to-update walkthrough |
+| Multi-step agents | How does feedback change decisions and receive credit? | A tool-using agent |
+| Systems | How do reset, parallelism, timeouts, policy lag, and cost interact? | Reproducible training/evaluation |
+| Research diagnosis | Why can reward rise without capability gains? | Ablations and failure analysis |
 
-| 阶段 | 要弄明白的问题 | 实践成果 |
-|---|---|---|
-| 1. RL 基础 | 状态、动作、奖励是什么？为什么当前动作要对未来结果负责？ | 一个可手算、可运行的小环境 |
-| 2. 优化机制 | 策略梯度为什么有效？价值函数、优势、探索解决什么问题？ | 实现 REINFORCE，再理解 PPO |
-| 3. LLM 的 RL | token 如何成为动作？SFT、RL、KL 约束、GRPO 如何关联？ | 看懂一次采样到参数更新的全过程 |
-| 4. 多步 Agent | 工具反馈如何改变决策？最终奖励如何分配给中间步骤？ | 训练一个使用工具完成任务的 Agent |
-| 5. 真实训练工程 | 如何处理环境重置、并行采样、超时、策略版本差异与算力成本？ | 可复现的训练与评估流程 |
-| 6. 研究与诊断 | 奖励上涨为什么可能没有能力提升？如何发现作弊、过拟合和评估泄漏？ | 消融实验、失败分析与论文复现 |
+SCoRe and Agent Lightning were candidate readings. The first concrete example was a coding agent: inspect code, edit it, run tests, observe errors, revise, and submit. Observations are code/tool results; actions are operations; the policy is a conditional action distribution; the trajectory is the interaction; reward is training feedback.
 
-后面会结合原始研究。例如，[SCoRe](https://arxiv.org/abs/2409.12917)适合研究多轮自我纠错为何难训练；[Agent Lightning](https://arxiv.org/abs/2508.03680)适合研究 Agent 执行与 RL 训练如何连接。
-
-**现在先建立第一个核心概念：Agentic RL 优化的是交互过程中产生的长期结果。**
-
-假设 Agent 要修复一个程序：
-
-> 阅读代码 → 修改代码 → 运行测试 → 观察报错 → 再修改 → 提交结果
-
-这里：
-
-- **观测（observation）**：代码、测试输出、工具返回的信息。
-- **动作（action）**：读取文件、执行修改、运行测试等。
-- **策略（policy）**：模型根据当前可见历史，选择动作的概率分布。
-- **轨迹（trajectory）**：一次任务中完整的交互序列。
-- **奖励（reward）**：训练系统用于评价行为或结果的信号。
-
-一个基本训练目标是：
+The expected cumulative reward objective was:
 
 \[
-J(\theta)=\mathbb{E}_{\tau\sim\pi_\theta}
-\left[\sum_{t=0}^{T}\gamma^t r_t\right]
+J(\theta)=E_{\tau\sim\pi_\theta}\left[\sum_{t=0}^{T}\gamma^t r_t\right].
 \]
 
-直观地说：调整模型参数 \(\theta\)，让它产生的交互轨迹，平均获得更高的累计奖励。这里的 \(\gamma\) 控制未来奖励的权重。
+The credit-assignment question was which earlier actions should be encouraged after final success or failure. A separate question was whether passing tests really established a correct fix. The tutor asked about programming, mathematical background, preferred agent domain, and the difficulty of learning from only a terminal 0/1 reward.
 
-困难也由此出现：**如果最终修复成功，前面哪些动作值得鼓励？如果失败，又是哪一步出了问题？** 这就是我们会反复研究的“信用分配”。而且，测试通过这个奖励是否真的代表修复正确，是另一个必须独立检查的问题。
+## Response 2: adapt to foundation-model expertise
 
-为了确定起点，请告诉我三件事：
+After learning the user's experience, the tutor raised the starting level: transfer model-training expertise to sequential decision optimization rather than repeat deep-learning foundations. Each biomedical example should connect mathematics, implementation, failure modes, and distinguishing experiments.
 
-1. 你的 Python、PyTorch 和深度学习基础如何？
-2. 你对概率、导数、梯度下降熟悉到什么程度？
-3. 你最想训练哪类 Agent：代码、浏览器操作、搜索研究，还是其他？
+The revised topics were environment design, multi-turn policy objectives, credit assignment, informative exploration, systems coordination, and scientific validity. The starting question became what is being optimized, before choosing PPO or GRPO.
 
-也可以先试答一道直觉题：**如果修复任务只在最终成功时给 1 分，失败给 0 分，为什么训练可能很困难？** 不需要术语，我会根据你的理解开始第一课。
+An example task asked an agent to evaluate gene-disease evidence up to a cutoff. Three capabilities were separated: existing knowledge, information acquisition, and evidence judgment. Otherwise memorization could be mistaken for research skill.
 
-## 导师回答 2
-
-明白，之前的起点设低了。你有多年基础模型训练经验，我们直接研究 **如何把模型训练能力迁移到真实任务中的序贯决策优化**。需要时补 RL 理论，但不重讲深度学习基础。
-
-我会以 biomedical agent 为贯穿案例，每次围绕一个关键问题讲清楚：**数学机制、工程实现、失败模式，以及如何用实验区分不同解释。**
-
-学习主线调整为：
-
-| 主线 | 要深入解决的问题 |
-|---|---|
-| 任务与环境 | 怎样把 biomedical workflow 定义为可训练、可重置、可评估的环境？ |
-| 轨迹与优化 | 多轮工具调用如何进入 policy-gradient objective？token、action、trajectory 三种粒度如何关联？ |
-| 信用分配 | 最终结果的奖励，如何影响检索、分析、验证和停止决策？ |
-| 数据与探索 | 什么任务值得采样？如何处理全失败、全成功，以及策略改变后的数据分布？ |
-| 训练系统 | rollout、工具执行、训练如何协同？如何处理长尾时延、策略滞后和环境错误？ |
-| 科学有效性 | reward 提升是否意味着研究质量提升？怎样发现数据泄漏、代理指标作弊和虚假泛化？ |
-
-**第一课应该从“我们究竟在优化什么”开始，而不是从 PPO 或 GRPO 开始。**
-
-以一个研究任务为例：
-
-> 给定基因、疾病和证据截止日期，收集证据，评估它们是否支持某种关联，并输出可追溯的结论与不确定性。
-
-这里至少有三种不同的能力：已有的领域知识、获取信息的决策能力，以及基于证据作出判断的能力。训练和评估必须能区分它们，否则模型可能只是记住了答案，却被误认为学会了研究。
-
-把工具环境记为 \(E\)，任务记为 \(x\)，则轨迹分布可以写成：
+For task x and tool environment E:
 
 \[
-p_\theta(\tau\mid x,E)
-=
-p(o_0\mid x,E)
-\prod_t
-\pi_\theta(a_t\mid h_t)\,
-P_E(o_{t+1}\mid h_t,a_t)
+p_\theta(\tau\mid x,E)=p(o_0\mid x,E)
+\prod_t\pi_\theta(a_t\mid h_t)P_E(o_{t+1}\mid h_t,a_t).
 \]
 
-其中 \(h_t\) 是当前可见的交互历史，\(a_t\) 可以是一次完整的工具调用或最终回答。
+This factorization explains why a changed policy changes later inputs, why database/retrieval versions and context truncation belong in the training definition, and why tools need not be differentiable. Their outputs influence later behavior and reward, while generated actions contribute policy likelihood terms.
 
-这个分解带来三个重要结论：
-
-- **策略改变，后续训练输入也会改变。** 模型改变检索查询，就会看到不同证据；与固定语料训练相比，数据分布更直接地受当前策略控制。
-- **环境是训练问题的一部分。** 数据库版本、搜索排序、工具错误和上下文截断，都可能改变策略学到的行为。
-- **环境通常不需要可微。** 梯度通过模型产生动作的 log-probability 计算，工具返回影响后续决策和奖励；在标准策略梯度实现中，工具输出本身不是模型动作，不直接作为动作 log-probability 项参与优化。
-
-对 biomedicine，接下来最关键的是区分：
-
-\[
-\underbrace{R(\tau)}_{\text{可用于训练的评分}}
-\qquad\text{与}\qquad
-\underbrace{U(\tau)}_{\text{真正关心的科学价值}}
-\]
-
-例如，“引用存在”“引用支持结论”“证据足以支持因果判断”是三件不同的事。优化前一种评分，不保证提升后一种能力。**设计并检验 \(R\) 与 \(U\) 的关系，会是整个学习过程的核心。**
-
-相关研究已经有具体探索：例如 [ATHENA-R1](https://arxiv.org/abs/2606.28692)研究通过 biomedical tools 和科学反馈训练多步治疗推理。后面我们会拆解它的训练信号与评估设计，而不只看最终分数。
-
-你更希望贯穿案例偏向哪一类：**文献与证据综合、组学数据分析、药物/靶点发现，还是临床推理？** 如果暂时没有偏好，我建议先用“文献与证据综合”讲透完整训练闭环。
+Finally, the tutor distinguished computable reward R from true scientific utility U. A citation existing, supporting a statement, and establishing causality are different standards. Optimizing the first need not improve the last. ATHENA-R1 was named as a candidate biomedical tool-training study, pending closer examination. The user was asked to choose among evidence synthesis, omics, target/drug discovery, and clinical reasoning; they subsequently chose clinical reasoning.

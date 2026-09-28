@@ -1,0 +1,38 @@
+{
+  "synthetic": true,
+  "index_time": "2025-03-01T09:00:00Z",
+  "horizon_days": 180,
+  "task": "Pretreatment all-cause mortality prognosis; teaching fixture only",
+  "clinical_tables": [
+    "patients",
+    "encounters",
+    "diagnosis",
+    "labs",
+    "vitals",
+    "notes",
+    "pathology",
+    "staging",
+    "biomarkers",
+    "medication_orders",
+    "medication_administrations",
+    "procedures",
+    "performance_status"
+  ],
+  "row_counts_including_versions": {
+    "patients": 3,
+    "encounters": 1,
+    "diagnosis": 5,
+    "labs": 9,
+    "vitals": 5,
+    "notes": 3,
+    "pathology": 1,
+    "staging": 1,
+    "biomarkers": 3,
+    "medication_orders": 2,
+    "medication_administrations": 1,
+    "procedures": 2,
+    "performance_status": 2
+  },
+  "patients": 3,
+  "source": "Entirely invented; not sampled from a real clinical system"
+}

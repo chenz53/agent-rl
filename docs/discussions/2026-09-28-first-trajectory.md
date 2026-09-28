@@ -1,17 +1,9 @@
-# 2026-09-28：开始教学，拆解首条轨迹
+# Begin teaching through a concrete trajectory
 
-## 用户原话
+Date: 2026-09-28. Translated user instruction: "All right, let's begin."
 
-> 好的开始吧
+## Teaching summary
 
-## 教学内容归档
+Used artificial A/B labels to avoid treating an RL toy as medical evidence. Distinguished static case content from mutable runtime state; expanded two queries and a final answer; separated context tokens from generated policy tokens. With R=1 and baseline 0.4, REINFORCE gives a +0.6 weight even to an unnecessary action in the successful trace. A query-value exercise connected benefit, cost, exploration, and credit assignment.
 
-完整教材保存在 [第二讲](../lessons/002-one-clinical-trajectory.md)。这是教材正文，不冒充聊天逐字导出。
-
-## 本轮讨论摘要
-
-从合成病例中的信息获取入手，用匿名诊断 A/B 避免把教学设定当成医学事实。说明静态病例内容与可变环境运行状态的区别；拆解两次查询与一次最终回答；区分上下文 token 与策略生成 token。通过 R=1、b=0.4 的 REINFORCE 估计展示无用动作也可能在单条成功轨迹中得到正权重。最后提出查询收益与成本的练习，等待学习者解释为何目标有利仍可能学不到。
-
-## 状态
-
-本轮只增加教材，没有生成真实病例、实现训练代码或运行实验。下一步根据用户回答讨论探索、反馈与信用分配，暂不跳入框架实现。
+The detailed teaching material is [lesson 2](../lessons/002-one-clinical-trajectory.md), not a purported full chat export. This historical turn added material only; no implementation or training was run.

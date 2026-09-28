@@ -1,16 +1,25 @@
-# 参考资料
+# References
 
-检索日期：2026-09-28。以下是课程候选阅读，不代表已经完成全文复核或复现；性能与临床有效性不因列入此表而得到认可。
+Source review date: 2026-09-28. Listing a source does not imply full replication, endorsement of reported performance, or clinical validation of nanoAstra.
 
-| 资料 | 学习用途 | 当前阅读状态 |
+## Active oncology data workflow
+
+- [MIMIC-IV schema overview](https://mimic.mit.edu/docs/iv/about/schema-overview.html): examples of real clinical table names and domains.
+- [MIMIC-IV labevents](https://mimic.mit.edu/docs/iv/modules/hosp/labevents.html): specimen/result timestamps, units, and source columns.
+- [OHDSI oncology model](https://ohdsi.github.io/OncologyWG/model.html): linkage of cancer episodes and lower-level clinical events.
+- [NCI NSCLC treatment PDQ](https://www.cancer.gov/types/lung/hp/non-small-cell-lung-treatment-pdq): prognostic and treatment-selection context.
+- [NCI nutrition PDQ](https://www.cancer.gov/about-cancer/treatment/side-effects/appetite-loss/nutrition-hp-pdq): interpretation limits of weight loss.
+
+The synthetic schema is a local teaching contract, not a certified implementation of these data models. The case is invented and has not undergone independent clinical review.
+
+## RL and agent reading
+
+| Reading | Teaching purpose | Review status |
 | --- | --- | --- |
-| [Training Language Models to Self-Correct via Reinforcement Learning (SCoRe)](https://arxiv.org/abs/2409.12917) | 多轮纠错、训练分布与奖励设计 | 检索摘要 |
-| [Agent Lightning: Train ANY AI Agents with Reinforcement Learning](https://arxiv.org/abs/2508.03680) | Agent 执行与训练接口 | 检索摘要 |
-| [An AI agent for treatment reasoning over a biomedical tool universe (ATHENA-R1)](https://arxiv.org/abs/2606.28692) | 生物医学工具使用与科学反馈 | 检索摘要；待全文核验 |
+| [SCoRe](https://arxiv.org/abs/2409.12917) | Multi-turn correction and training distributions | Previously retrieved abstract; not reproduced |
+| [Agent Lightning](https://arxiv.org/abs/2508.03680) | Agent execution/training separation | Previously retrieved abstract; not reproduced |
+| [ATHENA-R1](https://arxiv.org/abs/2606.28692) | Biomedical tools and scientific feedback | Historical candidate, awaiting full-text review |
+| [Policy Gradient Methods](https://proceedings.neurips.cc/paper/1999/hash/464d828b85b0bed98e80ade0a5c43b0f-Abstract.html) | Original policy-gradient theory | Publication page reviewed; not a section-by-section reading |
+| [Reinforcement Learning: An Introduction, 2018 draft](https://www.incompleteideas.net/book/bookdraft2018mar21.pdf) | REINFORCE and baselines, chapter 13 | Candidate textbook |
 
-阅读笔记需分别记录：作者报告的结论、实验实际支持的范围、我们的解释、尚未验证的假设。
-
-## 基础理论（2026-09-28 增补）
-
-- [Policy Gradient Methods for Reinforcement Learning with Function Approximation](https://proceedings.neurips.cc/paper/1999/hash/464d828b85b0bed98e80ade0a5c43b0f-Abstract.html)：策略梯度原始论文；本轮检索出版页面，尚未逐节研读。
-- [Reinforcement Learning: An Introduction，2018 草稿](https://www.incompleteideas.net/book/bookdraft2018mar21.pdf)：第 13 章包含 REINFORCE 与 baseline；候选教材，尚未在教学中逐节研读。
+Reading notes should separate author claims, what the experiments support, tutor interpretation, and untested project hypotheses. The pinned verl source and actual probes are the implementation reference for lessons 3-4.

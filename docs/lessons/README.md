@@ -1,48 +1,47 @@
-# nanoAstra 教材与概念索引
+# Lessons and concept index
 
-教材面向有基础模型训练经验的学习者。每课围绕具体任务与代码讲解：定义 → 机制 → 数值实例 → snippet → 输出 → 失败模式。
+The learner is experienced in foundation-model training. Lessons use definitions, mechanisms, worked numbers, executable snippets, output interpretation, and failure analysis.
 
-## 课程主线
+## Current application
 
-| 课程 | 主问题 | 代码或证据 |
+Start with [Lesson 6: cancer prognosis from CSV exports](006-oncology-prognosis-from-csv.md). It defines the data and task before introducing a learned policy. Lessons 1-4 retain their artificial A/B example so the existing mathematical and GPU results remain reproducible.
+
+| Lesson | Main question | Evidence/code |
 | --- | --- | --- |
-| [1. 临床推理环境](001-clinical-reasoning-as-an-environment.md) | 到底让模型做什么决策？ | `clinical.py` 与合成状态转移 |
-| [2. 轨迹与策略梯度](002-one-clinical-trajectory.md) | 最终奖励怎样影响前面的动作？ | REINFORCE、return、mask 小张量 |
-| [3. verl 调用链](003-verl-code-walkthrough.md) | 样本如何经过工具与评分器？ | 真实 registry/BaseTool/reward 接口 |
-| [4. H200 真实更新](004-first-real-gpu-update.md) | 每个 tensor 怎样形成一次参数更新？ | Qwen 实测与数值复核 |
+| [1. Environment](001-clinical-reasoning-as-an-environment.md) | What decisions are being optimized? | State, observations, transitions, costs |
+| [2. Policy gradients](002-one-clinical-trajectory.md) | How does final reward train earlier actions? | Likelihood, returns, baselines, masks |
+| [3. verl interfaces](003-verl-code-walkthrough.md) | Where do data, tool calls, and scores flow? | Registry/BaseTool/reward/grouping |
+| [4. Real H200 update](004-first-real-gpu-update.md) | How do logits become a parameter update? | Qwen measurements and numerical checks |
+| [5. Historical emergency case](005-realistic-clinical-case.md) | How does evidence change diagnostic certainty? | Superseded staged record replay |
+| [6. Oncology CSV workflow](006-oncology-prognosis-from-csv.md) | What was knowable at a prognostic index? | CSV parsing, versions, temporal filtering, censoring |
 
-| [5. 分阶段急诊病例](005-realistic-clinical-case.md) | 新证据怎样改变诊断和确定性？ | 真实格式的合成病历、时间隔离、工具回放 |
+## Find a concept
 
-## 按概念查找
-
-| 概念 | 位置 | 具体例子 |
+| Concept | Location | Worked example |
 | --- | --- | --- |
-| state / observation / history | 第 1 课 §2 | 完整病例、一次查询返回、交互历史 |
-| POMDP / belief | 第 1 课 §3 | 相同主诉、不同隐藏状态与 Bayes 更新 |
-| action 粒度 | 第 1 课 §4 | token、工具调用、整条轨迹 |
-| transition / reset / termination | 第 1 课 §5–6 | 查询扣预算与新 episode 清理 |
-| reward / return / 科学效用 | 第 1 课 §7–8 | 0.95−0.05 与 0.80 的比较 |
-| rollout / trajectory | 第 2 课 §1–2 | 三步交互及轨迹概率 0.16 |
-| score-function gradient | 第 2 课 §3 | 为什么不对数据库求导 |
-| return-to-go | 第 2 课 §4 | [0.90,0.95,1.00] |
-| baseline / advantage / credit | 第 2 课 §5–7 | 成功 +0.6、失败 −0.4，无用动作也获正权重 |
-| on/off-policy | 第 2 课 §6 | 旧 batch 与更新后的策略 |
-| token alignment / masks | 第 2 课 §8–9 | 环境位置梯度项为 0，但仍是上下文 |
-| schema / runtime 校验 | 第 3 课 §3–5 | 模型参数与环境注入参数的区别 |
-| 工具生命周期 | 第 3 课 §5 | create→execute→release 后实例数为 0 |
-| reward 数据流 / 分组 | 第 3 课 §7–9 | 未接入的查询成本、跨 prompt 混组错误 |
-| logits / temperature / policy | 第 4 课 §3 | T=1、2、4 下 P(B) 的变化 |
-| sampling / old log-prob | 第 4 课 §4–5 | 16 次采样与固定旧计算图 |
-| GRPO / std / group / mask | 第 4 课 §7 | 14 负例、2 正例与 ±不同 advantage |
-| ratio / PPO clipping / dual-clip | 第 4 课 §8–9 | 正负 advantage 下的 5 个裁剪例子 |
-| loss 与 gradient | 第 4 课 §10 | loss≈0、logit 梯度±0.160108 |
-| gradient clipping / SGD | 第 4 课 §11 | 范数 142.12→1，P(B) 上升 |
-| old/reference policy / KL / entropy | 第 4 课 §12 | 采样偏移、参考约束与探索的区别 |
+| State / observation / history | Lesson 1 sections 2-3 | Hidden case and restricted views |
+| POMDP / belief | Lesson 1 section 3 | Bayesian update to 0.8 |
+| Transition / reset / ending | Lesson 1 sections 5-6 | Query budget and clean episodes |
+| Reward / return / utility | Lesson 1 sections 7-8 | 0.95 minus 0.05 query value |
+| Rollout likelihood | Lesson 2 sections 1-3 | Probability 0.16 |
+| Return-to-go / baseline | Lesson 2 sections 4-5 | [0.90,0.95,1.00], +0.6/-0.4 |
+| On-policy / stale data | Lesson 2 section 6 | Old versus updated action probabilities |
+| Credit assignment | Lesson 2 section 7 | Unnecessary query in a successful trajectory |
+| Token alignment / masks | Lesson 2 sections 8-9 | Tool context versus sampled action terms |
+| Schema / lifecycle | Lesson 3 sections 3-5 | Per-call create/execute/release |
+| Reward aggregation / groups | Lesson 3 sections 8-9 | Costs not reaching loss; mixed prompts |
+| Temperature / sampling | Lesson 4 sections 3-4 | Sixteen samples are not exact probabilities |
+| GRPO normalization | Lesson 4 section 7 | Fourteen zeros and two ones |
+| Ratio / clipping / dual-clip | Lesson 4 sections 8-9 | Five positive/negative advantage cases |
+| Loss versus gradient | Lesson 4 section 10 | Near-zero loss, gradients +/-0.160108 |
+| Gradient clipping / SGD | Lesson 4 section 11 | Norm 142.12 clipped to 1 |
+| Old/reference policy / KL / entropy | Lesson 4 section 12 | Sampling drift versus regularization |
+| Event versus availability time | Lesson 6 sections 4-5 | Late lab result and corrected albumin |
+| Longitudinal features / units | Lesson 6 section 6 | 11.111% weight loss, g/L versus g/dL |
+| Index / horizon / censoring | Lesson 6 sections 1 and 7 | Event, known non-event, unknown outcome |
 
-## 代码验证范围
+## Verification
 
-前四课的 42 个 Python 片段通过 AST 解析；其中 29 个作为可运行片段在 vp 现有环境中执行，输出保存到 [snippet 记录](../../experiments/results/003-lesson-snippets.json)。有上下文依赖的方法片段与故意错误的片段没有被当成独立程序运行。
+The original first four lessons contain 42 Python blocks; 29 are explicitly selected for execution. Contextual model excerpts and intentionally incorrect examples are syntax-checked but not run as standalone programs. The selection remains explicit in `scripts/check_lesson_snippets.py`.
 
-[数学检查](../../scripts/verify_lesson_math.py) 另使用真实 verl 验证组内标准化、分组错误、mask、裁剪和梯度；[结果](../../experiments/results/003-lesson-math.json) 与 [验证说明](../../experiments/003-teaching-verification.md) 可核对。
-
-这里的数值检查不重新训练模型。H200 实测仍引用原始实验 002，未将推导数值伪装成新的模型结果。
+Historical verification is recorded in [experiment 003](../../experiments/003-teaching-verification.md). English-edition and oncology verification is recorded in [experiment 005](../../experiments/005-oncology-csv.md). These checks do not repeat the GPU update or demonstrate clinical validity.

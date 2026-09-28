@@ -1,32 +1,22 @@
-# 最小 Agent 设计
+# Minimal agent design
 
-状态：导师提出的起步草案，尚未实现；用户已选定临床推理方向，但未限定具体子任务。
+Status: the original offline information-acquisition proposal, updated for the active oncology task. A full autonomous agent has not yet been implemented.
 
-## 起步范围
+## Scope
 
-离线病例中的信息获取与鉴别诊断。先让模型获取已存在的病例信息，之后再考虑治疗证据推理或更复杂的状态变化。
+Use existing longitudinal records to assess prognosis at a specified pretreatment index. Querying retrieves evidence; it does not order tests, administer treatment, advance a patient simulator, or observe future outcomes.
 
-## 组件
+## Components
 
-- Case store：初始信息、可查询信息、缺失信息、隐藏评估标签；模型只能通过约定接口读取允许的信息。
-- Environment：`reset`、动作校验、信息返回、步数预算与终止。
-- Agent：根据可见历史生成查询或最终回答；先建立不经 RL 的基线。
-- Rollout recorder：记录任务 ID、策略与环境版本、可见输入、生成 token、log-probability、工具反馈、终止原因和奖励。
-- Evaluator：区分无效调用、超时、预算耗尽与真实任务失败；训练评分和独立评估分开保存。
-- Trainer：后续根据数据流、模型和资源选型，不预先锁定框架。
+- Case store: server-selected patient, index, allowed records, and separately held outcomes.
+- Environment: action validation, observations, budgets, and termination; current code provides read-only projections, not the full runtime.
+- Agent: query or submit a structured assessment based on visible history; establish an untrained baseline first.
+- Recorder: task, policy/environment versions, messages, generated IDs, log-probabilities, masks, tool feedback, termination, and reward diagnostics.
+- Evaluator: distinguish invalid calls, timeouts, truncation, evidence fidelity, prognostic scoring, and censoring.
+- Trainer: reuse the fixed verl infrastructure after validating the complete data flow.
 
-## 初始动作候选
+## Actions and completion
 
-- 请求一个允许访问的病史字段。
-- 请求一个已有的检查结果。
-- 提交结构化鉴别诊断、证据与不确定性。
+The first action interface reads one allowed table. A later terminal output should identify the endpoint/index, evidence with record IDs, uncertainty, and an appropriately validated forecast if one is available. The current fixture implements no numerical clinical reward.
 
-知识检索可以作为后续扩展，届时需要固定知识快照与来源版本。未知或缺失信息必须明确返回“不可用”，不能自动补出符合标签的信息。
-
-## 实现前需要明确
-
-病例来源与许可、任务标签的可信度、可查询字段、终止条件、预算、训练和评估拆分、模型与算力。数据规模先以环境和评价可核验为目标，再扩展吞吐。
-
-## 首个完成标准
-
-一条可回放的合成病例轨迹；一次确定可重复的环境重置；一个无 RL 基线；能够检测隐藏标签泄漏的接口检查。完成这些之后才进入训练。
+A first autonomous milestone needs one replayable rollout, clean reset, a non-RL baseline, and actual token/mask checks. Real data additionally require source permission, eligibility rules, reliable outcome ascertainment, and patient/time/site split design. See the [data contract](003-oncology-data-contract.md).

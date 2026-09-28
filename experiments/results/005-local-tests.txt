@@ -1,0 +1,23 @@
+test_initial_view_does_not_contain_future_report_or_answer_key (test_case_replay.CaseReplayTests) ... ok
+test_invalid_stage_fails_and_old_scorer_cannot_score_new_task (test_case_replay.CaseReplayTests) ... ok
+test_projection_is_independent_and_private_fields_are_not_queryable (test_case_replay.CaseReplayTests) ... ok
+test_repeated_queries_do_not_advance_time (test_case_replay.CaseReplayTests) ... ok
+test_stage_change_reveals_only_the_selected_report (test_case_replay.CaseReplayTests) ... ok
+test_answer_key_is_not_in_tool_or_prompt (test_clinical.ClinicalTests) ... ok
+test_invalid_task_metadata_is_not_silently_scored (test_clinical.ClinicalTests) ... ok
+test_missing_information_is_not_fabricated (test_clinical.ClinicalTests) ... ok
+test_records_are_independent (test_clinical.ClinicalTests) ... ok
+test_terminal_reward_distinguishes_wrong_and_malformed (test_clinical.ClinicalTests) ... ok
+test_unknown_fields_cannot_read_accidentally_supplied_private_data (test_clinical.ClinicalTests) ... ok
+test_csv_multiline_notes (test_oncology.OncologyTests) ... ok
+test_event_at_horizon_and_death_after_horizon (test_oncology.OncologyTests) ... ok
+test_event_non_event_censored (test_oncology.OncologyTests) ... ok
+test_fail_closed_and_cancellation (test_oncology.OncologyTests) ... ok
+test_future_and_late_records_are_absent (test_oncology.OncologyTests) ... ok
+test_latest_available_correction_and_units (test_oncology.OncologyTests) ... ok
+test_patient_and_outcome_isolation (test_oncology.OncologyTests) ... ok
+
+----------------------------------------------------------------------
+Ran 18 tests in 0.014s
+
+OK

@@ -1,7 +1,11 @@
-# 实验目录
+# Experiments
 
-保存小型配置、复现实验步骤、结果摘要和失败分析。大规模输出放入 Git 忽略的 `outputs/`，模型文件放入 `checkpoints/`；结果摘要必须记录其位置、版本与配置。
+Store small configurations, reproduction steps, results, and failure analysis here. Bulk outputs belong in ignored `outputs/`, and model files in ignored `checkpoints/`; summaries should identify their versions and locations.
 
-已运行 [领域 smoke test](001-domain-smoke.md) 与 [H200 集成和单步更新](002-remote-h200.md)。完整多轮训练尚未运行。
+- [001: Domain smoke test](001-domain-smoke.md)
+- [002: H200 integration and one parameter update](002-remote-h200.md)
+- [003: Mathematics and lesson snippets](003-teaching-verification.md)
+- [004: Historical staged emergency case](004-realistic-case.md)
+- [005: Oncology CSV workflow and English documentation](005-oncology-csv.md)
 
-另有 [教材数学与 snippet 验证](003-teaching-verification.md)，没有重新训练模型。
+Only experiment 002 updates model parameters. Complete multi-turn training remains unverified.

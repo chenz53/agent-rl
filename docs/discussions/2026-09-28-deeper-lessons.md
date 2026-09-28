@@ -1,15 +1,11 @@
-# 2026-09-28：教材深度与教学标准调整
+# Increase the depth of every lesson
 
-## 用户原话
+Date: 2026-09-28. Translated user feedback: the lesson documents were too broad and brief; explain every concept clearly with concrete examples illustrating process and results, and include code snippets.
 
-> lesson的doc里面太过笼统和粗略，把每一个概念讲解清楚用具体的实例来illustrate过程和结果 同时附上code snippet
+## Response summary
 
-## 本轮落实（摘要，非逐字聊天记录）
+Rewrote all four existing lessons rather than adding another outline. Added definitions, worked numbers, mechanisms, snippets, outputs, and failure cases. Clearly separated original H200 measurements, equivalent-logit reconstructions, and hypothetical examples.
 
-- 重写现有四课，而非仅追加提纲：环境与状态、轨迹与策略梯度、真实 verl 调用链、H200 实测逐行解释。
-- 每个关键概念提供具体实例、数学定义或机制、代码片段、输出含义以及错误模式。
-- 区分 H200 原始实测、重建 logits 的数值演示、假设性的临床/策略例子。
-- 第四讲新增张量形状、温度、二项采样、旧概率计算图、GRPO 标准差、group/minibatch、正负 advantage 裁剪、dual-clip、logit 梯度、全模型梯度裁剪、old/reference policy、KL 与 entropy。
-- 增加概念索引；新增数值检查和 snippet 执行脚本，使用远端已有依赖验证，无新模型训练。
+Lesson 4 added tensor shapes, temperature, binomial sampling, old-probability graph boundaries, sample standard deviation, group versus minibatch, signed clipping/dual-clip behavior, logit derivatives, model gradient clipping, old versus reference policies, KL, and entropy. Added a concept index and real numerical/snippet checks in the existing remote environment without new model training.
 
-教学偏好已写入 AGENTS.md，后续新课沿用同样标准。原始实测结果保留，避免把解释性计算当成新增模型实验。
+The teaching preference remains in AGENTS.md. The later English migration preserves these mechanisms and executable examples rather than treating translation as permission to reduce the curriculum to bullet points.

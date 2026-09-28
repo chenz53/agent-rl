@@ -1,5 +1,7 @@
-# 测试目录
+# Tests
 
-`test_clinical.py` 使用标准库 unittest，验证标签隔离、非法查询、缺失信息、记录独立性和评分格式。运行方式见仓库 README。
+Run `PYTHONPATH=src python3 -m unittest discover -s tests -v` from the repository root.
 
-这些测试不验证 verl runtime、真实 tokenization 或训练效果。
+The standard-library suite covers original artificial scoring, historical stage isolation, oncology patient/time boundaries, corrections, cancellation, malformed clocks, multiline CSV notes, unit-aware examples, and censored outcomes. Real verl integration is checked separately in the remote environment.
+
+Passing these tests establishes software behavior, not clinical validity, real multi-turn tokenization correctness, or improved model capability.

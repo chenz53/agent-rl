@@ -1,24 +1,18 @@
-# 第二讲：从一条交互轨迹到策略梯度
+# Lesson 2: From an interaction trajectory to policy gradient
 
-[第一课](001-clinical-reasoning-as-an-environment.md) 定义了环境。本课要解释：模型选择查询、观察结果、再给答案，这整段过程为何能用一个最终奖励来训练？又为什么这个奖励不足以告诉我们每一步的贡献？
+Why can a final reward train earlier queries? Why does it fail to tell us precisely which query caused success? We answer both questions using the artificial A/B task. The completed GPU experiment optimized only the final choice; the multi-turn trajectory here is instructional.
 
-本课多轮轨迹是教学构造。已运行的 H200 实验只优化最后的 A/B 判断；不要把二者合并描述成已完成的多轮训练。
+## 1. Expand the rollout
 
-## 1. 把 rollout 展开，而不是只写一句“Agent 与环境交互”
+An episode is the interval from reset to ending. A rollout is execution and collection under a policy. A trajectory is the recorded sequence produced by that execution. Code sometimes conflates these words; keeping them separate clarifies responsibilities.
 
-一个 episode 是任务从 reset 到结束的运行区间；rollout 是让策略在环境中实际运行并收集结果的过程；trajectory τ 是该过程保存下来的数据序列。这些词有时在代码里被混用，我们这里区分它们。
-
-用统一工具 `get_clinical_record` 写一条轨迹：
-
-| t | 动作前模型可见历史 h_t | 模型动作 a_t | 新观测 o_{t+1} | 步骤奖励 r_t |
+| t | Visible history before action | Action | New observation | Reward |
 | --- | --- | --- | --- | --- |
-| 0 | 主诉 | 查询 exposure | positive | 0 |
-| 1 | 主诉、第一次查询及结果 | 查询 test_x | negative | 0 |
-| 2 | 上述全部历史 | 回答 B | 结束标志 | 1 |
+| 0 | Presentation | Query exposure | positive | 0 |
+| 1 | Presentation and first interaction | Query test_x | negative | 0 |
+| 2 | All preceding interactions | Answer B | terminated | 1 |
 
-如果给查询加成本，前两个 r_t 可以变成 -0.05；本表先只用终局正确性奖励。
-
-用标准库构造一个可检查的记录例子：
+A small inspectable representation is:
 
 ```python
 trajectory = [
@@ -29,63 +23,58 @@ trajectory = [
 print(sum(step["reward"] for step in trajectory))  # 1.0
 ```
 
-真实训练还需要保存策略版本、原始 generated token IDs、采样 log-probabilities、mask 和终止原因。只存一段自然语言对话，不足以可靠重建训练 batch。
+It prints total reward 1.0. A training rollout must additionally preserve policy version, original generated token IDs, sampling log-probabilities, masks, and stopping reasons. A natural-language transcript alone cannot reliably reconstruct those tensors.
 
-## 2. 轨迹概率：策略和环境各负责哪一部分
+## 2. Factor the trajectory probability
 
-条件于任务 x，令工具环境为 E：
+For task x and environment E:
 
 \[
-p_\theta(\tau\mid x,E)
-=p_E(o_0\mid x)\prod_{t=0}^{T-1}
-\pi_\theta(a_t\mid h_t)P_E(o_{t+1}\mid h_t,a_t).
+p_\theta(\tau\mid x,E)=p_E(o_0\mid x)
+\prod_{t=0}^{T-1}\pi_\theta(a_t\mid h_t)P_E(o_{t+1}\mid h_t,a_t).
 \]
 
-πθ 是模型选择动作的概率；P_E 是环境产生新观测的概率。病例读取通常是确定性的：给定正确字段，返回固定值，对这条实际返回的条件概率是 1。其他环境可以有随机性，例如检索返回波动或模拟器随机响应。
+The policy selects actions; the environment produces observations. Deterministic lookup assigns conditional probability 1 to the returned value. Other environments may be stochastic, for example because retrieval results vary.
 
-**人为数值例子：**三次模型动作的条件概率依次为 0.4、0.5、0.8；环境返回确定，则这条轨迹的策略部分概率为：
+Suppose three action probabilities are 0.4, 0.5, and 0.8, with deterministic feedback:
 
 ```python
 from math import log
 probs = [0.4, 0.5, 0.8]
 print(probs[0] * probs[1] * probs[2])  # 0.16
-print(sum(log(p) for p in probs))     # 约 -1.832581
+print(sum(log(p) for p in probs))
 ```
 
-0.8 是“已经查询并看到结果后回答 B”的概率，不是“只看主诉时回答 B”的概率。忽略条件上下文会把不同策略问题混在一起。
+The policy portion of the trajectory probability is 0.16 and its log is approximately -1.832581. The final 0.8 is conditional on having queried and observed results; it is not the answer probability under the initial presentation alone.
 
-## 3. 为什么环境不需要可微
+## 3. Why the database does not need to be differentiable
 
-本课的策略梯度推导取有限 episode、γ=1。第四节会给出一般 return 的定义；若改成折扣目标，需要一致处理时间权重，不能只替换一个 return 公式就认为整套推导不变。
-
-目标是提升期望回报：
+For finite episodes with gamma=1, maximize:
 
 \[
 J(\theta)=E_{\tau\sim p_\theta}[R(\tau)].
 \]
 
-在 reward 和环境转移没有直接 θ 依赖、并满足通常的可微与积分交换条件下，使用 likelihood-ratio identity：
+Assume the reward and environment transition functions have no direct parameter dependence, with the usual regularity for differentiation under expectation. The likelihood-ratio identity gives:
 
 \[
 \nabla J=\sum_\tau R(\tau)\nabla p_\theta(\tau)
 =E_\tau[R(\tau)\nabla\log p_\theta(\tau)].
 \]
 
-如果环境分布固定，log 轨迹概率的显式参数梯度来自模型动作项：
+For the fixed environment:
 
 \[
 \nabla\log p_\theta(\tau)=\sum_t\nabla\log\pi_\theta(a_t\mid h_t).
 \]
 
-我们不对数据库结果“positive”求导，而对“选择了这个查询”的概率求导。环境反馈仍然非常重要：它改变后续 history 和最终 reward，进而影响采样到什么梯度。
+We differentiate the probability of choosing the query, not the database string it returns. Feedback still changes later histories and rewards. Policy changes therefore alter the distribution of visited histories; that effect is part of the trajectory expectation, not evidence that the environment is irrelevant.
 
-这并不是环境分布对学习没有影响。随着策略改变，访问到的 history 分布也改变；策略梯度的轨迹期望正包含这种影响。
+A discounted objective requires consistent temporal weighting throughout the derivation; merely substituting a discounted return into one formula does not establish the complete estimator.
 
-## 4. reward 与 return-to-go：未来结果为什么影响早期动作
+## 4. Return-to-go assigns future outcomes to earlier actions
 
-给定步骤奖励 `[-0.05,-0.05,1]`，γ=1，从每个动作开始累计的 return-to-go 分别为 `[0.90,0.95,1.00]`。
-
-独立小例子：
+For rewards `[-0.05, -0.05, 1]` and gamma=1:
 
 ```python
 rewards = [-0.05, -0.05, 1.0]
@@ -97,50 +86,40 @@ returns = [
 print(returns)  # [0.9, 0.95, 1.0]
 ```
 
-第 0 步动作影响后面整个过程，所以其 return 包含后续成功奖励；第 2 步不应该为发生在它之前的查询成本承担因果影响。用 return-to-go 去掉过去奖励，可以降低无用噪声，而不改变标准 on-policy 策略梯度的期望。
+Returns are `[0.90, 0.95, 1.00]`. The first action influences the remaining interaction, so its return includes eventual success. The final action cannot causally affect earlier query costs. Removing past rewards from the score-function weight removes noise without changing the standard on-policy gradient expectation.
 
-只在最终给 1 分且 γ=1 时，三个动作的 return 都是 1。这不意味着它们贡献相等，只意味着这份反馈没有提供更细的区分。
+With only a final reward of 1, all three returns are 1. Equal feedback does not prove equal contribution; it means the feedback contains no finer distinction.
 
-## 5. baseline：为什么“比通常表现好多少”比原始 reward 更有用
+## 5. Baselines: compare with expected performance
 
-最简单的 REINFORCE 梯度估计为 `R × Σ∇logπ`。每个回报都乘上动作 log-probability 的梯度；即使所有轨迹回报都差不多，也会有很大采样噪声。
-
-加入不依赖当前采样动作的 baseline b(h_t)：
+A basic REINFORCE estimator weights each log-probability gradient by the raw return. An action-independent baseline can reduce variance:
 
 \[
 \hat g=\sum_t(G_t-b(h_t))\nabla\log\pi_\theta(a_t\mid h_t).
 \]
 
-为什么可以减掉它？对固定 h，动作概率加起来是 1：
+For a fixed history:
 
 \[
 E_{a\sim\pi}[b(h)\nabla\log\pi(a\mid h)]
-=b(h)\sum_a\nabla\pi(a\mid h)
-=b(h)\nabla1=0.
+=b(h)\sum_a\nabla\pi(a\mid h)=b(h)\nabla1=0.
 \]
 
-因此，在上述条件下 baseline 项期望为 0，可以改善方差而不改变梯度期望。若 baseline 是学习到的 value，policy loss 中通常将它视为常量，value 自己通过独立目标训练。
+Thus this baseline does not change the expected estimator under those conditions. A learned value baseline is normally treated as constant in the policy loss and trained through its own objective.
 
-**具体数值：**假设某类起始上下文通常成功率 0.4，我们先用 b=0.4：
+If baseline success is 0.4, success receives weight +0.6 and failure -0.4. Without a baseline, a zero-reward sample contributes nothing to the simplest estimator. The negative weight does not create new observations; it changes the estimator's variance structure.
 
-| 结果 | R | R−b | 对采样动作项的权重 |
-| --- | --- | --- | --- |
-| 成功 | 1 | +0.6 | 正权重 |
-| 失败 | 0 | −0.4 | 负权重 |
+GRPO's same-group mean includes the sample's own reward and may be divided by a group standard deviation. The proof for a strictly action-independent baseline is not a proof that every GRPO estimator is unbiased.
 
-没有 baseline 时，R=0 的失败轨迹在这个最简单估计里贡献为 0。加入 baseline 后失败也能提供负权重；这不代表它凭空增加了真实信息，而是改变了估计器的方差结构。
+## 6. The minus sign in the loss
 
-GRPO 的同组均值含有当前样本自己的 reward，再除以同组标准差。它不是本节“严格动作无关 baseline”证明的直接套用，不能因此宣称所有 GRPO 估计都严格无偏。后续用组内相对信号解释它，不把两种估计混为一谈。
-
-## 6. 写成 loss：为什么是负号
-
-我们通常用优化器最小化 loss，而 J 是要最大化的期望回报。在当前策略采样、仅作一次局部梯度解释时，可以写：
+Optimizers minimize losses, whereas J is maximized. For current-policy samples and a local gradient explanation:
 
 \[
 L=-\sum_t\operatorname{stopgrad}(G_t-b_t)\log\pi_\theta(a_t\mid h_t).
 \]
 
-下面使用彼此独立的 log-probability 变量，演示 loss 对这些中间变量的导数；它们不是一个完整归一化策略，也不是模型参数：
+The following uses independent intermediate log-probability variables, not a normalized policy or model parameters:
 
 ```python
 import torch
@@ -148,52 +127,44 @@ logp = torch.tensor([-1.0, -0.7, -0.3], requires_grad=True)
 weight = torch.tensor([0.6, 0.6, 0.6])
 loss = -(weight.detach() * logp).sum()
 loss.backward()
-print(loss.item())   # 约 1.2
+print(loss.item())
 print(logp.grad)     # tensor([-0.6, -0.6, -0.6])
 ```
 
-梯度下降会在这个局部视角中推高这些 log-probability。但真实模型参数共享，一个 batch 更新不保证每个动作概率都单调增加。
+Loss is about 1.2 and the derivatives are `[-0.6,-0.6,-0.6]`. Gradient descent locally pushes those log-probabilities upward. Shared model parameters mean an actual update need not increase every sampled action probability monotonically.
 
-若对旧策略采到的 batch 重复更新，不能一直当作每次都是当前策略新样本。PPO/GRPO 的 ratio 等机制用于构造受控 surrogate；第四讲会实际计算。
+On-policy data are sampled from the current policy being optimized. Off-policy data come from a different behavior policy. If sampling used P(B)=0.2 and several updates later P(B)=0.8, the old batch is not a fresh current-policy sample. PPO typically holds the sampling probabilities fixed while making controlled surrogate updates; membership in an on-policy algorithm family does not make all intermediate parameter states identical.
 
-这里的 **on-policy** 指数据由要优化的当前策略采样；**off-policy** 指数据来自不同的行为策略。比如采样时 P(B)=0.2，经过几次更新后 P(B)=0.8，同一个旧 batch 已经不是新策略下的原始样本。PPO 常先采一批数据，再固定采样时的概率做若干小步更新；称它是 on-policy 家族，不意味着这些小步之间的分布完全没变。
+## 7. Credit assignment is not stepwise causal attribution
 
-## 7. 信用分配：成功轨迹里的无用动作也会拿到正权重
+Suppose the first query is irrelevant and only the second helps. A successful trajectory still gives both queries +0.6 under the terminal-weight estimator. One successful trace does not identify the necessary action.
 
-假设第一步查询 exposure 实际与任务标签独立，第二步 test_x 才有帮助。该轨迹最终成功，使用上面的终局权重时，第一步仍拿到 +0.6。
+Across many trajectories, an unhelpful action may fail to correlate with additional return; an explicit cost also changes its value. To investigate a query, compare allowed versus forbidden calls, altered results, or fixed continuations under a defined counterfactual. Removing text and regenerating the answer changes later behavior too; it is not automatically the query's isolated causal contribution.
 
-策略梯度不是逐步因果归因算法。大量轨迹中无用查询可能不再与额外收益关联；加入成本也会改变它的净价值，但单条成功轨迹本身没有告诉训练器哪一步必要。
+## 8. A tool action becomes token likelihoods
 
-要判断查询是否有帮助，可比较在相同起始信息下：允许/禁止该查询、替换查询结果、固定后续策略等条件。但反事实对照必须明确定义；直接删除一段文本后让模型重新回答，也改变了后续行为，不能自动解释为该查询的纯因果贡献。
-
-## 8. 一个工具动作如何变成 token-level log-probability
-
-一次 JSON 工具调用是 token 序列 y_1...y_m：
+For an action represented by tokens y_1 through y_m:
 
 \[
 \log\pi_\theta(a\mid h)=\sum_{j=1}^{m}\log p_\theta(y_j\mid h,y_{<j}).
 \]
 
-如果用终局权重给整次动作里的 token 同一个 advantage，是在提高/降低这段 sampled sequence 的概率。它并不意味着每个 token 在语义上同样关键。
+Broadcasting a terminal advantage to those generated tokens changes the sampled sequence probability. It does not imply that punctuation and clinically meaningful arguments have equal semantic importance.
 
-这里有个常见工程错误：把生成文本 decode 后再 encode，认为必定还原相同 token IDs。特殊 token、模板、空格和 tokenizer 行为可能打破这一点。训练记录应优先保留推理时的原始 sampled IDs 与对应 log-probability。
+Preserve original sampled IDs. Decoding and re-encoding can change special tokens, spacing, or templates. Also align causal LM prediction positions correctly: logits at position k predict the next token, not the token at k without shifting.
 
-更细的难点是预测位置对齐：causal LM 第 k 个位置的 logits 预测下一个 token，不能不作 shift 就拿同一位置的 token 当 label。
+## 9. Attention and policy-loss masks have different jobs
 
-## 9. attention mask 与 response/loss mask 是不同东西
-
-考虑下面六个**人工 token 位置**：
+Consider six artificial positions:
 
 ```text
-位置              0       1        2       3       4       5
-来源            查询名   参数     工具值   工具值   答案前缀  B
-attention mask    1       1        1       1       1       1
-response mask     1       1        0       0       1       1
+position          0        1        2         3        4       5
+source         tool name  argument  tool text tool text prefix  B
+attention mask    1        1        1         1        1       1
+response mask     1        1        0         0        1       1
 ```
 
-attention mask 说这些位置是不是有效上下文；response mask 说哪些 sampled action 位置进入策略目标。工具值需要被模型读到，所以不是从 attention 中删除，只是不作为策略采样动作计算 policy loss。
-
-用独立 log-probability 变量演示：
+Tool text remains readable context. It is excluded only as an independently sampled action likelihood term:
 
 ```python
 import torch
@@ -206,29 +177,26 @@ print(logp.grad)
 # tensor([-0.15, -0.15, 0., 0., -0.15, -0.15])
 ```
 
-这些 0 只说明工具位置不作为独立动作 likelihood 项。工具 token 的 embedding、表示和注意力仍可能通过后续答案的 loss 收到参数梯度；不要把 mask=0 理解成模型完全不学习如何读取工具信息。
+Gradients with respect to these independent log-probability variables are `[-0.15,-0.15,0,0,-0.15,-0.15]`. Tool-token embeddings and representations may still receive parameter gradients through later generated answers. A zero response mask does not mean the model cannot learn to use tool information.
 
-本例除以有效动作 token 数 4。若错误地除以总长度 6，每段工具文本的长度都会改变 loss 的缩放。不同的 token-mean/sequence-mean 聚合策略也会改变长短轨迹的相对权重，必须读具体实现。
+The denominator is four action tokens, not six total positions. Dividing by total length would let tool response length alter loss scaling. Token-mean and sequence-mean reductions also weight long and short trajectories differently; inspect the actual implementation.
 
-## 10. 把理论变成需要保存的数据
+## 10. What a reliable rollout must preserve
 
-| 字段 | 例子 | 少了它会出现什么问题 |
+| Field | Example | Failure when absent |
 | --- | --- | --- |
-| task/prompt 标识 | 同一病例和同一可见上下文的版本 | GRPO 分组错误 |
-| 策略版本 | rollout 时 checkpoint/step | 不清楚数据是否过旧 |
-| 生成 token IDs | 模型原始采样结果 | decode/re-encode 后概率错位 |
-| 采样 log-probabilities | 每个动作 token 的旧策略概率 | ratio 的分母不可信 |
-| response mask | assistant=1，工具/填充=0 | 在环境输出上错误训练策略 |
-| 最终分数及诊断指标 | score、format_valid、tool_error | 把格式失败或工具故障混为任务失败 |
-| stop reason | 回答完成/预算/超时 | 无法判断失败的来源 |
+| Prompt/task identity | Case plus visible-context version | Incorrect GRPO grouping |
+| Policy version | Checkpoint or update step | Unknown staleness |
+| Generated IDs | Original sampled tokens | Re-tokenization misalignment |
+| Sampling log-probabilities | Old probability per action token | Invalid ratio denominator |
+| Response mask | Assistant 1; tool/padding 0 | Training on environment outputs |
+| Score and diagnostics | Correctness, format, tool error | Conflating failure causes |
+| Stop reason | Answer, budget, timeout | Ambiguous termination semantics |
 
-已有 probe 用的是人工 token 位置，真实多轮模型轨迹尚需后续验证。下一讲沿 verl 的工具、数据与 reward 调用链，说明这些概念落在哪些代码接口上。
+The existing probe verifies artificial mask positions. Actual autonomous multi-turn tokenization remains to be checked.
 
-## 11. 自检与答案线索
+## 11. Check your understanding
 
-- **为什么只给最终 reward 也能训练前面的查询？** 轨迹 likelihood 含有查询概率，score-function 梯度把最终 return 乘回这些 log-probability 梯度。
-- **为什么工具不需要可微？** 优化的是选择动作的概率，不是直接对数据库求导。
-- **为什么把工具位置 mask 掉不会让模型“看不见工具”？** attention/context 与 policy-loss 位置承担不同职责。
-- **为什么一个成功轨迹不足以证明所有步骤有效？** reward 缺少逐步反事实信息，终局权重会同时作用于有用和无用的 sampled actions。
+A terminal reward reaches earlier queries because trajectory likelihood contains their action probabilities. The environment need not be differentiable because the score-function estimator differentiates action selection. Masking tool likelihood terms does not remove tool context from attention. Success does not establish that every step helped because terminal feedback lacks stepwise counterfactual information.
 
-理论背景：[Sutton 等人的策略梯度论文](https://proceedings.neurips.cc/paper/1999/hash/464d828b85b0bed98e80ade0a5c43b0f-Abstract.html)。本文推导与玩具代码是教学解释，不是该论文的实验结果。
+Background: [Policy Gradient Methods for Reinforcement Learning with Function Approximation](https://proceedings.neurips.cc/paper/1999/hash/464d828b85b0bed98e80ade0a5c43b0f-Abstract.html). The worked examples above are teaching constructions, not that paper's empirical results.

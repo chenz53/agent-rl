@@ -1,39 +1,33 @@
-# 进度与决策
+# Progress and decisions
 
-## 2026-09-28
+## User direction
 
-### 用户已确定
+- Become proficient in practical and theoretical Agentic RL; existing expertise is foundation-model training.
+- Focus on biomedical agents, initially clinical reasoning; keep materials, discussions, and code in nanoAstra.
+- Use existing public frameworks and concrete code; remote `ssh vp` demonstrations are authorized.
+- Explain each concept with detailed examples, intermediate steps, and snippets.
+- Latest change: all documentation in English; Chinese conversation is acceptable. Replace the active emergency case with cancer prognosis starting from clinical `csv.gz` files.
 
-- 长期目标：掌握 Agentic RL 的真实训练实践、原理和机制，达到独立研究与实践的能力。
-- 已有多年基础模型训练经验，Agentic RL 是需要系统补足的方向。
-- 关注 biomedical 垂直领域；从临床推理开始。
-- 项目名为 nanoAstra，集中保存讨论、课程、文档和代码，从 0 到 1 搭建或微调简易 Agent。
-- 偏好结合代码教学，复用公开训练框架；授权 `ssh vp` 远端示范，已确认 1×H200。
+## Completed historical milestones
 
-### 已完成
+- Local repository, curriculum, discussion archive, and six original domain tests.
+- Pinned verl source, genuine BaseTool adapter/registry, and CPU GRPO probe.
+- One H200 Qwen3-0.6B constrained A/B update: P(B) 0.260893 to 0.269492, no saved checkpoint. Queries were scripted.
+- Four detailed mathematical/framework lessons; 42 Python blocks parsed and 29 selected blocks executed in the original verification.
+- A staged synthetic emergency case, eleven tests, and three additional verified snippets. Retained as historical evidence, superseded as the active application.
 
-- 本地仓库目录、教学与讨论归档约定。
-- 学习路线、第一课、最小 Agent 草案、参考索引。
-- 第二讲：合成临床轨迹、生成 token 与工具反馈的区分、终局奖励的信用分配问题；已提出查询收益练习，尚未收到作答。
-- 第三讲：固定 verl 源码阅读路径、领域 demo、任务数据与 reward；6 项标准库测试通过。
-- BaseTool adapter、工具 YAML 与真实 CPU GRPO probe 已在远端验证。
-- 第四讲：Qwen3-0.6B 的真实 H200 单步更新；A/B 受限策略，查询固定。P(B) 0.260893→0.269492；结果、环境版本与复现方法均保存。
-- 根据用户反馈重写四课，补齐定义、推导、逐步数值和 code snippets；新增概念索引。42 个 Python 片段做语法解析，29 个选定可执行片段在远端验证；真实 verl 数值检查另存实验 003。
+## Current oncology work
 
-- 新增 ed-0001 合成急诊病例：胸痛/气促、感染线索与血栓风险并存；初诊和 CT 返回后两阶段。第五讲解释证据与确定性更新，查询复用 verl BaseTool。尚无自主模型推理或医学 reward。
+- Thirteen gzip CSV clinical tables plus a separately loaded mortality/follow-up table, generated entirely from invented records.
+- Main illustrative patient: pretreatment metastatic NSCLC; provisional endpoint is 180-day all-cause mortality at a fixed index.
+- As-of filtering on event and availability clocks, record revisions, cancellation handling, patient isolation, and explicit missing follow-up labels.
+- English data dictionary, detailed file-first lesson, scripted queries through the existing adapter, and evaluator-only labels.
+- Verification evidence and final checks are in [experiment 005](experiments/005-oncology-csv.md).
 
-### 导师提出的初始设计（可调整）
+## Next milestones
 
-- 先做离线病例中的信息获取与鉴别诊断，之后扩展治疗证据推理。
-- 使用受控、可回放的环境建立基线，再引入 RL；不预选具体算法或训练框架。
+1. Review the endpoint, eligibility, real source schema, and outcome ascertainment before using actual data.
+2. Run a bounded untrained model's table-query trajectory and verify original tokens, observations, masks, and stopping.
+3. Establish evidence-quality and censoring-aware predictive evaluation, then connect a full trainer.
 
-### 下一步
-
-1. 结合真实更新代码讲解 policy ratio、组内 advantage、loss 与梯度的区别。
-   教材已详写这些内容；根据学习者反馈逐步讲解，避免直接跳到下一套框架或更复杂训练。
-2. 将固定查询扩展成模型自主多轮工具调用，核验真实 token 与 observation mask。
-3. 明确首批任务、终止规则、基线和独立评估，再接完整 verl trainer。
-
-### 尚未完成
-
-没有已验证的完整多轮 Agent、真实临床数据集、临床评估或分布式训练。单步示范未保存模型权重。远端是执行镜像，未创建 Git 托管仓库。本地安装限制保留；远端环境版本已保存。
+No autonomous oncology model, calibrated survival predictor, clinical validation, or complete multi-turn RL training has been demonstrated. The remote directory is an execution mirror, not a published Git repository.

@@ -1,0 +1,18 @@
+tools:
+  - class_name: nanoastra.verl_tool.ClinicalRecordTool
+    config:
+      type: native
+      record_fields: [patients, encounters, diagnosis, labs, vitals, notes, pathology, staging, biomarkers, medication_orders, medication_administrations, procedures, performance_status]
+    tool_schema:
+      type: function
+      function:
+        name: get_clinical_record
+        description: Read one clinical table for the server-selected patient and index time. Outcomes and future records are inaccessible.
+        parameters:
+          type: object
+          properties:
+            field:
+              type: string
+              description: Allowed clinical table. Empty rows mean no available records, not a confirmed negative finding.
+              enum: [patients, encounters, diagnosis, labs, vitals, notes, pathology, staging, biomarkers, medication_orders, medication_administrations, procedures, performance_status]
+          required: [field]

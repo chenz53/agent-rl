@@ -1,15 +1,11 @@
-# 更接近真实工作流的临床病例
+# A more realistic clinical case
 
-日期：2026-09-28。
+Date: 2026-09-28. Translated user feedback: the generated case was too simple and abstract; create one closer to the real world.
 
-## 用户原话
+## Historical response summary
 
-> 这个生成的病例过于简单抽象了，生成一个和真实世界更接近的案例
+Added an entirely synthetic 58-year-old woman presenting with chest pain and dyspnea. Infection-like symptoms coexist with recent surgery, reduced mobility, and unilateral leg findings. The initial stage supports suspicion, while a later CTPA report changes diagnostic certainty; leg DVT remains unconfirmed.
 
-## 本轮决定与教学摘要（不是逐字记录）
+The [historical lesson](../lessons/005-realistic-clinical-case.md) includes a timeline, measurements, evidence interpretation, executable projection, and reward-design pitfalls. Records reuse the BaseTool adapter; the caller explicitly selects the stage. Lookup does not order a test or advance time.
 
-新增完全合成的 58 岁女性急诊胸痛/气促病例，保留低热、炎症指标升高及胸片异常等感染线索，并通过进一步问诊/查体提供近期手术、活动减少与单侧下肢体征。初诊仅能高度怀疑肺栓塞；后续 CTPA 提供确诊依据，而下肢 DVT 仍未影像证实。
-
-完整教材包含时间线、具体数值、逐步解释、易错推断、可执行片段与 RL 评价设计问题，见[第五讲](../lessons/005-realistic-clinical-case.md)。原 A/B 示范保留以复现实验；新增 JSON 与记录投影接入同一 verl BaseTool。阶段由程序明确切换，查询不会自动产生检查结果。
-
-远端真实工具与原 GRPO probe 验证通过；11 项测试及第五讲 3 个代码片段通过。没有开展新的模型训练或临床能力评估。记录与限制见[实验 004](../../experiments/004-realistic-case.md)。
+Eleven tests, three teaching snippets, the real remote tool, and the original GRPO probe passed. No new training or clinical capability assessment occurred. [Experiment 004](../../experiments/004-realistic-case.md) retains the original evidence. The later user instruction replaced this as the active case with oncology prognosis.

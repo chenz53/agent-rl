@@ -1,51 +1,50 @@
 # nanoAstra
 
-从 0 到 1 搭建并训练一个简易临床推理 Agent，同时系统学习 Agentic Reinforcement Learning。
+Learn Agentic RL through code and build a small clinical reasoning agent. The active case is **cancer prognosis from longitudinal compressed CSV exports**. Documentation is in English; tutoring conversation may be in Chinese.
 
-学习者具有多年基础模型训练经验；重点是序贯决策、训练环境、奖励、信用分配、训练系统与科学评估。
+## Start with the data
 
-## 从这里开始
-
-- [教材目录与概念索引](docs/lessons/README.md)
-
-- [学习路线](docs/roadmap.md)
-- [第一课：把临床推理变成可训练的问题](docs/lessons/001-clinical-reasoning-as-an-environment.md)
-- [第二讲：一条临床推理轨迹如何变成训练信号](docs/lessons/002-one-clinical-trajectory.md)
-- [第三讲：沿代码接入 verl](docs/lessons/003-verl-code-walkthrough.md)
-- [第四讲：H200 上第一次真实参数更新](docs/lessons/004-first-real-gpu-update.md)
-- [第五讲：更接近真实急诊的分阶段病例](docs/lessons/005-realistic-clinical-case.md)
-- [远端环境与复现记录](experiments/002-remote-h200.md)
-- [教材代码与数学验证](experiments/003-teaching-verification.md)
-- [基础设施选择与验证边界](docs/design/002-infrastructure.md)
-- [最小 Agent 设计](docs/design/001-minimal-agent.md)
-- [讨论记录与索引](docs/discussions/README.md)
-- [参考资料](docs/references/README.md)
-- [进度与决策](PROGRESS.md)
-
-## 目录约定
-
-| 路径 | 内容 |
-| --- | --- |
-| `docs/lessons/` | 教学材料、推导、练习 |
-| `docs/discussions/` | 讨论归档、问题与决定 |
-| `docs/design/` | 环境、训练和评估设计 |
-| `docs/references/` | 论文链接与阅读笔记 |
-| `src/nanoastra/` | 后续 Agent、环境与训练实现 |
-| `tests/` | 后续有实际验证价值的测试 |
-| `experiments/` | 实验配置、结果摘要和失败分析 |
-
-## 当前状态
-
-已实现合成病例查询与终局评分，11 项测试通过。远端 `vp` 的 H200 已验证真实 verl 工具与 GRPO 接口，并用 Qwen3-0.6B 做了一次受限 A/B 判断的参数更新。完整多轮 Agent 训练与临床评估尚未完成；未创建远程 Git 托管仓库。
-
-从仓库根目录运行，不需要安装新依赖：
+1. [Cancer prognosis: from CSV files to an as-of patient view](docs/lessons/006-oncology-prognosis-from-csv.md).
+2. [Exact data contract and dictionary](docs/design/003-oncology-data-contract.md).
+3. [Synthetic clinical files](fixtures/oncology/clinical), [manifest](fixtures/oncology/manifest.json), and [generator](scripts/generate_oncology_fixture.py).
+4. [Verification and limitations](experiments/005-oncology-csv.md).
 
 ```sh
-python3 scripts/demo_case.py
-python3 scripts/demo_realistic_case.py --stage initial
+python3 scripts/demo_oncology.py --tables diagnosis labs vitals notes
+python3 scripts/demo_oncology.py --tables pathology staging biomarkers performance_status
+# Evaluator only: never expose this output to the agent.
+python3 scripts/build_oncology_labels.py
 PYTHONPATH=src python3 -m unittest discover -s tests -v
 ```
 
-这是预设动作的本地领域 demo。真实 GPU 示范见 `scripts/demo_gpu_update.py`，在 `vp:/home/user/nanoAstra/.venv` 中运行。远端依赖版本已保存；本地没有安装训练依赖。
+These commands need only the standard library. In the existing vp environment, `.venv/bin/python scripts/demo_oncology.py --verl` uses the real verl registry and BaseTool. No new local training dependencies are required.
 
-项目用于研究与学习。起步实验使用合成或明确允许使用的去标识化病例，不将真实患者可识别信息、凭据或模型权重提交到 Git。
+The teaching assumption is metastatic NSCLC, before first systemic therapy, with a 180-day all-cause mortality endpoint. The main fixture contains a detailed fictional patient; two sparse additional patients demonstrate isolation and censoring. It is not a training cohort, a calibrated survival model, or a clinically reviewed benchmark.
+
+## RL curriculum and project records
+
+- [Lesson and concept index](docs/lessons/README.md)
+- [Learning roadmap](docs/roadmap.md)
+- [Infrastructure choice](docs/design/002-infrastructure.md)
+- [H200 update and reproduction](experiments/002-remote-h200.md)
+- [Mathematics and snippet verification](experiments/003-teaching-verification.md)
+- [Discussion archive](docs/discussions/README.md)
+- [References](docs/references/README.md)
+- [Progress and decisions](PROGRESS.md)
+
+The original A/B task remains for reproducing the recorded single-step update. The emergency case is superseded as the active application and retained as historical material. Neither should be mistaken for oncology training.
+
+## Repository layout
+
+| Directory | Purpose |
+| --- | --- |
+| `fixtures/oncology/clinical/` | Small invented gzip CSV exports |
+| `fixtures/oncology/evaluator_only/` | Outcome data, excluded from the agent tool |
+| `src/nanoastra/` | Domain ingestion, tools, and evaluation helpers |
+| `configs/` | Real verl tool schemas |
+| `scripts/` | Reproduction commands and demonstrations |
+| `tests/` | Behavioral and information-boundary checks |
+| `docs/` | Lessons, data contracts, discussions, references |
+| `experiments/` | Recorded results and limitations |
+
+Current demonstrations validate data projection and framework interfaces. Complete autonomous multi-turn training and clinical evaluation remain unfinished. The remote machine is an execution mirror; no hosted Git repository has been created.

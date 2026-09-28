@@ -1,12 +1,12 @@
-# 讨论记录
+# Discussion archive
 
-- [2026-09-28：目标、背景与项目建立](2026-09-28-kickoff.md)：用户原话与早期教学摘要。
-- [前两轮导师教学正文](2026-09-28-teaching-transcript.md)：保留课程调整前后的回答。
-- [首条临床轨迹](2026-09-28-first-trajectory.md)：用户开始学习；观测、动作、梯度与信用分配。
-- [代码驱动教学与框架选择](2026-09-28-code-first.md)：选择 verl、领域 demo、远端 GPU 与当前验证边界。
-- [远端示范](2026-09-28-remote-demo.md)：H200 环境、真实 verl 集成与 Qwen 参数更新。
-- [教材深度调整](2026-09-28-deeper-lessons.md)：四课重写、具体例子与代码输出验证。
+All documentation is now English. Historical user statements below are explicitly translated from Chinese; summaries are not verbatim transcripts. Earlier Chinese originals remain in Git history (for example, commit `1f67662` before this migration). Original machine outputs are retained unchanged as experimental evidence.
 
-首轮归档包含用户教学请求原话、前两轮导师教学正文与另列的摘要，未声称是包含工具操作的完整聊天导出。后续在每轮结束前保存可用的教学正文、用户反馈和决策，并更新索引。工具原始输出与系统指令不作为教学内容归档。
-
-- [更贴近真实工作流的病例](2026-09-28-realistic-case.md)：完整合成病历、分阶段证据与查询代码。
+- [Goals and project creation](2026-09-28-kickoff.md)
+- [Early tutor responses, English rendering](2026-09-28-teaching-transcript.md)
+- [First trajectory](2026-09-28-first-trajectory.md)
+- [Code-first teaching and infrastructure](2026-09-28-code-first.md)
+- [Remote demonstration](2026-09-28-remote-demo.md)
+- [Deeper lesson standard](2026-09-28-deeper-lessons.md)
+- [Historical emergency case](2026-09-28-realistic-case.md)
+- [English documentation and oncology CSV workflow](2026-09-28-oncology-csv.md)
