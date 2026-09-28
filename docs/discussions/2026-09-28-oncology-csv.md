@@ -14,4 +14,4 @@ The reader validates schemas and both event/availability clocks, selects record 
 
 All Markdown documentation was rewritten in English, including working instructions and historical discussion material. Historical Chinese statements are labeled as translations/summaries; earlier originals remain in Git history. Raw historical experiment outputs are unchanged. The old emergency case remains reproducible but is no longer the active application.
 
-The current demo is scripted evidence retrieval, not an autonomous model, calibrated survival predictor, or clinical reward. Code and verification details are in [lesson 6](../lessons/006-oncology-prognosis-from-csv.md) and [experiment 005](../../experiments/005-oncology-csv.md).
+The current demo is scripted evidence retrieval, not an autonomous model, calibrated survival predictor, or clinical reward. Code and verification details are in [lesson 6](../archive/006-oncology-prognosis-from-csv.md) and [experiment 005](../../experiments/005-oncology-csv.md).

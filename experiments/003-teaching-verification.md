@@ -18,11 +18,11 @@ Equivalent logits were reconstructed from recorded probabilities, not extracted 
 
 All 42 Python blocks in lessons 1-4 parsed; 29 explicitly selected executable blocks ran in a separate namespace per lesson, preserving required context within a lesson. [Original output](results/003-lesson-snippets.json) remains unchanged. Other blocks were contextual excerpts or intentionally incorrect examples, not claimed to run independently.
 
-Selection uses explicit indices in `scripts/check_lesson_snippets.py`; block changes require a selection audit. English-edition verification is recorded separately in experiment 005, preserving historical measurements.
+Selection uses explicit indices in `scripts/check_historical_lesson_snippets.py`; block changes require a selection audit. English-edition verification is recorded separately in experiment 005, preserving historical measurements.
 
 ```sh
 .venv/bin/python scripts/verify_lesson_math.py
-.venv/bin/python scripts/check_lesson_snippets.py
+.venv/bin/python scripts/check_historical_lesson_snippets.py
 ```
 
 No Qwen loading or GPU update occurred in this verification, and no clinical efficacy is established.

@@ -1,3 +1,5 @@
+> Historical material. Follow the [current oncology curriculum](../lessons/README.md) instead.
+
 # Lesson 3: Trace records, tools, trajectories, and rewards through real code
 
 The question is concrete: who sees each field, creates the tool, receives the observation, and scores the response? All upstream statements refer to verl commit `00094bd9cd3fef9cf8903daf60ea4a2bcf832efc`, not arbitrary releases.

@@ -1,3 +1,5 @@
+> Historical material. Follow the [current oncology curriculum](../lessons/README.md) instead.
+
 # Lesson 6: Cancer prognosis starts with the clinical exports
 
 This is the active nanoAstra case. The earlier emergency diagnosis example is retained only as historical teaching material. All patients, dates, events, and outcomes below are invented. There are no real patient records in this repository.

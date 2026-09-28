@@ -1,3 +1,5 @@
+> Historical material. Follow the [current oncology curriculum](../lessons/README.md) instead.
+
 # Lesson 2: From an interaction trajectory to policy gradient
 
 Why can a final reward train earlier queries? Why does it fail to tell us precisely which query caused success? We answer both questions using the artificial A/B task. The completed GPU experiment optimized only the final choice; the multi-turn trajectory here is instructional.

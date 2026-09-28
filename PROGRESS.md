@@ -31,3 +31,7 @@
 3. Establish evidence-quality and censoring-aware predictive evaluation, then connect a full trainer.
 
 No autonomous oncology model, calibrated survival predictor, clinical validation, or complete multi-turn RL training has been demonstrated. The remote directory is an execution mirror, not a published Git repository.
+
+## Curriculum ordering revision
+
+The current course now starts at oncology lesson 1 and proceeds through evidence, environment, outcomes/reward, trajectories/gradients, and real verl/GRPO. Historical editions moved to `docs/archive/`. Every current Python block has adjacent recorded output; verification is in [experiment 006](experiments/006-oncology-curriculum.md).

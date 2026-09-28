@@ -1,3 +1,5 @@
+> Historical material. Follow the [current oncology curriculum](../lessons/README.md) instead.
+
 # Lesson 5: Historical emergency case and staged diagnostic evidence
 
 **Superseded application:** the active case is now [oncology prognosis from clinical CSVs](006-oncology-prognosis-from-csv.md). This English teaching record preserves the earlier case's rationale and reproducibility. The fixture and original experiment outputs retain their original language and are historical data, not current documentation.

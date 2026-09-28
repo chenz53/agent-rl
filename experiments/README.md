@@ -8,4 +8,6 @@ Store small configurations, reproduction steps, results, and failure analysis he
 - [004: Historical staged emergency case](004-realistic-case.md)
 - [005: Oncology CSV workflow and English documentation](005-oncology-csv.md)
 
-Only experiment 002 updates model parameters. Complete multi-turn training remains unverified.
+- [006: Coherent oncology-first curriculum and captured outputs](006-oncology-curriculum.md)
+
+Only experiment 002 updates language-model parameters. Experiment 006 includes a two-logit teaching update. Complete multi-turn training remains unverified.

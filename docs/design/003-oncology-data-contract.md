@@ -179,4 +179,4 @@ The label builder validates temporal ordering and returns event observation, fol
 
 Map actual source fields and terminology with clinical/data stewards; establish completeness, deidentification, licenses, timestamp meanings, note versioning, dose/unit conventions, tumor episode linkage, prior-treatment coverage, and mortality ascertainment. Explicitly distinguish problem-list history from encounter diagnoses and orders from administrations. Site/export differences should become adapter logic and validation, not prompt guesses.
 
-The fixture reader scans small tables and materializes the selected view in memory. It does not provide warehouse-scale joins, query pagination, security certification, or a validated prognostic model. The complete walkthrough is [lesson 6](../lessons/006-oncology-prognosis-from-csv.md).
+The fixture reader scans small tables and materializes the selected view in memory. It does not provide warehouse-scale joins, query pagination, security certification, or a validated prognostic model. The complete walkthrough is [lessons 1-2](../lessons/001-oncology-prognosis-from-files.md).

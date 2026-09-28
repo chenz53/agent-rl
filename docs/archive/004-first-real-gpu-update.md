@@ -1,3 +1,5 @@
+> Historical material. Follow the [current oncology curriculum](../lessons/README.md) instead.
+
 # Lesson 4: Explain one real GRPO parameter update on an H200
 
 We follow the computation from two model logits to `optimizer.step()`. Separate three kinds of evidence: a real Qwen3-0.6B update on H200, small-tensor numerical verification with actual verl/PyTorch, and an artificial A/B task with no medical interpretation.

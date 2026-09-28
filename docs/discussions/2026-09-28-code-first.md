@@ -8,4 +8,4 @@ Selected verl, pinned its source revision, and implemented artificial records, l
 
 Source inspection showed per-call create/execute/release in the selected ToolAgentLoop path, so tool instance state could not be assumed persistent across turns. At this milestone remote hardware details and access were not yet supplied; no remote connection or training had occurred.
 
-See [lesson 3](../lessons/003-verl-code-walkthrough.md) and the [infrastructure decision](../design/002-infrastructure.md). Subsequent authorization and results are in the remote demonstration record.
+See [lesson 3](../archive/003-verl-code-walkthrough.md) and the [infrastructure decision](../design/002-infrastructure.md). Subsequent authorization and results are in the remote demonstration record.

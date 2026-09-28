@@ -10,3 +10,5 @@ All documentation is now English. Historical user statements below are explicitl
 - [Deeper lesson standard](2026-09-28-deeper-lessons.md)
 - [Historical emergency case](2026-09-28-realistic-case.md)
 - [English documentation and oncology CSV workflow](2026-09-28-oncology-csv.md)
+
+- [Coherent oncology-first curriculum](2026-09-28-oncology-curriculum.md)

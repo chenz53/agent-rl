@@ -1,0 +1,145 @@
+# Lesson 3: Turn the oncology records into an agent environment
+
+[Lesson 2](002-reconstruct-oncology-evidence.md) established valid evidence. Now suppose the model initially receives only the patient/index task and can request clinical tables. Its choices determine the evidence in its next input. That is why we need actions, observations, history, and runtime state.
+
+The code below is an executable teaching rollout with scripted choices. It is not LLM inference. Blocks run in order in a fresh `PYTHONPATH=src python3` session.
+
+## 1. Expose an action, not arbitrary filesystem access
+
+The existing tool accepts one argument, `field`, whose value must be an allowed table name. Patient identity and cutoff are fixed by the environment. The model cannot submit another patient's ID, move the cutoff, or request a mortality file through this interface.
+
+```python
+import json
+from nanoastra.oncology import tool_view, TABLES
+from nanoastra.clinical import read_record
+records = tool_view()
+response = read_record(records, "performance_status", TABLES)
+observation = json.loads(response["value"])
+print("status:", response["status"])
+print("table:", observation["table"])
+print("evidence:", [(r["record_id"], r["score"]) for r in observation["rows"]])
+print("forbidden:", read_record(records, "mortality", TABLES))
+```
+
+Output:
+
+```text
+status: ok
+table: performance_status
+evidence: [('PS-001', '1'), ('PS-002', '2')]
+forbidden: {'status': 'invalid_field'}
+```
+
+The response is an **observation**: newly revealed information, not a model-generated fact. `status=ok` means the lookup succeeded; it does not establish clinical normality or completeness. The allowlist is application-level isolation. A future model given unrestricted shell access could bypass it, so the surrounding tool permissions must preserve the same boundary.
+
+## 2. State and observation are different objects
+
+The full runtime state contains the selected snapshot, remaining budget, disclosed table set, and whether the episode ended. The latest observation contains only the requested table. The model history contains initial instructions plus the actions and observations already exchanged.
+
+A simple runtime implementation makes these distinctions tangible. This teaching class is not the production verl AgentLoop and does not simulate a changing patient:
+
+```python
+class RecordEpisode:
+    def __init__(self, records, budget=3):
+        self.records = dict(records)
+        self.remaining = budget
+        self.revealed = []
+        self.done = False
+        self.history = []
+
+    def query(self, table):
+        if self.done or self.remaining == 0:
+            raise RuntimeError("Episode ended or query budget exhausted")
+        result = read_record(self.records, table, TABLES)
+        self.remaining -= 1  # Every attempted query consumes this teaching budget.
+        self.history.append({"action": table, "observation": result})
+        if result["status"] == "ok":
+            self.revealed.append(table)
+        return result
+
+    def finish(self, assessment):
+        if self.done:
+            raise RuntimeError("Episode already ended")
+        self.done = True
+        self.history.append({"final": assessment})
+        return assessment
+
+print("Runtime tracks records, budget, revealed tables, history, and termination.")
+```
+
+Output:
+
+```text
+Runtime tracks records, budget, revealed tables, history, and termination.
+```
+
+The initialization method creates new lists for each episode. Sharing these mutable lists across rollouts would leak previously acquired evidence. The budget is a design choice; here even an invalid attempt costs a step. It is not a measured clinical cost.
+
+## 3. Run a sequence and inspect the transition
+
+```python
+episode = RecordEpisode(records)
+for table in ["pathology", "performance_status", "vitals"]:
+    result = episode.query(table)
+    rows = json.loads(result["value"])["rows"]
+    print(table, "rows:", len(rows), "remaining:", episode.remaining)
+print("revealed:", episode.revealed)
+print("terminated:", episode.done)
+```
+
+Output:
+
+```text
+pathology rows: 1 remaining: 2
+performance_status rows: 2 remaining: 1
+vitals rows: 5 remaining: 0
+revealed: ['pathology', 'performance_status', 'vitals']
+terminated: False
+```
+
+The underlying patient has not changed. The runtime has: the budget fell and the visible history grew. That is a **transition** even in a static-record task.
+
+A complete action is a tool name plus arguments. A language model would generate multiple tokens to represent it. One twenty-token request is still one table lookup; action granularity and token granularity serve different purposes.
+
+## 4. Stop, truncate, and reset explicitly
+
+```python
+try:
+    episode.query("notes")
+except RuntimeError as error:
+    print("fourth query:", str(error))
+answer = episode.finish({"evidence_tables": list(episode.revealed),
+                         "numeric_risk": None,
+                         "limitation": "Not all relevant tables were reviewed"})
+print("submitted risk:", answer["numeric_risk"])
+print("terminated:", episode.done)
+fresh = RecordEpisode(records)
+print("reset:", fresh.remaining, fresh.revealed, fresh.done)
+```
+
+Output:
+
+```text
+fourth query: Episode ended or query budget exhausted
+submitted risk: None
+terminated: True
+reset: 3 [] False
+```
+
+This toy contract permits a final answer after the query budget reaches zero. Submitting that answer is termination. If a wall-clock or token limit interrupts the model before it submits, that is truncation. They may merit different diagnostics and, in value-based return estimation, different bootstrapping treatment.
+
+The limitation is important: our scripted sequence did not read biomarkers or notes. A plausible-looking answer should not claim it reviewed every relevant source.
+
+## 5. Why partial observability emerges naturally
+
+The environment has thirteen tables, but the policy initially sees none of their rows. Two patients could have similar initial task descriptions but different evidence. The policy acts from the acquired history, not the full snapshot. This is a partially observable decision problem.
+
+The underlying clinical world is also more incomplete than the export: unmeasured factors and care elsewhere may be absent altogether. Do not assume a fully known simulated patient exists just because all CSVs are loaded. Our environment state is a useful software contract, not omniscience about biology.
+
+A belief `P(hidden state | visible history)` is a conceptual distribution; the current code maintains no explicit belief tensor. Querying an existing file does not order a new test, cause a biological event, or make an unavailable report appear.
+
+## 6. What should the agent optimize?
+
+Reading every table may use excessive context. Reading too little can omit material uncertainty. To train a query policy, we need a task-level outcome and a defensible score for the assessment, not just a count of calls. That brings us to evaluation and reward.
+
+**Next:** [Lesson 4: outcomes, censoring, and feedback](004-oncology-outcomes-and-reward.md). The framework version of this tool appears in lesson 6, after the learning objective is clear.

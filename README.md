@@ -2,24 +2,17 @@
 
 Learn Agentic RL through code and build a small clinical reasoning agent. The active case is **cancer prognosis from longitudinal compressed CSV exports**. Documentation is in English; tutoring conversation may be in Chinese.
 
-## Start with the data
+## Start here: lesson 1
 
-1. [Cancer prognosis: from CSV files to an as-of patient view](docs/lessons/006-oncology-prognosis-from-csv.md).
-2. [Exact data contract and dictionary](docs/design/003-oncology-data-contract.md).
-3. [Synthetic clinical files](fixtures/oncology/clinical), [manifest](fixtures/oncology/manifest.json), and [generator](scripts/generate_oncology_fixture.py).
-4. [Verification and limitations](experiments/005-oncology-csv.md).
+Read [Lesson 1: oncology prognosis from files](docs/lessons/001-oncology-prognosis-from-files.md), then follow the [six-lesson sequence](docs/lessons/README.md) in order:
 
-```sh
-python3 scripts/demo_oncology.py --tables diagnosis labs vitals notes
-python3 scripts/demo_oncology.py --tables pathology staging biomarkers performance_status
-# Evaluator only: never expose this output to the agent.
-python3 scripts/build_oncology_labels.py
-PYTHONPATH=src python3 -m unittest discover -s tests -v
-```
+**Files and task -> evidence reconstruction -> agent environment -> outcomes and reward -> policy gradient -> verl and GRPO.**
 
-These commands need only the standard library. In the existing vp environment, `.venv/bin/python scripts/demo_oncology.py --verl` uses the real verl registry and BaseTool. No new local training dependencies are required.
+The same synthetic patient connects every lesson. Each executable Python block has its actual output directly underneath. There is no need to read the historical A/B or emergency case first.
 
-The teaching assumption is metastatic NSCLC, before first systemic therapy, with a 180-day all-cause mortality endpoint. The main fixture contains a detailed fictional patient; two sparse additional patients demonstrate isolation and censoring. It is not a training cohort, a calibrated survival model, or a clinically reviewed benchmark.
+The task assumption is pretreatment metastatic NSCLC with a 180-day all-cause mortality endpoint. All records and outcomes are invented. The examples do not constitute a calibrated survival model or clinical benchmark.
+
+The [data dictionary](docs/design/003-oncology-data-contract.md), [clinical files](fixtures/oncology/clinical), and [generator](scripts/generate_oncology_fixture.py) are supporting references. Lessons 1-4 need only the standard library; lessons 5-6 use the existing vp environment, with no new local dependencies.
 
 ## RL curriculum and project records
 
@@ -27,12 +20,12 @@ The teaching assumption is metastatic NSCLC, before first systemic therapy, with
 - [Learning roadmap](docs/roadmap.md)
 - [Infrastructure choice](docs/design/002-infrastructure.md)
 - [H200 update and reproduction](experiments/002-remote-h200.md)
-- [Mathematics and snippet verification](experiments/003-teaching-verification.md)
+- [Current curriculum and output verification](experiments/006-oncology-curriculum.md)
 - [Discussion archive](docs/discussions/README.md)
 - [References](docs/references/README.md)
 - [Progress and decisions](PROGRESS.md)
 
-The original A/B task remains for reproducing the recorded single-step update. The emergency case is superseded as the active application and retained as historical material. Neither should be mistaken for oncology training.
+Earlier lessons are in the [historical archive](docs/archive/README.md), separate from the current reading order. Original experiment measurements remain unchanged.
 
 ## Repository layout
 

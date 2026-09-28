@@ -15,3 +15,5 @@
 - Check source permissions before using actual data. Do not commit identifiable patient data, credentials, weights, or bulk rollouts. Current fixtures are entirely synthetic and not clinically validated.
 - Do not modify the parent project's read-only `sources/`. Do not create or publish a remote Git repository without a user request.
 - The current record tools are read-only projections, not dynamic patient simulators. Do not imply that querying orders a test, advances time, or implements a validated clinical reward.
+
+- The required curriculum starts at oncology lesson 1 and introduces each concept from the same patient workflow. Keep historical lessons in `docs/archive/`, outside the numbered current route. Every current executable Python block must have an immediately adjacent captured Output block verified by `scripts/check_lesson_snippets.py`; use the historical checker for old material.

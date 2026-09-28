@@ -8,4 +8,4 @@ Connected through the supplied alias and verified one H200. Created an execution
 
 A cached Qwen3-0.6B completed one real restricted A/B update with fixed queries, native verl advantage/loss, and PyTorch SGD. P(B) moved from 26.0893% to 26.9492%; loss was about 1.49e-8 while gradient norm was about 142.12. The teaching point is that function value and derivative differ, old probabilities must be constant, and sampling/training probabilities must match.
 
-Results and package versions were saved. No checkpoint was saved or overwritten, and the process exited. Autonomous multi-turn tool use and complete training remained pending. See [lesson 4](../lessons/004-first-real-gpu-update.md) and [experiment 002](../../experiments/002-remote-h200.md).
+Results and package versions were saved. No checkpoint was saved or overwritten, and the process exited. Autonomous multi-turn tool use and complete training remained pending. See [lesson 4](../archive/004-first-real-gpu-update.md) and [experiment 002](../../experiments/002-remote-h200.md).

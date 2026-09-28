@@ -1,16 +1,16 @@
 # Learning roadmap
 
-Each unit follows task definition, mechanism, implementation or worked trajectory, failure analysis, and an understanding check. Documentation is English; discussion may be Chinese.
+The required route is a single oncology-first sequence. Begin with [lesson 1](lessons/001-oncology-prognosis-from-files.md); the [lesson index](lessons/README.md) is the authoritative reading order.
 
-| Unit | Core question | Practical milestone |
-| --- | --- | --- |
-| 1. Oncology data and environment | What is knowable at the index? What can the agent query? | CSV contract, as-of view, outcome isolation |
-| 2. Baselines and evaluation | Is the limitation knowledge, information, or strategy? | Non-RL baselines and independent evaluation |
-| 3. Trajectories and gradients | How do tool interactions affect policy gradients? | Original tokens, likelihoods, masks, returns |
-| 4. PPO/GRPO and credit | What do relative advantage, ratio, clipping, and KL do? | Auditable updates and diagnostics |
-| 5. Data and exploration | How do we collect informative successes and failures? | Sampling and task-difficulty ablations |
-| 6. Training systems | How do latency, retries, and policy lag change learning? | Reproducible small training loop |
-| 7. Scientific validity | Does reward improvement represent better prognosis? | Censoring-aware evaluation, calibration, leakage audit |
-| 8. Research reproduction | Which mechanism actually explains a gain? | Controlled replication and failure report |
+1. Open the compressed clinical files and define the prognosis task, patient, and index.
+2. Reconstruct longitudinal evidence without future information, duplicate revisions, or unit errors.
+3. Define the evidence-acquisition environment and query decisions.
+4. Define outcomes, censoring, evaluation, and candidate feedback.
+5. Explain how a collected trajectory produces a policy gradient.
+6. Connect the mechanism to real verl tools, group advantages, and policy loss.
 
-Prioritize the objective and data flow over API familiarity. Progress follows understanding and verified experiments, not a fixed promise of expertise.
+Each lesson uses the same patient and attaches captured output immediately below executable code. New terminology appears when the workflow needs it. Do not jump to historical GPU material before establishing the clinical task and evidence boundary.
+
+After the six lessons, implement a bounded non-RL model rollout, verify real tokens/masks and stopping, establish appropriate independent evaluation, and then connect a full trainer. Later work includes exploration, rollout throughput, policy lag, failure recovery, calibration, censoring-aware analysis, and controlled research reproduction.
+
+Progress follows understanding and verified experiments, not a fixed timetable for expertise.

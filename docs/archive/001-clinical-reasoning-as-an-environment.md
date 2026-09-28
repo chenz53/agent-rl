@@ -1,3 +1,5 @@
+> Historical material. Follow the [current oncology curriculum](../lessons/README.md) instead.
+
 # Lesson 1: Define clinical reasoning as a trainable decision problem
 
 The goal is to take a case, tools, and a base model and identify the environment state, visible information, actions, rewards, and stopping rules. Every object should have a clear home in the implementation.

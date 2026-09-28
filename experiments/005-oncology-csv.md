@@ -44,7 +44,7 @@ In the prepared vp environment:
 
 ```sh
 .venv/bin/python scripts/demo_oncology.py --verl --tables labs notes biomarkers medication_administrations mortality
-.venv/bin/python scripts/check_lesson_snippets.py
+.venv/bin/python scripts/check_historical_lesson_snippets.py
 ```
 
 ## Limits
