@@ -9,3 +9,8 @@
 | [An AI agent for treatment reasoning over a biomedical tool universe (ATHENA-R1)](https://arxiv.org/abs/2606.28692) | 生物医学工具使用与科学反馈 | 检索摘要；待全文核验 |
 
 阅读笔记需分别记录：作者报告的结论、实验实际支持的范围、我们的解释、尚未验证的假设。
+
+## 基础理论（2026-09-28 增补）
+
+- [Policy Gradient Methods for Reinforcement Learning with Function Approximation](https://proceedings.neurips.cc/paper/1999/hash/464d828b85b0bed98e80ade0a5c43b0f-Abstract.html)：策略梯度原始论文；本轮检索出版页面，尚未逐节研读。
+- [Reinforcement Learning: An Introduction，2018 草稿](https://www.incompleteideas.net/book/bookdraft2018mar21.pdf)：第 13 章包含 REINFORCE 与 baseline；候选教材，尚未在教学中逐节研读。

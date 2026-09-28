@@ -8,6 +8,7 @@
 
 - [学习路线](docs/roadmap.md)
 - [第一课：把临床推理变成可训练的问题](docs/lessons/001-clinical-reasoning-as-an-environment.md)
+- [第二讲：一条临床推理轨迹如何变成训练信号](docs/lessons/002-one-clinical-trajectory.md)
 - [最小 Agent 设计](docs/design/001-minimal-agent.md)
 - [讨论记录与索引](docs/discussions/README.md)
 - [参考资料](docs/references/README.md)
