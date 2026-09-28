@@ -9,6 +9,8 @@
 - [学习路线](docs/roadmap.md)
 - [第一课：把临床推理变成可训练的问题](docs/lessons/001-clinical-reasoning-as-an-environment.md)
 - [第二讲：一条临床推理轨迹如何变成训练信号](docs/lessons/002-one-clinical-trajectory.md)
+- [第三讲：沿代码接入 verl](docs/lessons/003-verl-code-walkthrough.md)
+- [基础设施选择与验证边界](docs/design/002-infrastructure.md)
 - [最小 Agent 设计](docs/design/001-minimal-agent.md)
 - [讨论记录与索引](docs/discussions/README.md)
 - [参考资料](docs/references/README.md)
@@ -28,6 +30,15 @@
 
 ## 当前状态
 
-已建立本地 Git 仓库与课程框架；尚未实现 Agent、接入数据、运行训练或创建远程仓库。目录骨架不代表已有可运行的软件。
+已实现可运行的合成病例查询与终局评分，6 项标准库测试通过。已固定 verl 源码并编写工具适配器；尚未运行 verl 集成、模型推理或训练，也未创建远程仓库。
+
+从仓库根目录运行，不需要安装新依赖：
+
+```sh
+python3 scripts/demo_case.py
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+```
+
+这是预设动作的领域 demo，不能当成模型 rollout。CPU 依赖安装未获批准，候选依赖尚未解析锁定；GPU 环境等待规格确认。
 
 项目用于研究与学习。起步实验使用合成或明确允许使用的去标识化病例，不将真实患者可识别信息、凭据或模型权重提交到 Git。

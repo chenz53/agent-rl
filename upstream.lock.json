@@ -1,0 +1,9 @@
+{
+  "verl": {
+    "url": "https://github.com/verl-project/verl.git",
+    "commit": "00094bd9cd3fef9cf8903daf60ea4a2bcf832efc",
+    "path": ".upstream/verl",
+    "license": "Apache-2.0",
+    "purpose": "Unmodified source for code reading and CPU tool/advantage integration; GPU training not yet validated."
+  }
+}

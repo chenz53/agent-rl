@@ -13,3 +13,7 @@ wandb/
 *.safetensors
 *.pt
 *.pth
+.upstream/
+.cache/
+*.egg-info/
+.ruff_cache/
