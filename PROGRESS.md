@@ -35,3 +35,11 @@ No autonomous oncology model, calibrated survival predictor, clinical validation
 ## Curriculum ordering revision
 
 The current course now starts at oncology lesson 1 and proceeds through evidence, environment, outcomes/reward, trajectories/gradients, and real verl/GRPO. Historical editions moved to `docs/archive/`. Every current Python block has adjacent recorded output; verification is in [experiment 006](experiments/006-oncology-curriculum.md).
+
+## 2026-09-29: interactive tutoring
+
+Started lesson 3 with one record query and the environment/model visibility boundary. A short understanding check is pending before proceeding to runtime state and transitions.
+
+## 2026-09-29: detailed schema and token chapter
+
+Added Lesson 3A within the oncology-first route: 13 executed examples trace tool definitions, backend registration, schema serialization, cached Qwen tokens, parser dispatch, complete clinical responses, and the next conversation context. All 47 snippets across six lessons plus chapter 3A passed execution. Full record IDs survive the response; the previous score list was a diagnostic projection. See [experiment 007](experiments/007-tool-schema-token-trace.md). No model sampling or full AgentLoop run was performed.

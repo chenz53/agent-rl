@@ -12,7 +12,7 @@ The same synthetic patient connects every lesson. Each executable Python block h
 
 The task assumption is pretreatment metastatic NSCLC with a 180-day all-cause mortality endpoint. All records and outcomes are invented. The examples do not constitute a calibrated survival model or clinical benchmark.
 
-The [data dictionary](docs/design/003-oncology-data-contract.md), [clinical files](fixtures/oncology/clinical), and [generator](scripts/generate_oncology_fixture.py) are supporting references. Lessons 1-4 need only the standard library; lessons 5-6 use the existing vp environment, with no new local dependencies.
+The [data dictionary](docs/design/003-oncology-data-contract.md), [clinical files](fixtures/oncology/clinical), and [generator](scripts/generate_oncology_fixture.py) are supporting references. The main lessons 1-4 need only the standard library; [chapter 3A](docs/lessons/003a-tool-schemas-to-model-tokens.md) and lessons 5-6 use the existing vp environment, with no new local dependencies.
 
 ## RL curriculum and project records
 

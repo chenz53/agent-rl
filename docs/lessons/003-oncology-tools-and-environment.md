@@ -32,6 +32,8 @@ forbidden: {'status': 'invalid_field'}
 
 The response is an **observation**: newly revealed information, not a model-generated fact. `status=ok` means the lookup succeeded; it does not establish clinical normality or completeness. The allowlist is application-level isolation. A future model given unrestricted shell access could bypass it, so the surrounding tool permissions must preserve the same boundary.
 
+Before proceeding to runtime state, read [Lesson 3A: From tool schemas to actual model tokens](003a-tool-schemas-to-model-tokens.md). It follows the complete declaration, parser, execution, response, message, and tokenizer path with captured outputs. The [protocol supplement](../notes/tool-schemas-and-messages.md) remains a compact reference. The earlier interactive content-only message sketch was conceptual, not complete API tool-call wiring.
+
 ## 2. State and observation are different objects
 
 The full runtime state contains the selected snapshot, remaining budget, disclosed table set, and whether the episode ended. The latest observation contains only the requested table. The model history contains initial instructions plus the actions and observations already exchanged.

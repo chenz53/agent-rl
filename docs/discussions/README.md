@@ -12,3 +12,5 @@ All documentation is now English. Historical user statements below are explicitl
 - [English documentation and oncology CSV workflow](2026-09-28-oncology-csv.md)
 
 - [Coherent oncology-first curriculum](2026-09-28-oncology-curriculum.md)
+
+- [Interactive lesson 3: evidence access](2026-09-29-interactive-lesson-3.md)

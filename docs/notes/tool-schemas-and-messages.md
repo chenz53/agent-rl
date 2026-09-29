@@ -1,0 +1,129 @@
+# Tool schemas, runtime implementations, and message protocols
+
+For the complete executed trace, read [Lesson 3A](../lessons/003a-tool-schemas-to-model-tokens.md). This note is a compact protocol reference.
+
+Interactive lesson 3 supplement. Checked against local code and official documentation on 2026-09-29.
+
+## Three separate contracts
+
+1. The model-visible declaration describes a tool name, purpose, and input parameters.
+2. The runtime implementation validates requests, executes domain logic, and returns results.
+3. The message protocol represents requests/results and links each result to its call.
+
+A fourth layer, the model-specific chat template and tokenizer, renders these structures into model input. API dictionaries are not themselves the literal token sequence seen by every model.
+
+In nanoAstra, [oncology_tools.yaml](../../configs/oncology_tools.yaml) contains both framework configuration and the model-visible `tool_schema`. `class_name` selects [ClinicalRecordTool](../../src/nanoastra/verl_tool.py); it is not a model-generated argument. The adapter's create/execute/release lifecycle belongs to verl, not a universal API standard. The environment injects the selected patient/index projection; the model supplies only `field`.
+
+## Shared schema language, different envelopes
+
+JSON Schema is commonly used to describe function parameters, including `type`, `properties`, `required`, and `enum`. APIs support different subsets and options. Declaring a schema does not implement the function or establish authorization. nanoAstra validates the argument key and allowed field again during execution.
+
+A reduced, Chat Completions-style declaration is shown below. This is illustrative configuration, not an API invocation or the full thirteen-field repository schema. The extra-key restriction is explicit here; the existing adapter already rejects extra arguments in code.
+
+```json
+{
+  "type": "function",
+  "function": {
+    "name": "get_clinical_record",
+    "description": "Read one table for the server-selected patient and index.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "field": {"type": "string", "enum": ["labs", "notes", "performance_status"]}
+      },
+      "required": ["field"],
+      "additionalProperties": false
+    }
+  }
+}
+```
+
+The application sends tool declarations alongside conversation input. A selected call is parsed and dispatched by the runtime; for this custom local tool, the model does not directly execute Python or read the filesystem.
+
+## Message formats differ
+
+| Interface | Call | Result linkage |
+| --- | --- | --- |
+| OpenAI Chat Completions | Assistant `tool_calls` | `role=tool`, `tool_call_id` |
+| OpenAI Responses | `function_call` item | `function_call_output`, `call_id` |
+| Anthropic Messages | Assistant `tool_use` block | User `tool_result` block, `tool_use_id` |
+
+Sources: [official OpenAI function-calling guide](https://developers.openai.com/api/docs/guides/function-calling), [Anthropic tool-call handling](https://platform.claude.com/docs/en/agents-and-tools/tool-use/handle-tool-calls).
+
+A hand-authored Chat Completions-style pair illustrates the association. The result is a deliberately compact teaching payload, not the adapter's exact full result; no model/API was called:
+
+```json
+[
+  {
+    "role": "assistant",
+    "tool_calls": [{
+      "id": "call_1",
+      "type": "function",
+      "function": {
+        "name": "get_clinical_record",
+        "arguments": "{\"field\":\"performance_status\"}"
+      }
+    }]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_1",
+    "content": "{\"scores\":[1,2]}"
+  }
+]
+```
+
+Here `arguments` is JSON-encoded text, which the application parses into a dictionary. The ID associates a result with a specific invocation, including repeated calls to the same function. Actual endpoint validation and full request context are separate from this static example.
+
+The earlier tutoring example placed an argument dictionary in assistant content to illustrate growing history. It was a conceptual trace, not valid complete tool-call protocol wiring. Do not copy that simplification into a real API integration.
+
+## MCP addresses a different boundary
+
+MCP specifies tool discovery and invocation between a client and tool server, using fields such as `inputSchema`, optional `outputSchema`, and operations such as `tools/list` and `tools/call`. It does not impose one universal provider-specific LLM conversation format. A host/adapter maps MCP tools and results into the chosen model interface. See the explicitly versioned [MCP tools specification](https://modelcontextprotocol.io/specification/2025-11-25/server/tools).
+
+For RL, preserve the chosen template's actual generated token IDs and role boundaries. Tool-request tokens are policy actions; returned tool content is an observation that conditions later actions. The repository has not yet verified a complete autonomous oncology tokenized rollout.
+
+## Execute one local round trip
+
+The executable [demo_tool_roundtrip.py](../../scripts/demo_tool_roundtrip.py) uses a hand-authored Chat Completions-style call, parses its JSON arguments, dispatches through an explicit one-function registry, runs the real local record lookup, and constructs the linked result message. It does not invoke an API, model, or the complete verl AgentLoop. The small dispatcher is a teaching illustration; the project continues to use verl as its execution/training infrastructure.
+
+```sh
+python3 scripts/demo_tool_roundtrip.py
+```
+
+Output:
+
+```text
+Parsed arguments: {'field': 'performance_status'}
+Executed: get_clinical_record
+Evidence: [('PS-001', '1'), ('PS-002', '2')]
+Result link: call_1
+Next request roles: ['user', 'assistant', 'tool']
+```
+
+The next model input must preserve the original task, the assistant call, and the matched tool result under the chosen model's conversation contract. Constructing these messages is not itself a model forward. The actual record payload preserves row provenance; the printed evidence above is a compact view for teaching.
+
+Without a registered implementation or another explicit handler, a generated function request does not execute a function. Missing tool handling is a runtime failure, not a negative clinical finding. The record values are environment observations; the decision to request them is a policy action. They can both appear in context while having different roles in a later policy objective.
+
+## Exact tool response in the pinned nanoAstra implementation
+
+The pinned verl `ToolResponse` model has optional `text`, `image`, and `video` fields; images/videos are lists. This is the framework response container, not a clinical payload schema. nanoAstra currently uses only `text`.
+
+`ClinicalRecordTool.execute` returns a triple: `(ToolResponse(text=json.dumps(result)), 0.0, {"record_queries": 1})`. The second component is tool reward and the third is a diagnostic; they are not fields inside the model-visible clinical text.
+
+The domain lookup returns `status`, `field`, and `value` on success. `value` is currently another JSON string because the generic adapter stores each record field as text. Decoding it gives `patient_id`, `as_of`, `table`, and `rows`. Rows retain record/version identifiers, event/availability timestamps, source, and table-specific columns. This double serialization is an existing implementation detail, not a general requirement for tool APIs.
+
+Local inspection produced:
+
+```text
+status: ok
+field: performance_status
+value type: str
+payload keys: ['patient_id', 'as_of', 'table', 'rows']
+scores: ['1', '2']
+forbidden: {'status': 'invalid_field'}
+```
+
+Other domain responses include `invalid_arguments` at the adapter boundary, `invalid_field` for disallowed fields, and `unavailable` plus `field` when an allowed key is absent. A successful oncology table can contain empty rows; that means no available rows in the snapshot, not a negative clinical result.
+
+The Chat Completions-style message envelope shown earlier supplies role, call linkage, and text content outside this framework/domain structure. The current YAML declares input parameters, not a formally validated output JSON Schema. A future output schema can formalize these application-defined variants; it should not be presented as already implemented.

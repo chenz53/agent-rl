@@ -17,3 +17,5 @@
 - The current record tools are read-only projections, not dynamic patient simulators. Do not imply that querying orders a test, advances time, or implements a validated clinical reward.
 
 - The required curriculum starts at oncology lesson 1 and introduces each concept from the same patient workflow. Keep historical lessons in `docs/archive/`, outside the numbered current route. Every current executable Python block must have an immediately adjacent captured Output block verified by `scripts/check_lesson_snippets.py`; use the historical checker for old material.
+
+- Tool examples must label full objects, display projections, template excerpts, and hand-authored continuations explicitly. Trace the actual model template/token path before asserting model visibility; do not equate a captured rendering with an executed model rollout.

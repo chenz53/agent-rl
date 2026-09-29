@@ -4,7 +4,7 @@ The required route is a single oncology-first sequence. Begin with [lesson 1](le
 
 1. Open the compressed clinical files and define the prognosis task, patient, and index.
 2. Reconstruct longitudinal evidence without future information, duplicate revisions, or unit errors.
-3. Define the evidence-acquisition environment and query decisions.
+3. Define the evidence-acquisition environment and query decisions. Within lesson 3, read [chapter 3A](lessons/003a-tool-schemas-to-model-tokens.md) to trace schemas, complete tool results, message envelopes, and actual model input tokens.
 4. Define outcomes, censoring, evaluation, and candidate feedback.
 5. Explain how a collected trajectory produces a policy gradient.
 6. Connect the mechanism to real verl tools, group advantages, and policy loss.

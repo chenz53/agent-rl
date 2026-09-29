@@ -11,3 +11,5 @@ Store small configurations, reproduction steps, results, and failure analysis he
 - [006: Coherent oncology-first curriculum and captured outputs](006-oncology-curriculum.md)
 
 Only experiment 002 updates language-model parameters. Experiment 006 includes a two-logit teaching update. Complete multi-turn training remains unverified.
+
+- [007: Tool schemas, complete responses, and actual tokenizer traces](007-tool-schema-token-trace.md)
