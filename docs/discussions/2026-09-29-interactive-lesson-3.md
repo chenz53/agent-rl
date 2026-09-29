@@ -59,3 +59,7 @@ Delivered [Lesson 3A](../lessons/003a-tool-schemas-to-model-tokens.md), with 13 
 Translated learner question: Why is record a dictionary, and which step converts it?
 
 Source-checked explanation: `csv.DictReader` creates row dictionaries; `snapshot` groups filtered row lists by table; `tool_view` builds a table-to-JSON-string dictionary. The caller passes that existing dictionary as `create_kwargs["record"]`; the adapter's `dict(source)` only copies it. This application-specific lookup contract differs from both a CSV row and the dictionary reconstructed by `json.loads` on a response. Added this distinction to Lesson 3A section 4; no executable examples changed.
+
+## Follow-up: why a tool budget exists
+
+The learner correctly identified that state changes when tool results enter context, then asked whether real agents limit tool calls and why a budget is needed. The tutor distinguished operational caps (turns, calls, tokens, time, cost), RL rollout resource limits, and optional reward penalties. Pinned verl source confirms turn and per-turn call controls; these differ from our teaching query counter. Three reads is a teaching choice, not a clinical requirement, and static local data should also be compared with an all-relevant-data baseline. Resource exhaustion must not be mislabeled successful completion. Added this explanation to lesson 3 without changing executable examples.

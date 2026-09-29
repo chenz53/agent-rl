@@ -77,6 +77,18 @@ Runtime tracks records, budget, revealed tables, history, and termination.
 
 The initialization method creates new lists for each episode. Sharing these mutable lists across rollouts would leak previously acquired evidence. The budget is a design choice; here even an invalid attempt costs a step. It is not a measured clinical cost.
 
+### Why impose a budget in a real agent?
+
+A deployment may bound tool invocations, model turns, generated tokens, elapsed time, or monetary cost. These are different counters: one assistant turn can request multiple tools, and different tools can have very different costs. Our pinned verl ToolAgentLoop reads `max_assistant_turns`, `max_user_turns`, and `max_parallel_calls`; these are not identical to the teaching class's total query counter. See the [framework source](https://github.com/verl-project/verl/blob/00094bd9cd3fef9cf8903daf60ea4a2bcf832efc/verl/experimental/agent_loop/tool_agent_loop.py) and [agent-loop documentation](https://verl.readthedocs.io/en/latest/advance/agent_loop.html), checked 2026-09-29.
+
+Operational limits bound repeated unsuccessful calls, latency, external-service load, and rollout resource use. Training rollouts also need bounded collection: very long trajectories consume generation capacity and can delay a batch. These motivations do not imply that three table reads is a realistic clinical limit.
+
+Separate a hard cap from a reward cost. A hard cap prevents further execution after a resource limit. A soft objective such as `assessment_quality - lambda * query_cost` encourages economical evidence acquisition but does not itself prevent an endless trajectory. Both can coexist, and neither requires assigning a nonzero reward to every tool response. Our actual BaseTool still returns zero tool reward; the three-query limit exists in the teaching environment.
+
+For static, inexpensive local tables, loading all relevant baseline data can be a valid baseline. A tight artificial cap changes the task to evidence selection and can incentivize premature conclusions. Compare assessment quality, evidence coverage, and cost across budgets before adopting such a restriction. No numeric clinical budget is validated here.
+
+Budget exhaustion is not proof of a completed assessment. The environment should distinguish successful completion from a resource cutoff and allow an insufficient-evidence result or escalation as appropriate. In value-based training, terminal versus externally truncated trajectories can also require different bootstrap treatment. If remaining budget affects action choice, disclose it explicitly in model-visible context rather than assuming backend counters are visible.
+
 ## 3. Run a sequence and inspect the transition
 
 ```python
