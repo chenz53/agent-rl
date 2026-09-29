@@ -162,6 +162,10 @@ Model-selectable argument names: ['field']
 Backend configuration advertised in schema: False
 ```
 
+There are two different dictionary levels here. In `read_csv_gz`, `csv.DictReader(handle)` maps CSV column headers to each row's string values, producing a row dictionary. `snapshot` filters these rows and groups them into `dict[table_name, list[row_dict]]`. Then `tool_view` explicitly constructs a new outer dictionary with a comprehension: each key is a table name, and each value is `json.dumps` of the patient/as-of/table/rows payload. Its return type is therefore `dict[str, str]`, not a dictionary of raw row lists.
+
+The caller binds that return value to `records` and passes it under the keyword `record`. The keyword does not perform a conversion. In `ClinicalRecordTool.create`, `dict(source)` only makes a shallow copy of the already constructed dictionary. This layout is our adapter's lookup design, not a universal tool-schema requirement. Separately, `json.loads(response.text)` reconstructs the response envelope as a dictionary on the receiving side; it is not the original CSV ingestion step.
+
 The actual adapter's `create(create_kwargs={"record": records})` receives these records. The model does not generate `create_kwargs`. Giving the model an arbitrary patient selector or file path would define a different action space and require different access controls.
 
 A table being in `records` establishes only that the runtime can look it up. It does not establish that the LLM has read it. We can check that distinction at the rendered input, not merely assume it from container names.

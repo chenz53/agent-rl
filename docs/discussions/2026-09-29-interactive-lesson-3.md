@@ -53,3 +53,9 @@ Translated learner clarification: Is the actual result just `scores: [1, 2]`, ra
 Translated learner request: These details are important and need a dedicated chapter explaining schemas, tool definitions, and how the model receives them.
 
 Delivered [Lesson 3A](../lessons/003a-tool-schemas-to-model-tokens.md), with 13 executed examples covering the real YAML/schema, cached Qwen template and token IDs, an explicitly hand-authored continuation, the real pinned parser, BaseTool lifecycle, complete nested JSON result, message insertion, and error contracts. All 47 current curriculum snippets were executed. No model inference ran. The parser was loaded directly from its pinned source because the package's AgentLoop initializer requires the absent Pillow dependency; full AgentLoop execution remains unverified.
+
+## Follow-up: where the record dictionary comes from
+
+Translated learner question: Why is record a dictionary, and which step converts it?
+
+Source-checked explanation: `csv.DictReader` creates row dictionaries; `snapshot` groups filtered row lists by table; `tool_view` builds a table-to-JSON-string dictionary. The caller passes that existing dictionary as `create_kwargs["record"]`; the adapter's `dict(source)` only copies it. This application-specific lookup contract differs from both a CSV row and the dictionary reconstructed by `json.loads` on a response. Added this distinction to Lesson 3A section 4; no executable examples changed.
