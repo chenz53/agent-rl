@@ -1,0 +1,94 @@
+{
+  "reward_mean": 0.125,
+  "sample_std": 0.3415650255319866,
+  "population_std": 0.33071891388307384,
+  "advantage_A": -0.36596145593026536,
+  "advantage_B": 2.5617301915118578,
+  "expected_B_count": 4.174288272857666,
+  "probability_of_exactly_two_B": 0.11857917714965788,
+  "probability_of_no_B": 0.007930797972895132,
+  "rare_success_p_001_group16_all_fail": 0.8514577710948755,
+  "equivalent_raw_logit_gap_A_minus_B": 2.0826645014101497,
+  "probabilities_by_temperature": {
+    "1.0": [
+      0.8892068150987547,
+      0.11079318490124537
+    ],
+    "2.0": [
+      0.7391069907216135,
+      0.2608930092783865
+    ],
+    "4.0": [
+      0.6273035202159066,
+      0.3726964797840933
+    ]
+  },
+  "reconstructed_two_logit_loss": -4.163336342344337e-17,
+  "two_logit_gradient": [
+    0.1601081369694911,
+    -0.1601081369694911
+  ],
+  "broken_old_logprob_gradient": [
+    0.0,
+    0.0
+  ],
+  "clipping_examples": [
+    {
+      "advantage": 2.0,
+      "ratio": 1.5,
+      "loss": -2.4,
+      "d_loss_d_logp": 0.0
+    },
+    {
+      "advantage": 2.0,
+      "ratio": 0.6,
+      "loss": -1.2,
+      "d_loss_d_logp": -1.2
+    },
+    {
+      "advantage": -1.0,
+      "ratio": 0.5,
+      "loss": 0.8,
+      "d_loss_d_logp": 0.0
+    },
+    {
+      "advantage": -1.0,
+      "ratio": 1.5,
+      "loss": 1.5,
+      "d_loss_d_logp": 1.5
+    },
+    {
+      "advantage": -1.0,
+      "ratio": 5.0,
+      "loss": 3.0,
+      "d_loss_d_logp": 0.0
+    }
+  ],
+  "mask_example_positive": [
+    0.8660238981246948,
+    0.8660238981246948,
+    0.0,
+    0.0,
+    0.8660238981246948,
+    0.8660238981246948
+  ],
+  "correct_grouping": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+  ],
+  "incorrect_grouping": [
+    0.8660238981246948,
+    0.8660238981246948,
+    -0.8660238981246948,
+    -0.8660238981246948
+  ],
+  "gradient_scale_in_Qwen_run": 0.007036267548662346,
+  "B_probability_change_percentage_points": 0.8598893880844116,
+  "query_example": {
+    "stop_expected_reward": 0.8,
+    "query_expected_reward": 0.8999999999999999
+  },
+  "status": "All numerical assertions passed against pinned verl; no model update performed."
+}

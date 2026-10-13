@@ -17,3 +17,7 @@ wandb/
 .cache/
 *.egg-info/
 .ruff_cache/
+
+# Mintlify local runtime caches
+.mintlify/
+node_modules/

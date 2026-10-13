@@ -43,3 +43,7 @@ Started lesson 3 with one record query and the environment/model visibility boun
 ## 2026-09-29: detailed schema and token chapter
 
 Added Lesson 3A within the oncology-first route: 13 executed examples trace tool definitions, backend registration, schema serialization, cached Qwen tokens, parser dispatch, complete clinical responses, and the next conversation context. All 47 snippets across six lessons plus chapter 3A passed execution. Full record IDs survive the response; the previous score list was a diagnostic projection. See [experiment 007](experiments/007-tool-schema-token-trace.md). No model sampling or full AgentLoop run was performed.
+
+## 2026-10-13: broader PyTorch post-training tutorial
+
+Expanded to fourteen new chapters and fifteen executed Python blocks, including full-vocabulary versus sampled-token objectives, grouping/baseline design, values/GAE, SFT/DPO, on-policy distillation, KL, system contracts, and a complete small sampled-policy update. Generated a Mintlify reading edition incorporating the existing oncology track. Sources and frontier proposals are dated and evidence-labeled. See [experiment 008](experiments/008-posttraining-tutorial.md). No full autonomous clinical-model training or public deployment is claimed.

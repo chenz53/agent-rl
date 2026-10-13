@@ -1,0 +1,18 @@
+---
+title: "Experiment 004: Historical staged clinical record replay"
+---
+
+Date: 2026-09-28. Case `ed-0001` is entirely synthetic and is now superseded by the oncology application. This experiment tested richer records and separation of future reports and instructor annotations, not model inference.
+
+## Results
+
+Eleven standard-library tests passed locally and remotely, including five stage-projection checks. The real pinned verl registry/BaseTool loaded the new YAML and executed both stages with instance cleanup. Initially CTPA was pending and instructor fields were rejected; the follow-up exposed the report while leg ultrasound remained unperformed. The original A/B tool and CPU GRPO probe also passed. Three lesson snippets ran with their declared shared context.
+
+Evidence: [original remote output](/assets/source/experiments/results/004-realistic-case.txt.txt), [original snippet output](/assets/source/experiments/results/004-lesson-snippets.json.txt), [tests](/assets/source/tests/test_case_replay.py.txt). Historical outputs preserve their original language; documentation is now English.
+
+```sh
+python3 scripts/demo_realistic_case.py --stage initial
+python3 scripts/demo_realistic_case.py --stage followup --fields ctpa_report leg_ultrasound
+```
+
+In vp, use `.venv/bin/python` and add `--verl` for actual registry execution. These checks demonstrate interface/data behavior only. No clinical review, autonomous reasoning, calibrated scoring, test ordering, treatment dynamics, or new training was performed.

@@ -1,0 +1,11 @@
+---
+title: "Experiment 001: Domain lookup and scoring smoke test"
+---
+
+Date: 2026-09-28. Environment: macOS arm64, system Python 3.9.6. No model, sampling, or optimizer was involved.
+
+Commands: `python3 scripts/demo_case.py` and `PYTHONPATH=src python3 -m unittest discover -s tests -v`.
+
+All six original tests passed: allowed fields, rejected labels, explicit unavailable values, independent records, correct/wrong/malformed scores, and rejected unsupported task metadata. Nine Python files also passed AST parsing. An earlier compileall attempt failed because Python redirected bytecode to an unwritable directory; no-cache parsing was used instead, not misreported as runtime integration.
+
+At this historical milestone, verl import, BaseTool registry, tokenization, AgentLoop, GRPO probe, and GPU training had not run. Local dependency installation was rejected and stopped. Later remote work is recorded separately in experiment 002.

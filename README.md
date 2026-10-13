@@ -1,6 +1,12 @@
 # nanoAstra
 
-Learn Agentic RL through code and build a small clinical reasoning agent. The active case is **cancer prognosis from longitudinal compressed CSV exports**. Documentation is in English; tutoring conversation may be in Chinese.
+Learn modern post-training and Agentic RL through PyTorch code, then build a small clinical reasoning agent. The active case is **cancer prognosis from longitudinal compressed CSV exports**. Documentation is in English; tutoring conversation may be in Chinese.
+
+## New: Hands-on Post-training
+
+Read the [broader tutorial](tutorial/README.md) or open the Mintlify preview with `mint dev` from `website/`. Fourteen new chapters with fifteen verified Python blocks cover token probabilities, masks, advantages, policy gradients, values/GAE, PPO/GRPO, SFT/DPO, on-policy distillation, KL, rollout systems, evaluation, current research, and a bounded sampled-policy capstone. [The editorial guide](tutorial/editorial-guide.md) explains the D2L-inspired teaching progression; [the source ledger](tutorial/sources.md) separates mathematical identities, observed experiments, and author-reported proposals.
+
+The existing oncology-first route below remains the domain case study. The [site generator](scripts/build_tutorial_site.py) creates its MDX reading edition from canonical Markdown; [experiment 008](experiments/008-posttraining-tutorial.md) records reproducibility and limits.
 
 ## Start here: lesson 1
 

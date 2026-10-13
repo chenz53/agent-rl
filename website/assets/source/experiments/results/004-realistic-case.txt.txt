@@ -1,0 +1,119 @@
+test_initial_view_does_not_contain_future_report_or_answer_key (test_case_replay.CaseReplayTests.test_initial_view_does_not_contain_future_report_or_answer_key) ... ok
+test_invalid_stage_fails_and_old_scorer_cannot_score_new_task (test_case_replay.CaseReplayTests.test_invalid_stage_fails_and_old_scorer_cannot_score_new_task) ... ok
+test_projection_is_independent_and_private_fields_are_not_queryable (test_case_replay.CaseReplayTests.test_projection_is_independent_and_private_fields_are_not_queryable) ... ok
+test_repeated_queries_do_not_advance_time (test_case_replay.CaseReplayTests.test_repeated_queries_do_not_advance_time) ... ok
+test_stage_change_reveals_only_the_selected_report (test_case_replay.CaseReplayTests.test_stage_change_reveals_only_the_selected_report) ... ok
+test_answer_key_is_not_in_tool_or_prompt (test_clinical.ClinicalTests.test_answer_key_is_not_in_tool_or_prompt) ... ok
+test_invalid_task_metadata_is_not_silently_scored (test_clinical.ClinicalTests.test_invalid_task_metadata_is_not_silently_scored) ... ok
+test_missing_information_is_not_fabricated (test_clinical.ClinicalTests.test_missing_information_is_not_fabricated) ... ok
+test_records_are_independent (test_clinical.ClinicalTests.test_records_are_independent) ... ok
+test_terminal_reward_distinguishes_wrong_and_malformed (test_clinical.ClinicalTests.test_terminal_reward_distinguishes_wrong_and_malformed) ... ok
+test_unknown_fields_cannot_read_accidentally_supplied_private_data (test_clinical.ClinicalTests.test_unknown_fields_cannot_read_accidentally_supplied_private_data) ... ok
+
+----------------------------------------------------------------------
+Ran 11 tests in 0.001s
+
+OK
+{
+  "type": "function",
+  "function": {
+    "name": "get_clinical_record",
+    "description": "Read one available field from the current synthetic case.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "The record field to retrieve.",
+          "enum": [
+            "exposure",
+            "test_x"
+          ]
+        }
+      },
+      "required": [
+        "field"
+      ]
+    }
+  }
+}
+{"status": "ok", "field": "exposure", "value": "positive"} 0.0 {'record_queries': 1}
+{"status": "ok", "field": "test_x", "value": "negative"} 0.0 {'record_queries': 1}
+{"status": "invalid_field"} 0.0 {'record_queries': 1}
+GRPO advantages: [[0.8660238981246948, 0.8660238981246948, 0.0, 0.0, 0.8660238981246948, 0.8660238981246948], [0.8660238981246948, 0.8660238981246948, 0.0, 0.0, 0.8660238981246948, 0.8660238981246948], [-0.8660238981246948, -0.8660238981246948, -0.0, -0.0, -0.8660238981246948, -0.8660238981246948], [-0.8660238981246948, -0.8660238981246948, -0.0, -0.0, -0.8660238981246948, -0.8660238981246948]]
+Actual verl CPU probe passed; no model or optimizer update was run.
+{"case_id": "ed-0001", "stage": "initial", "clock": "D0 09:40", "presentation": "急诊交接，当前时间 D0 09:40。58 岁女性，气促约 1 天，今日出现明显右侧胸痛，伴干咳和低热。今晨外院初步考虑下呼吸道感染，已给一次口服抗菌药后转诊。09:10 分诊：T 37.8°C，HR 112 次/分，RR 26 次/分，BP 124/76 mmHg，SpO2 91%（室内空气）。急诊团队 09:14 已给予鼻导管氧气 2 L/min；09:25 SpO2 升至 95%，血压保持稳定。详细病史、查体和部分初始检查记录可以查询。请给出当前优先诊断、证据、尚未解决的问题及下一步评估重点；不要引用当前时间之后的结果。"}
+脚本化记录查询；没有模型推理、检查下单或自动临床评分。
+{
+  "type": "function",
+  "function": {
+    "name": "get_clinical_record",
+    "description": "Read one record field at the current replay time; cannot order tests or advance time.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "Clinical record section to retrieve; a pending report is not a negative result.",
+          "enum": [
+            "history_present_illness",
+            "risk_history",
+            "medications_allergies",
+            "focused_exam",
+            "initial_labs",
+            "ecg",
+            "chest_xray",
+            "d_dimer",
+            "ctpa_report",
+            "leg_ultrasound",
+            "microbiology"
+          ]
+        }
+      },
+      "required": [
+        "field"
+      ]
+    }
+  }
+}
+{"status": "ok", "field": "risk_history", "value": "来源：D0 09:22 补充问诊与既往病历。18 天前接受左膝关节镜下半月板手术，术后前 5 天主要在床或椅上活动，之后仍明显少于平常步行量。BMI 31 kg/m²。既往高血压，无已知心衰、慢性肺病、既往静脉血栓或活动性恶性肿瘤。未使用雌激素。无近期长途旅行。51 岁后绝经。"}
+{"status": "ok", "field": "focused_exam", "value": "来源：D0 09:25 查体。神志清楚，可完整说句子，呼吸急促。右肺底可闻及少量吸气末细湿啰音，未闻及弥漫性哮鸣音；心律规则、心动过速。未见颈静脉明显充盈。左小腿较右侧同一测量位置周径大 3 cm，有轻度凹陷性水肿，沿深静脉走行区域触痛。膝部手术切口干燥，无脓性渗出。"}
+{"status": "ok", "field": "d_dimer", "value": "来源：D0 09:15 初始急诊采血项目，09:38 返回。D-dimer 2.8 mg/L FEU；该实验室常规参考界值 <0.50 mg/L FEU。此项目在详细血栓风险问诊前已被开立。"}
+{"status": "ok", "field": "ctpa_report", "value": "【尚未完成】截至 D0 09:40 尚无肺动脉增强 CT（CTPA）报告可读取。此状态不是阴性检查，也不会因为反复调用本工具而自动生成结果。"}
+{"status": "invalid_field"}
+{"case_id": "ed-0001", "stage": "followup", "clock": "D0 10:35", "presentation": "同一患者的后续交接，当前时间 D0 10:35。09:40 后负责临床团队完成进一步评估并安排 CTPA，报告现已返回。当前 BP 122/78 mmHg，HR 108 次/分，RR 24 次/分，SpO2 95%（鼻导管氧气 2 L/min）。请读取新报告，更新诊断与剩余不确定性。记录回放由教学程序推进时间，不表示模型已经真实开立或执行检查。"}
+脚本化记录查询；没有模型推理、检查下单或自动临床评分。
+{
+  "type": "function",
+  "function": {
+    "name": "get_clinical_record",
+    "description": "Read one record field at the current replay time; cannot order tests or advance time.",
+    "parameters": {
+      "type": "object",
+      "properties": {
+        "field": {
+          "type": "string",
+          "description": "Clinical record section to retrieve; a pending report is not a negative result.",
+          "enum": [
+            "history_present_illness",
+            "risk_history",
+            "medications_allergies",
+            "focused_exam",
+            "initial_labs",
+            "ecg",
+            "chest_xray",
+            "d_dimer",
+            "ctpa_report",
+            "leg_ultrasound",
+            "microbiology"
+          ]
+        }
+      },
+      "required": [
+        "field"
+      ]
+    }
+  }
+}
+{"status": "ok", "field": "ctpa_report", "value": "来源：D0 10:18 完成 CTPA，10:32 放射科报告。检查技术质量可，肺动脉显影满意。双侧下叶段肺动脉可见腔内充盈缺损。右下叶胸膜下楔形实变，伴少量右侧胸腔积液，结合血管所见考虑肺梗死相关改变。未见明显右心室扩大，RV/LV 径比约 0.85。结论：急性双侧段肺动脉栓塞，右下叶改变符合伴随肺梗死的可能。未完成超声心动图。"}
+{"status": "ok", "field": "leg_ultrasound", "value": "截至当前阶段，下肢静脉超声未完成，无可读取的阴性或阳性报告。"}

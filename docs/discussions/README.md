@@ -14,3 +14,5 @@ All documentation is now English. Historical user statements below are explicitl
 - [Coherent oncology-first curriculum](2026-09-28-oncology-curriculum.md)
 
 - [Interactive lesson 3: evidence access](2026-09-29-interactive-lesson-3.md)
+
+- [2026-10-13: Broader post-training tutorial and tensor details](2026-10-13-posttraining-tutorial.md)

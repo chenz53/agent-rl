@@ -1,0 +1,53 @@
+---
+title: "Experiment 002: Real verl integration and Qwen update on vp"
+---
+
+Date: 2026-09-28. The user explicitly authorized `ssh vp` demonstrations.
+
+## Environment
+
+- Execution mirror: `/home/user/nanoAstra`; not a published Git repository.
+- Isolated `.venv`, Python 3.12.3.
+- One NVIDIA H200, 143771 MiB reported memory, driver 565.57.01.
+- PyTorch 2.9.1+cu126, Transformers 5.5.3, tensordict 0.10.0.
+- Unmodified verl commit `00094bd9cd3fef9cf8903daf60ea4a2bcf832efc`.
+- Cached Qwen3-0.6B snapshot `c1899de289a04d12100db370d81485cdf75e47ca`.
+- [Installed package snapshot](/assets/source/experiments/results/002-remote-requirements.txt.txt); this has no package hashes and does not certify a complete distributed stack.
+
+No other project's environment was modified. A prior rejection concerned local installation; the isolated remote installation followed the subsequent remote authorization.
+
+## Observations
+
+The genuine tool registry loaded the adapter from YAML. Allowed fields returned, label access failed, and instances were released. The actual CPU GRPO probe produced approximately +/-0.866 for [1,1,0,0], zero masked observation positions, and zero relative advantage for all-failure groups. Six original domain tests passed remotely.
+
+Qwen then sampled sixteen restricted A/B actions on H200 and completed one SGD step using upstream advantage and policy loss. There were fourteen A and two B samples. P(B) rose from 0.260893 to 0.269492; pre-clipping gradient norm was 142.1208, clipped to 1, with learning rate 1e-4 and float32. Peak allocated memory was 5.676 GiB. [Raw result](/assets/source/experiments/results/002-gpu-update.json.txt).
+
+The process exited without saving a checkpoint or leaving training running. The subsequent device check showed 4 MiB used. The full original remote log is `outputs/gpu-update.log`.
+
+## Reproduce in the prepared environment
+
+```sh
+ssh vp
+cd /home/user/nanoAstra
+.venv/bin/python scripts/probe_verl.py
+.venv/bin/python scripts/demo_gpu_update.py   --model /home/user/.cache/huggingface/hub/models--Qwen--Qwen3-0.6B/snapshots/c1899de289a04d12100db370d81485cdf75e47ca   --seed 42 --samples 16 --temperature 2 --learning-rate 0.0001
+```
+
+Pinning the snapshot avoids silently following a changing cached main revision. Fixed seeds do not promise bitwise agreement across hardware/software.
+
+## Rebuilding a separate environment
+
+The original setup installed torch from the official cu126 index, then other dependencies without replacing it. A plain default-index install may not find `torch==2.9.1+cu126`. These are reference commands for a new explicitly designated environment, not instructions to overwrite an existing one:
+
+```sh
+uv venv --python 3.12 .venv
+uv pip install --python .venv/bin/python torch==2.9.1   --index-url https://download.pytorch.org/whl/cu126
+uv pip install --python .venv/bin/python -r experiments/results/002-remote-requirements.txt
+python3 scripts/fetch_upstream.py
+```
+
+The model must already be cached; the script uses local-files-only loading.
+
+## Limits
+
+Queries were fixed, the action space was A/B, formatting was scripted, and only one case/update was used. No distributed trainer, autonomous calls, complete multi-turn masks, vLLM/SGLang validation, or clinical evaluation was run. This is evidence of a parameter update and interface consistency, not clinical capability or convergence.

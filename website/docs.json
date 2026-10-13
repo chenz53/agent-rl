@@ -1,0 +1,66 @@
+{
+  "$schema": "https://mintlify.com/docs.json",
+  "theme": "mint",
+  "name": "nanoAstra \u00b7 Hands-on Post-training",
+  "colors": {
+    "primary": "#0D9488",
+    "light": "#14B8A6",
+    "dark": "#0F766E"
+  },
+  "navigation": {
+    "groups": [
+      {
+        "group": "Start here",
+        "pages": [
+          "index",
+          "tutorial/README"
+        ]
+      },
+      {
+        "group": "Foundations and policy optimization",
+        "pages": [
+          "tutorial/chapters/01-post-training-map",
+          "tutorial/chapters/02-token-probabilities",
+          "tutorial/chapters/03-trajectories-and-masks",
+          "tutorial/chapters/04-rewards-and-advantages",
+          "tutorial/chapters/05-policy-gradients",
+          "tutorial/chapters/05a-values-and-returns",
+          "tutorial/chapters/06-ppo-and-grpo",
+          "tutorial/chapters/07-sft-and-preferences"
+        ]
+      },
+      {
+        "group": "Distillation, systems, and experiments",
+        "pages": [
+          "tutorial/chapters/08-on-policy-distillation",
+          "tutorial/chapters/08a-kl-and-entropy",
+          "tutorial/chapters/09-rollout-systems",
+          "tutorial/chapters/10-evaluation-and-design",
+          "tutorial/chapters/11-research-frontier",
+          "tutorial/chapters/12-capstone"
+        ]
+      },
+      {
+        "group": "Oncology case study",
+        "pages": [
+          "docs/lessons/001-oncology-prognosis-from-files",
+          "docs/lessons/002-reconstruct-oncology-evidence",
+          "docs/lessons/003-oncology-tools-and-environment",
+          "docs/lessons/003a-tool-schemas-to-model-tokens",
+          "docs/lessons/004-oncology-outcomes-and-reward",
+          "docs/lessons/005-oncology-trajectories-and-gradients",
+          "docs/lessons/006-oncology-verl-and-grpo"
+        ]
+      },
+      {
+        "group": "Evidence and reproducibility",
+        "pages": [
+          "tutorial/sources",
+          "tutorial/editorial-guide",
+          "experiments/008-posttraining-tutorial",
+          "about"
+        ]
+      }
+    ]
+  }
+}

@@ -13,3 +13,5 @@ Store small configurations, reproduction steps, results, and failure analysis he
 Only experiment 002 updates language-model parameters. Experiment 006 includes a two-logit teaching update. Complete multi-turn training remains unverified.
 
 - [007: Tool schemas, complete responses, and actual tokenizer traces](007-tool-schema-token-trace.md)
+
+- [008: PyTorch post-training tutorial and Mintlify reading edition](008-posttraining-tutorial.md)

@@ -1,0 +1,17 @@
+---
+title: "Rebuild the curriculum in a coherent oncology-first order"
+---
+
+Date: 2026-09-28.
+
+## User feedback, translated from Chinese
+
+The current order is confusing. The first lesson should start with oncology prognosis, introduce the remaining concepts from that starting point, and explain them step by step. Code should be immediately followed by its output.
+
+## Response and decisions
+
+Replaced the mixed current lesson list with one six-lesson sequence using the same synthetic patient and index: files/task, evidence reconstruction, agent environment, outcomes/reward, trajectory/policy gradient, and real verl/GRPO. Each lesson resolves a problem left by the previous one. Later rewards and policy examples are explicitly stipulated teaching assumptions rather than clinical measurements.
+
+Moved all six earlier lesson editions into `docs/archive/`, preserving historical experiment references. The old Qwen/A-B results remain historical evidence; they are not presented as oncology training. Updated README, roadmap, working agreements, and navigation to point to the new lesson 1.
+
+Every current executable Python block has an adjacent captured Output block. The new checker executes all blocks in lesson-local namespaces and compares stdout against the document. The previous selected-block checker remains available for historical editions. Verification is recorded in [experiment 006](/experiments/006-oncology-curriculum).

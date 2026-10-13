@@ -19,3 +19,6 @@
 - The required curriculum starts at oncology lesson 1 and introduces each concept from the same patient workflow. Keep historical lessons in `docs/archive/`, outside the numbered current route. Every current executable Python block must have an immediately adjacent captured Output block verified by `scripts/check_lesson_snippets.py`; use the historical checker for old material.
 
 - Tool examples must label full objects, display projections, template excerpts, and hand-authored continuations explicitly. Trace the actual model template/token path before asserting model visibility; do not equate a captured rendering with an executed model rollout.
+
+- The user expanded scope to broader post-training on 2026-10-13. `tutorial/chapters/` is the new English PyTorch-only theory/practice route; the six oncology lessons plus 3A remain the continuous domain case study. Use D2L as a pedagogical reference, without copying prose/code or adding MXNet/Paddle paths.
+- `website/` is the generated Mintlify reading edition. Edit canonical Markdown and rebuild with `scripts/build_tutorial_site.py`. Verify new chapter outputs with `scripts/check_tutorial_snippets.py`. Frontier entries need dated primary sources and clear evidence boundaries; vendor-private implementations remain unknown unless publicly documented.

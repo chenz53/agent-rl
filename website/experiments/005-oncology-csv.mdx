@@ -1,0 +1,56 @@
+---
+title: "Experiment 005: Oncology CSV inputs and English documentation"
+---
+
+Date: 2026-09-28. The user requested English documentation and cancer prognosis reasoning beginning with realistic clinical `csv.gz` files.
+
+## Artifacts
+
+- Thirteen actual gzip CSV clinical tables plus one evaluator-only mortality/follow-up file.
+- Deterministic synthetic generator, schema dictionary, point-in-time patient projection, and a separate survival-label helper.
+- Scripted table queries using the existing real verl BaseTool adapter and an oncology field allowlist.
+- Detailed English lesson on file parsing, timestamps, revisions, units, evidence, prognosis, and censoring.
+- All repository Markdown documentation migrated to English, including historical discussions labeled as translations or summaries. Original prior text remains in Git history; historical raw experiment outputs remain unchanged.
+
+The provisional task is 180-day all-cause mortality prognosis for a pretreatment metastatic NSCLC case at `2025-03-01T09:00:00Z`. All data and outcomes are invented. Two additional sparse patients exist only to demonstrate isolation and follow-up labels.
+
+## Verification
+
+| Check | Result | Evidence |
+| --- | --- | --- |
+| Standard-library suite | 18 tests passed locally and remotely | [Local](/assets/source/experiments/results/005-local-tests.txt.txt), [remote](/assets/source/experiments/results/005-oncology-verl.txt.txt) |
+| Genuine verl registry/BaseTool | Clinical queries worked; mortality rejected; instances released | [Remote output](/assets/source/experiments/results/005-oncology-verl.txt.txt) |
+| Future/late evidence | Late LDH, late note, future note, final NGS, administration excluded from baseline | Tests and query output |
+| Revisions | Corrected albumin version retained; cancelled records not resurrected | Tests |
+| CSV semantics | Commas and multiline note text preserved | Tests |
+| Outcomes | Day-100 event -> 1; day-214 known survival -> 0; day-60 censoring -> missing | [Labels](/assets/source/experiments/results/005-labels.json.txt) |
+| English lessons 1-4 | 42 Python blocks parsed, 29 selected blocks executed | [Output](/assets/source/experiments/results/005-english-lesson-snippets.json.txt) |
+| English lessons 5-6 | All 9 Python blocks executed in declared shared context | [Output](/assets/source/experiments/results/005-data-lesson-snippets.json.txt) |
+| Fixture regeneration | All 14 gzip files reproduced byte-for-byte | [Summary](/assets/source/experiments/results/005-verification-summary.json.txt) |
+| Documentation checks | English-only Markdown content, internal file links, and diff whitespace checked | Verification summary |
+
+The main patient's as-of view has 28 records across 13 tables. Seven are lab records after excluding a late result and resolving a correction. No mortality fields or other patients' data enter that view.
+
+## Reproduction
+
+From the repository root:
+
+```sh
+python3 scripts/generate_oncology_fixture.py
+python3 scripts/demo_oncology.py --tables diagnosis labs vitals notes
+python3 scripts/build_oncology_labels.py
+PYTHONPATH=src python3 -m unittest discover -s tests -v
+```
+
+In the prepared vp environment:
+
+```sh
+.venv/bin/python scripts/demo_oncology.py --verl --tables labs notes biomarkers medication_administrations mortality
+.venv/bin/python scripts/check_historical_lesson_snippets.py
+```
+
+## Limits
+
+No new dependencies, model inference, clinical scoring, or parameter update were needed. This is not an autonomous agent or calibrated survival model. No actual patient data, clinical expert review, real-data schema adapter, mortality ascertainment validation, or censoring-aware model evaluation is claimed.
+
+The record tool enforces an application-level allowlist. A future agent must not also receive unrestricted filesystem access to the evaluator directory. The reader is a small in-memory teaching implementation, not a production clinical warehouse or patient simulator. Statistical prediction, causal treatment effects, and authored evidence summaries remain distinct tasks.

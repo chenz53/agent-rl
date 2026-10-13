@@ -1,6 +1,6 @@
 # Learning roadmap
 
-The required route is a single oncology-first sequence. Begin with [lesson 1](lessons/001-oncology-prognosis-from-files.md); the [lesson index](lessons/README.md) is the authoritative reading order.
+The project now has a [broader PyTorch post-training route](../tutorial/README.md) and the original oncology-first domain route. The domain route is a single sequence. Begin with [lesson 1](lessons/001-oncology-prognosis-from-files.md); the [lesson index](lessons/README.md) is the authoritative reading order.
 
 1. Open the compressed clinical files and define the prognosis task, patient, and index.
 2. Reconstruct longitudinal evidence without future information, duplicate revisions, or unit errors.

@@ -1,0 +1,27 @@
+---
+title: "Sources and implementation ledger"
+---
+
+Reviewed: 2026-10-13. This ledger identifies what was actually inspected. It is not a comprehensive bibliography.
+
+| Source | Evidence used | Boundary |
+| --- | --- | --- |
+| [D2L](https://github.com/d2l-ai/d2l-zh) and [softmax source](https://github.com/d2l-ai/d2l-zh/blob/master/chapter_linear-networks/softmax-regression-scratch.md) | Teaching structure and indexing explanation | Reference, no copied prose/code |
+| [PyTorch gather](https://pytorch.org/docs/stable/generated/torch.gather.html) | Tensor indexing semantics | Educational implementation uses installed PyTorch 2.9.1 |
+| [PPO](https://arxiv.org/abs/1707.06347), [GAE](https://arxiv.org/abs/1506.02438) | Sampled-action surrogate and value-based estimator | Tiny implementations, no full critic trainer |
+| [DeepSeekMath](https://arxiv.org/abs/2402.03300) | GRPO origin | Does not specify all present-day variants |
+| [DAPO](https://arxiv.org/abs/2503.14476), [Dr. GRPO](https://arxiv.org/abs/2503.20783) | Public design alternatives | Not reproduced at benchmark scale |
+| [DPO](https://arxiv.org/abs/2305.18290) | Preference objective | Artificial sequence likelihood pairs |
+| [On-policy distillation](https://arxiv.org/abs/2306.13649) | Student-prefix teacher supervision | Does not imply one mandatory divergence |
+| [Tail-corrected top-k](https://arxiv.org/html/2609.34447v1) | Fixed-prefix gradient proposal; full text inspected | September 2026 preprint, not reproduced |
+| [SparseOPD](https://arxiv.org/abs/2609.34386) | Vocabulary selection research direction | Abstract inspected; no implementation audit |
+| [DIAL-OPD](https://arxiv.org/html/2610.11659v1) | Timestep supervision allocation; full text inspected | October 2026 preprint, author-reported results |
+| [Control-variate OPD](https://arxiv.org/abs/2605.07865) | Variance-reduction proposal | Abstract inspected; no implementation audit |
+| [Entropy-Aware OPD](https://proceedings.mlr.press/v306/jin26e.html) | Divergence selection research direction | Abstract inspected; no implementation audit |
+| [verl torch kernels](https://github.com/verl-project/verl/blob/00094bd9cd3fef9cf8903daf60ea4a2bcf832efc/verl/utils/torch_functional.py) | Selected log-probability paths inspected locally | Pinned SHA; hardware branches differ |
+| [verl core algorithms](https://github.com/verl-project/verl/blob/00094bd9cd3fef9cf8903daf60ea4a2bcf832efc/verl/trainer/ppo/core_algos.py) | Group IDs, standard deviation, response-shaped advantages | Actual helper differs from our explicit population-std teaching option |
+| [Mintlify settings](https://www.mintlify.com/docs/organize/settings), [CLI](https://www.mintlify.com/docs/cli/install) | docs.json and MDX reading interface | Locally installed CLI may predate newest commands |
+
+## What remains unknown
+
+Private vendor loss details, training mixtures, and final-stage scheduling are not established by these sources. We describe public methods and our own experiments. A claim of adoption needs a specific public report with scope and date, rather than a general statement that “all labs do this.”

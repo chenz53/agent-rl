@@ -1,0 +1,27 @@
+---
+title: "Hands-on Post-training"
+description: "Understand agentic RL and modern post-training through PyTorch, evidence, and experiments."
+---
+
+<CardGroup cols={2}>
+  <Card title="Start with the learning route" icon="book-open" href="/tutorial/README">
+    Follow the progression from token distributions to policy updates and agent systems.
+  </Card>
+  <Card title="Why gather a sampled token?" icon="code" href="/tutorial/chapters/02-token-probabilities">
+    Derive the quantity, inspect every vocabulary gradient, and compare alternative objectives.
+  </Card>
+  <Card title="On-policy distillation" icon="arrows-rotate" href="/tutorial/chapters/08-on-policy-distillation">
+    Separate student prefixes, teacher distributions, KL values, and correct gradients.
+  </Card>
+  <Card title="Build from oncology records" icon="database" href="/docs/lessons/001-oncology-prognosis-from-files">
+    Work from compressed CSV files through evidence, tools, and the existing verl interfaces.
+  </Card>
+</CardGroup>
+
+## Learn the mechanism before adopting a recipe
+
+Each chapter starts with a concrete question, derives its assumptions, executes a small example, and examines failure modes. PyTorch is the teaching framework. Existing public infrastructure handles the production path; small kernels make its statistical choices inspectable.
+
+The first edition includes fourteen new chapters with fifteen executable blocks and seven existing oncology lesson files. Outputs are captured from actual executions. The frontier review is dated **2026-10-13** and distinguishes mathematical results, public implementation evidence, and recent research proposals.
+
+Read [the research alternatives](/tutorial/chapters/11-research-frontier) and [the source ledger](/tutorial/sources) before treating a technique as a default. This edition is an executable foundation with a bounded categorical-policy capstone; autonomous clinical model training remains a separate milestone.

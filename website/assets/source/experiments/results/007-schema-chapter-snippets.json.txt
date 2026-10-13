@@ -1,0 +1,288 @@
+{
+  "lessons": 7,
+  "executed_blocks": 47,
+  "outputs": [
+    {
+      "lesson": "001-oncology-prognosis-from-files.md",
+      "block": 1,
+      "stdout": "patient: SYN-ONC-001\nindex: 2025-03-01T09:00:00Z\nendpoint: death within 180 days",
+      "matched": true
+    },
+    {
+      "lesson": "001-oncology-prognosis-from-files.md",
+      "block": 2,
+      "stdout": "clinical files: 13\nbiomarkers.csv.gz\ndiagnosis.csv.gz\nencounters.csv.gz\nlabs.csv.gz\nmedication_administrations.csv.gz\nmedication_orders.csv.gz\nnotes.csv.gz\npathology.csv.gz\npatients.csv.gz\nperformance_status.csv.gz\nprocedures.csv.gz\nstaging.csv.gz\nvitals.csv.gz",
+      "matched": true
+    },
+    {
+      "lesson": "001-oncology-prognosis-from-files.md",
+      "block": 3,
+      "stdout": "columns: record_id, version, patient_id, encounter_id, event_time, available_time, record_status, source_system, specimen_id, test_code, test_name, value_num, value_text, unit, ref_low, ref_high\nraw rows: 9\nHB-001 hemoglobin 11.2 g/dL\nnumeric value stored as: str",
+      "matched": true
+    },
+    {
+      "lesson": "001-oncology-prognosis-from-files.md",
+      "block": 4,
+      "stdout": "collected: 2025-02-28T08:00:00Z\navailable: 2025-03-01T11:00:00Z\nevent before index: True\nresult visible at index: False",
+      "matched": true
+    },
+    {
+      "lesson": "001-oncology-prognosis-from-files.md",
+      "block": 5,
+      "stdout": "visible rows: 28\npatients 1\ndiagnosis 3\nlabs 7\nnotes 1\nmedication_administrations 0\nage: 67 sex: female\nDX-003 Chronic obstructive pulmonary disease\nDX-001 Lung adenocarcinoma\nDX-002 Metastatic disease involving liver and bone",
+      "matched": true
+    },
+    {
+      "lesson": "001-oncology-prognosis-from-files.md",
+      "block": 6,
+      "stdout": "record: NOTE-001\nevent: 2025-02-28T14:00:00Z\navailable: 2025-02-28T17:00:00Z\nNew metastatic lung adenocarcinoma. Fatigue, reduced appetite, approximately 8 kg weight loss since January. ECOG 2 today, previously 1. Lives with partner; daughter helps with shopping. Independent in basic self-care. Bone pain treated with as-needed analgesia. Systemic treatment not started; final regimen awaits molecular results and shared decision-making.\nBrain MRI remains pending. Discuss prognosis with uncertainty; no individualized survival estimate documented.",
+      "matched": true
+    },
+    {
+      "lesson": "002-reconstruct-oncology-evidence.md",
+      "block": 1,
+      "stdout": "version 1 value 4.9 g/dL available 2025-02-28T08:00:00Z\nversion 2 value 3.1 g/dL available 2025-02-28T16:00:00Z\nselected: 2 3.1 g/dL",
+      "matched": true
+    },
+    {
+      "lesson": "002-reconstruct-oncology-evidence.md",
+      "block": 2,
+      "stdout": "raw: 1 2025-02-20T12:00:00Z pending\nraw: 2 2025-03-04T12:00:00Z final\nvisible: BIO-001 PD-L1 final '60%'\nvisible: BIO-002 tumor_NGS_panel pending ''",
+      "matched": true
+    },
+    {
+      "lesson": "002-reconstruct-oncology-evidence.md",
+      "block": 3,
+      "stdout": "ALB-001 35 g/L -> 3.5 g/dL\nALB-002 3.1 g/dL -> 3.1 g/dL\nchange in g/dL: -0.4",
+      "matched": true
+    },
+    {
+      "lesson": "002-reconstruct-oncology-evidence.md",
+      "block": 4,
+      "stdout": "WT-001 2025-01-05 72 kg\nWT-002 2025-02-12 68 kg\nWT-003 2025-02-28 64 kg\nweight loss percent: 11.111\nelapsed days: 54.167\nsource records: WT-001 WT-003",
+      "matched": true
+    },
+    {
+      "lesson": "002-reconstruct-oncology-evidence.md",
+      "block": 5,
+      "stdout": "pathology: PATH-001 adenocarcinoma\nstage: IV sites: lung; liver; bone\nfunction: PS-001 2025-02-12 ECOG 1\nfunction: PS-002 2025-02-28 ECOG 2\norder: ORD-001 draft_awaiting_molecular_results\norder: ORD-002 active\nadministrations available: 0\nprocedure: CT chest abdomen pelvis completed\nprocedure: Brain MRI ordered_not_performed",
+      "matched": true
+    },
+    {
+      "lesson": "003-oncology-tools-and-environment.md",
+      "block": 1,
+      "stdout": "status: ok\ntable: performance_status\nevidence: [('PS-001', '1'), ('PS-002', '2')]\nforbidden: {'status': 'invalid_field'}",
+      "matched": true
+    },
+    {
+      "lesson": "003-oncology-tools-and-environment.md",
+      "block": 2,
+      "stdout": "Runtime tracks records, budget, revealed tables, history, and termination.",
+      "matched": true
+    },
+    {
+      "lesson": "003-oncology-tools-and-environment.md",
+      "block": 3,
+      "stdout": "pathology rows: 1 remaining: 2\nperformance_status rows: 2 remaining: 1\nvitals rows: 5 remaining: 0\nrevealed: ['pathology', 'performance_status', 'vitals']\nterminated: False",
+      "matched": true
+    },
+    {
+      "lesson": "003-oncology-tools-and-environment.md",
+      "block": 4,
+      "stdout": "fourth query: Episode ended or query budget exhausted\nsubmitted risk: None\nterminated: True\nreset: 3 [] False",
+      "matched": true
+    },
+    {
+      "lesson": "003a-tool-schemas-to-model-tokens.md",
+      "block": 1,
+      "stdout": "tools:\n  - class_name: nanoastra.verl_tool.ClinicalRecordTool\n    config:\n      type: native\n      record_fields: [patients, encounters, diagnosis, labs, vitals, notes, pathology, staging, biomarkers, medication_orders, medication_administrations, procedures, performance_status]\n    tool_schema:\n      type: function\n      function:\n        name: get_clinical_record\n        description: Read one clinical table for the server-selected patient and index time. Outcomes and future records are inaccessible.\n        parameters:\n          type: object\n          properties:\n            field:\n              type: string\n              description: Allowed clinical table. Empty rows mean no available records, not a confirmed negative finding.\n              enum: [patients, encounters, diagnosis, labs, vitals, notes, pathology, staging, biomarkers, medication_orders, medication_administrations, procedures, performance_status]\n          required: [field]\nInstantiated class: ClinicalRecordTool",
+      "matched": true
+    },
+    {
+      "lesson": "003a-tool-schemas-to-model-tokens.md",
+      "block": 2,
+      "stdout": "{\n  \"type\": \"function\",\n  \"function\": {\n    \"name\": \"get_clinical_record\",\n    \"description\": \"Read one clinical table for the server-selected patient and index time. Outcomes and future records are inaccessible.\",\n    \"parameters\": {\n      \"type\": \"object\",\n      \"properties\": {\n        \"field\": {\n          \"type\": \"string\",\n          \"description\": \"Allowed clinical table. Empty rows mean no available records, not a confirmed negative finding.\",\n          \"enum\": [\n            \"patients\",\n            \"encounters\",\n            \"diagnosis\",\n            \"labs\",\n            \"vitals\",\n            \"notes\",\n            \"pathology\",\n            \"staging\",\n            \"biomarkers\",\n            \"medication_orders\",\n            \"medication_administrations\",\n            \"procedures\",\n            \"performance_status\"\n          ]\n        }\n      },\n      \"required\": [\n        \"field\"\n      ]\n    }\n  }\n}\nSchema/backend field lists match: True",
+      "matched": true
+    },
+    {
+      "lesson": "003a-tool-schemas-to-model-tokens.md",
+      "block": 3,
+      "stdout": "Server-side table count: 13\nStored table value type: str\nModel-selectable argument names: ['field']\nBackend configuration advertised in schema: False",
+      "matched": true
+    },
+    {
+      "lesson": "003a-tool-schemas-to-model-tokens.md",
+      "block": 4,
+      "stdout": "<|im_start|>system\nUse only baseline records. Cite record IDs and state uncertainty.\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\nYou are provided with function signatures within <tools></tools> XML tags:\n<tools>\n{\"type\": \"function\", \"function\": {\"name\": \"get_clinical_record\", \"description\": \"Read one clinical table for the server-selected patient and index time. Outcomes and future records are inaccessible.\", \"parameters\": {\"type\": \"object\", \"properties\": {\"field\": {\"type\": \"string\", \"description\": \"Allowed clinical table. Empty rows mean no available records, not a confirmed negative finding.\", \"enum\": [\"patients\", \"encounters\", \"diagnosis\", \"labs\", \"vitals\", \"notes\", \"pathology\", \"staging\", \"biomarkers\", \"medication_orders\", \"medication_administrations\", \"procedures\", \"performance_status\"]}}, \"required\": [\"field\"]}}}\n</tools>\n\nFor each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n<tool_call>\n{\"name\": <function-name>, \"arguments\": <args-json-object>}\n</tool_call><|im_end|>\n<|im_start|>user\nAssess prognosis for SYN-ONC-001 at 2025-03-01T09:00:00Z. Read evidence as needed.<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>",
+      "matched": true
+    },
+    {
+      "lesson": "003a-tool-schemas-to-model-tokens.md",
+      "block": 5,
+      "stdout": "Initial token count: 299\nFirst 16 token IDs: [151644, 8948, 198, 10253, 1172, 25869, 7424, 13, 356, 632, 3255, 28360, 323, 1584, 26826, 382]\nPS-001 present initially: False\nPS-002 present initially: False\n'<|im_start|>' -> [151644]\n'<tools>' -> [27, 15918, 29]\n'<tool_call>' -> [151657]\n'<tool_response>' -> [151665]",
+      "matched": true
+    },
+    {
+      "lesson": "003a-tool-schemas-to-model-tokens.md",
+      "block": 6,
+      "stdout": "Hand-authored continuation:\n<tool_call>\n{\"name\":\"get_clinical_record\",\"arguments\":{\"field\":\"performance_status\"}}\n</tool_call>\nParsed call count: 1\nParsed call: {'arguments': '{\"field\": \"performance_status\"}', 'name': 'get_clinical_record', 'tool_call_id': None}\nDecoded argument type: dict",
+      "matched": true
+    },
+    {
+      "lesson": "003a-tool-schemas-to-model-tokens.md",
+      "block": 7,
+      "stdout": "Creation revealed data: False\nResponse container: ToolResponse\nContainer field types: {'text': 'str', 'image': 'NoneType', 'video': 'NoneType'}\nTool reward: 0.0\nMetrics: {'record_queries': 1}\nRemaining instances: 0",
+      "matched": true
+    },
+    {
+      "lesson": "003a-tool-schemas-to-model-tokens.md",
+      "block": 8,
+      "stdout": "{\"status\": \"ok\", \"field\": \"performance_status\", \"value\": \"{\\\"patient_id\\\": \\\"SYN-ONC-001\\\", \\\"as_of\\\": \\\"2025-03-01T09:00:00Z\\\", \\\"table\\\": \\\"performance_status\\\", \\\"rows\\\": [{\\\"record_id\\\": \\\"PS-001\\\", \\\"version\\\": \\\"1\\\", \\\"patient_id\\\": \\\"SYN-ONC-001\\\", \\\"encounter_id\\\": \\\"ENC-001\\\", \\\"event_time\\\": \\\"2025-02-12T10:00:00Z\\\", \\\"available_time\\\": \\\"2025-02-12T10:00:00Z\\\", \\\"record_status\\\": \\\"active\\\", \\\"source_system\\\": \\\"SYNTHETIC_EHR\\\", \\\"scale\\\": \\\"ECOG\\\", \\\"score\\\": \\\"1\\\", \\\"assessor\\\": \\\"oncologist\\\", \\\"context\\\": \\\"ambulatory\\\"}, {\\\"record_id\\\": \\\"PS-002\\\", \\\"version\\\": \\\"1\\\", \\\"patient_id\\\": \\\"SYN-ONC-001\\\", \\\"encounter_id\\\": \\\"ENC-001\\\", \\\"event_time\\\": \\\"2025-02-28T14:00:00Z\\\", \\\"available_time\\\": \\\"2025-02-28T14:00:00Z\\\", \\\"record_status\\\": \\\"active\\\", \\\"source_system\\\": \\\"SYNTHETIC_EHR\\\", \\\"scale\\\": \\\"ECOG\\\", \\\"score\\\": \\\"2\\\", \\\"assessor\\\": \\\"oncologist\\\", \\\"context\\\": \\\"Ambulatory and capable of self-care; unable to work; up more than half of waking hours\\\"}]}\"}",
+      "matched": true
+    },
+    {
+      "lesson": "003a-tool-schemas-to-model-tokens.md",
+      "block": 9,
+      "stdout": "{\n  \"patient_id\": \"SYN-ONC-001\",\n  \"as_of\": \"2025-03-01T09:00:00Z\",\n  \"table\": \"performance_status\",\n  \"rows\": [\n    {\n      \"record_id\": \"PS-001\",\n      \"version\": \"1\",\n      \"patient_id\": \"SYN-ONC-001\",\n      \"encounter_id\": \"ENC-001\",\n      \"event_time\": \"2025-02-12T10:00:00Z\",\n      \"available_time\": \"2025-02-12T10:00:00Z\",\n      \"record_status\": \"active\",\n      \"source_system\": \"SYNTHETIC_EHR\",\n      \"scale\": \"ECOG\",\n      \"score\": \"1\",\n      \"assessor\": \"oncologist\",\n      \"context\": \"ambulatory\"\n    },\n    {\n      \"record_id\": \"PS-002\",\n      \"version\": \"1\",\n      \"patient_id\": \"SYN-ONC-001\",\n      \"encounter_id\": \"ENC-001\",\n      \"event_time\": \"2025-02-28T14:00:00Z\",\n      \"available_time\": \"2025-02-28T14:00:00Z\",\n      \"record_status\": \"active\",\n      \"source_system\": \"SYNTHETIC_EHR\",\n      \"scale\": \"ECOG\",\n      \"score\": \"2\",\n      \"assessor\": \"oncologist\",\n      \"context\": \"Ambulatory and capable of self-care; unable to work; up more than half of waking hours\"\n    }\n  ]\n}",
+      "matched": true
+    },
+    {
+      "lesson": "003a-tool-schemas-to-model-tokens.md",
+      "block": 10,
+      "stdout": "Diagnostic projection only: ['1', '2']\nOriginal response unchanged: True\nRow IDs still in full response: True\nWas a scores-only key returned: False",
+      "matched": true
+    },
+    {
+      "lesson": "003a-tool-schemas-to-model-tokens.md",
+      "block": 11,
+      "stdout": "Roles: ['system', 'user', 'assistant', 'tool']\nTool content is exact response text: True\nTool content includes both IDs: True\nAssistant call: {\"type\": \"function\", \"function\": {\"name\": \"get_clinical_record\", \"arguments\": {\"field\": \"performance_status\"}}}",
+      "matched": true
+    },
+    {
+      "lesson": "003a-tool-schemas-to-model-tokens.md",
+      "block": 12,
+      "stdout": "EXCERPT: complete tool-result block through assistant continuation prefix\n<|im_start|>user\n<tool_response>\n{\"status\": \"ok\", \"field\": \"performance_status\", \"value\": \"{\\\"patient_id\\\": \\\"SYN-ONC-001\\\", \\\"as_of\\\": \\\"2025-03-01T09:00:00Z\\\", \\\"table\\\": \\\"performance_status\\\", \\\"rows\\\": [{\\\"record_id\\\": \\\"PS-001\\\", \\\"version\\\": \\\"1\\\", \\\"patient_id\\\": \\\"SYN-ONC-001\\\", \\\"encounter_id\\\": \\\"ENC-001\\\", \\\"event_time\\\": \\\"2025-02-12T10:00:00Z\\\", \\\"available_time\\\": \\\"2025-02-12T10:00:00Z\\\", \\\"record_status\\\": \\\"active\\\", \\\"source_system\\\": \\\"SYNTHETIC_EHR\\\", \\\"scale\\\": \\\"ECOG\\\", \\\"score\\\": \\\"1\\\", \\\"assessor\\\": \\\"oncologist\\\", \\\"context\\\": \\\"ambulatory\\\"}, {\\\"record_id\\\": \\\"PS-002\\\", \\\"version\\\": \\\"1\\\", \\\"patient_id\\\": \\\"SYN-ONC-001\\\", \\\"encounter_id\\\": \\\"ENC-001\\\", \\\"event_time\\\": \\\"2025-02-28T14:00:00Z\\\", \\\"available_time\\\": \\\"2025-02-28T14:00:00Z\\\", \\\"record_status\\\": \\\"active\\\", \\\"source_system\\\": \\\"SYNTHETIC_EHR\\\", \\\"scale\\\": \\\"ECOG\\\", \\\"score\\\": \\\"2\\\", \\\"assessor\\\": \\\"oncologist\\\", \\\"context\\\": \\\"Ambulatory and capable of self-care; unable to work; up more than half of waking hours\\\"}]}\"}\n</tool_response><|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n\nFull updated token count: 715\nBoth record IDs survive rendering: True",
+      "matched": true
+    },
+    {
+      "lesson": "003a-tool-schemas-to-model-tokens.md",
+      "block": 13,
+      "stdout": "{\"field\": \"mortality\"} -> {\"status\": \"invalid_field\"}\n{\"field\": \"labs\", \"patient_id\": \"another-patient\"} -> {\"status\": \"invalid_arguments\"}\nEmpty table: ok []",
+      "matched": true
+    },
+    {
+      "lesson": "004-oncology-outcomes-and-reward.md",
+      "block": 1,
+      "stdout": "SYN-ONC-001 follow-up days: 100.0 event observed: 1 180-day label: 1\nSYN-ONC-002 follow-up days: 214.0 event observed: 0 180-day label: 0\nSYN-ONC-003 follow-up days: 60.0 event observed: 0 180-day label: None",
+      "matched": true
+    },
+    {
+      "lesson": "004-oncology-outcomes-and-reward.md",
+      "block": 2,
+      "stdout": "death on day 180: 1\ndeath on day 181: 0",
+      "matched": true
+    },
+    {
+      "lesson": "004-oncology-outcomes-and-reward.md",
+      "block": 3,
+      "stdout": "p=0.2 y=1 Brier=0.64 candidate_reward=-0.64\np=0.7 y=1 Brier=0.09 candidate_reward=-0.09\nearly-censored label: None",
+      "matched": true
+    },
+    {
+      "lesson": "004-oncology-outcomes-and-reward.md",
+      "block": 4,
+      "stdout": "citations: ['PATH-001', 'PS-002', 'WT-003'] unavailable: []\ncitations: ['PATH-001', 'MRI-RESULT-999'] unavailable: ['MRI-RESULT-999']",
+      "matched": true
+    },
+    {
+      "lesson": "004-oncology-outcomes-and-reward.md",
+      "block": 5,
+      "stdout": "cost=0.05 stop=0.60 query=0.70 prefer_query=True\ncost=0.20 stop=0.60 query=0.55 prefer_query=False",
+      "matched": true
+    },
+    {
+      "lesson": "005-oncology-trajectories-and-gradients.md",
+      "block": 1,
+      "stdout": "read pathology -0.05\nread performance_status -0.05\nsubmit assessment 1.0\ntotal return: 0.9",
+      "matched": true
+    },
+    {
+      "lesson": "005-oncology-trajectories-and-gradients.md",
+      "block": 2,
+      "stdout": "policy trajectory probability: 0.16\nlog probability: -1.832581",
+      "matched": true
+    },
+    {
+      "lesson": "005-oncology-trajectories-and-gradients.md",
+      "block": 3,
+      "stdout": "returns: [0.9, 0.95, 1.0]",
+      "matched": true
+    },
+    {
+      "lesson": "005-oncology-trajectories-and-gradients.md",
+      "block": 4,
+      "stdout": "return=1.0 baseline=0.4 weight=+0.6\nreturn=0.0 baseline=0.4 weight=-0.4",
+      "matched": true
+    },
+    {
+      "lesson": "005-oncology-trajectories-and-gradients.md",
+      "block": 5,
+      "stdout": "loss: 1.2\nd_loss/d_logp: [-0.6, -0.6, -0.6]",
+      "matched": true
+    },
+    {
+      "lesson": "005-oncology-trajectories-and-gradients.md",
+      "block": 6,
+      "stdout": "action positions: [1.0, 1.0, 0.0, 0.0, 1.0, 1.0]\nd_loss/d_logp: [-0.15, -0.15, 0.0, 0.0, -0.15, -0.15]",
+      "matched": true
+    },
+    {
+      "lesson": "006-oncology-verl-and-grpo.md",
+      "block": 1,
+      "stdout": "class: ClinicalRecordTool\ninitial response empty: True\nrecords: [('PS-001', '1'), ('PS-002', '2')]\ntool reward: 0.0 query count: 1\nremaining instances: 0",
+      "matched": true
+    },
+    {
+      "lesson": "006-oncology-verl-and-grpo.md",
+      "block": 2,
+      "stdout": "shape: [4, 1]\nmean: 0.65\nsample std: 0.288675\nadvantages: [-0.866022, -0.866022, 0.866022, 0.866022]",
+      "matched": true
+    },
+    {
+      "lesson": "006-oncology-verl-and-grpo.md",
+      "block": 3,
+      "stdout": "two uniform groups: [0.0, 0.0, 0.0, 0.0]\nincorrectly merged groups: [-0.866022, -0.866022, 0.866022, 0.866022]\nall equal in one group: [0.0, 0.0, 0.0, 0.0]",
+      "matched": true
+    },
+    {
+      "lesson": "006-oncology-verl-and-grpo.md",
+      "block": 4,
+      "stdout": "ratios: [1.0, 1.0, 1.0, 1.0]\nloss near zero: True\nlogit gradients: [0.433011, -0.433011]",
+      "matched": true
+    },
+    {
+      "lesson": "006-oncology-verl-and-grpo.md",
+      "block": 5,
+      "stdout": "shared-graph gradients: [0.0, 0.0]",
+      "matched": true
+    },
+    {
+      "lesson": "006-oncology-verl-and-grpo.md",
+      "block": 6,
+      "stdout": "A=+2.0 ratio=1.5 loss=-2.4 gradient=0.0\nA=+2.0 ratio=0.6 loss=-1.2 gradient=-1.2\nA=-1.0 ratio=0.5 loss=0.8 gradient=0.0\nA=-1.0 ratio=1.5 loss=1.5 gradient=1.5\nA=-1.0 ratio=5.0 loss=3.0 gradient=0.0",
+      "matched": true
+    },
+    {
+      "lesson": "006-oncology-verl-and-grpo.md",
+      "block": 7,
+      "stdout": "P(read_more) before: 0.5\nP(read_more) after: 0.521637\ngradient cleared: True",
+      "matched": true
+    },
+    {
+      "lesson": "006-oncology-verl-and-grpo.md",
+      "block": 8,
+      "stdout": "KL(p||q): 0.192745\nH(p): 0.500402",
+      "matched": true
+    }
+  ]
+}

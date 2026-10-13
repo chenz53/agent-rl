@@ -9,3 +9,5 @@
 - `upstream.py`: validate and activate the pinned upstream checkout.
 
 The implementation provides data boundaries and probes. It does not yet implement an autonomous clinical agent or complete training loop.
+
+`posttraining.py` provides compact PyTorch teaching primitives for selected log-probabilities, explicit group estimators and reductions, PPO surrogate, fixed-prefix reverse KL, and DPO. It is not a production trainer; use existing framework infrastructure for model-backed rollouts.

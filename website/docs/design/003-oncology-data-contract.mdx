@@ -1,0 +1,184 @@
+---
+title: "Oncology export data contract"
+---
+
+Version 1, 2026-09-28. This is a local, entirely synthetic teaching schema. It is neither a hospital export specification nor an OMOP/MIMIC implementation. The active endpoint is provisionally 180-day all-cause mortality at a fixed pretreatment index.
+
+## Directory and access boundaries
+
+- `fixtures/oncology/clinical/`: 13 gzip CSV clinical tables; the only directory read by the agent-facing projection.
+- `fixtures/oncology/evaluator_only/mortality.csv.gz`: evaluator-only follow-up and death records.
+- `fixtures/oncology/manifest.json`: maintainer metadata, including raw counts; not agent context.
+
+The reader uses an explicit table allowlist, not a recursive scan of every `csv.gz` file. A model requests a table name; the environment supplies patient and index. This is application-level isolation. Production execution must also restrict filesystem/tool access so an agent cannot bypass it with a shell or arbitrary file reader.
+
+## CSV and temporal conventions
+
+UTF-8, header row, comma-separated fields, standard CSV quoting, and empty string for absent values. Numeric fields remain strings until typed validation. Timestamps are ISO 8601 with a timezone; fixture values use UTC. gzip is deterministic with mtime zero. No real identifiers or records are present.
+
+The common columns below precede each table's specific columns, in exactly the listed order. The current loader enforces exact headers; it intentionally rejects incompatible exports rather than silently guessing a mapping.
+
+| Common field | Meaning |
+| --- | --- |
+| record_id | Stable logical record within a table; part of the revision key |
+| version | Positive integer revision, unique with table/patient/record |
+| patient_id | Patient join key across tables |
+| encounter_id | Optional encounter association; not sufficient for joining all longitudinal evidence |
+| event_time | Occurrence time according to this table's declared semantics |
+| available_time | First visibility of this particular version |
+| record_status | active or cancelled |
+| source_system | SYNTHETIC_EHR provenance marker |
+
+Filter both event and availability times at the index, select the latest available version, then remove cancelled records. Do not choose the latest export version before applying the time cutoff: a later correction would overwrite the historical view. Invalid/missing clocks, duplicate revisions, malformed rows, and unexpected columns fail closed. No data quality failure is automatically scored as a clinical reasoning error.
+
+## Clinical table dictionaries
+
+All tables share the common columns. The additional columns below are in file order.
+
+### `patients.csv.gz`
+
+| Column | Meaning |
+| --- | --- |
+| age_at_index | Age in completed years at the configured index; a synthetic baseline demographic, not age at extraction. |
+| sex | Recorded demographic sex; not inferred from notes. |
+| birth_year | Coarse invented birth year; no actual date of birth. |
+
+### `encounters.csv.gz`
+
+| Column | Meaning |
+| --- | --- |
+| encounter_type | Care setting such as outpatient. |
+| department | Documenting service. |
+| reason | Recorded purpose of the encounter. |
+
+### `diagnosis.csv.gz`
+
+| Column | Meaning |
+| --- | --- |
+| code_system | Source vocabulary namespace. LOCAL means invented local codes, not validated ICD/SNOMED concepts. |
+| code | Code within the declared namespace. |
+| description | Source diagnosis description. |
+| verification_status | Source confirmation context, such as pathology_confirmed or historical_problem_list. |
+
+### `labs.csv.gz`
+
+| Column | Meaning |
+| --- | --- |
+| specimen_id | Groups analytes from a collected specimen. |
+| test_code | Local analyte code; not falsely presented as a verified LOINC mapping. |
+| test_name | Human-readable analyte name. |
+| value_num | Numeric result stored as CSV text; empty if absent. |
+| value_text | Text result or correction annotation. |
+| unit | Original reported unit; preserve before any conversion. |
+| ref_low | Source lower reference bound as text. |
+| ref_high | Source upper reference bound as text. |
+
+### `vitals.csv.gz`
+
+| Column | Meaning |
+| --- | --- |
+| measurement | Vital-sign concept, such as weight or spo2. |
+| value_num | Numeric result stored as CSV text; empty if absent. |
+| unit | Original reported unit; preserve before any conversion. |
+| context | Measurement/assessment circumstances. |
+
+### `notes.csv.gz`
+
+| Column | Meaning |
+| --- | --- |
+| note_type | Document category. |
+| author_role | Role of documenting clinician, not a real provider identifier. |
+| text | UTF-8 narrative; quoted CSV fields may contain commas and newlines. |
+
+### `pathology.csv.gz`
+
+| Column | Meaning |
+| --- | --- |
+| specimen_site | Anatomic sampling site. |
+| histology | Pathology diagnosis. |
+| report_text | Reported pathologic findings. |
+
+### `staging.csv.gz`
+
+| Column | Meaning |
+| --- | --- |
+| stage_system | Declared source staging convention; here only clinician_documented_group, not complete TNM. |
+| stage_group | Documented group such as IV; no automatically inferred substage. |
+| basis | Clinical versus pathological basis as recorded. |
+| disease_sites | Semicolon-delimited documented sites; local teaching convention. |
+
+### `biomarkers.csv.gz`
+
+| Column | Meaning |
+| --- | --- |
+| marker | Biomarker or panel name. |
+| assay | Reported assay category. |
+| result | Assay value or narrative; empty while pending. |
+| result_status | Clinical result state such as pending/final; distinct from record cancellation. |
+
+### `medication_orders.csv.gz`
+
+| Column | Meaning |
+| --- | --- |
+| drug | Drug or proposed regimen text. |
+| intent | Purpose of the order, not evidence it was administered. |
+| order_status | Draft or active plan/order status. |
+
+### `medication_administrations.csv.gz`
+
+| Column | Meaning |
+| --- | --- |
+| drug | Drug or proposed regimen text. |
+| dose | Documented administered quantity if present. |
+| unit | Original reported unit; preserve before any conversion. |
+| route | Administration route. |
+| administration_status | Whether administration occurred. |
+
+### `procedures.csv.gz`
+
+| Column | Meaning |
+| --- | --- |
+| procedure_name | Procedure or imaging name. |
+| procedure_status | Completed versus ordered_not_performed. |
+| result_summary | Existing report summary; not generated by a query. |
+
+### `performance_status.csv.gz`
+
+| Column | Meaning |
+| --- | --- |
+| scale | Performance assessment scale; ECOG in this fixture. |
+| score | Source score stored as text. |
+| assessor | Documenting role. |
+| context | Measurement/assessment circumstances. |
+
+## Evaluator-only mortality schema
+
+| Column | Meaning |
+| --- | --- |
+| patient_id | Unique patient key in this outcome file |
+| death_time | Observed death time, or empty if not observed |
+| last_known_alive_time | Last affirmative follow-up establishing survival |
+| ascertainment_end_time | End of outcome collection; not proof of individual survival |
+
+The label builder validates temporal ordering and returns event observation, follow-up days, horizon, and death-by-horizon (`1`, `0`, or missing). A death exactly at day 180 counts as an event for this contract. Death after day 180 establishes a non-event at that horizon. Last known alive at day 60 with no death gives an unknown 180-day label, even if the export window extends to December.
+
+## Deliberate data challenges
+
+| Challenge | Example | Required handling |
+| --- | --- | --- |
+| Corrected result | ALB-002 revisions 1 and 2 | Keep revision 2 at the index |
+| Mixed units | Albumin 35 g/L and 3.1 g/dL | Convert explicitly before comparing |
+| Delayed result | LDH collected before index, available after | Exclude from baseline |
+| Late-signed text | NOTE-002 | Exclude despite pre-index event time |
+| Future clinical course | NOTE-003 | Exclude |
+| Pending assay | BIO-002, later final revision | Expose pending version only |
+| Order versus exposure | Draft order, future administration | Do not infer treatment receipt |
+| Ordered imaging | Brain MRI ordered, not performed | No negative or positive result inferred |
+| Sparse other patients | SYN-ONC-002 and 003 | No cross-patient joins or invented features |
+| Early censoring | Last known alive at day 60 | Do not assign a negative horizon label |
+
+## Real-data adapter work still required
+
+Map actual source fields and terminology with clinical/data stewards; establish completeness, deidentification, licenses, timestamp meanings, note versioning, dose/unit conventions, tumor episode linkage, prior-treatment coverage, and mortality ascertainment. Explicitly distinguish problem-list history from encounter diagnoses and orders from administrations. Site/export differences should become adapter logic and validation, not prompt guesses.
+
+The fixture reader scans small tables and materializes the selected view in memory. It does not provide warehouse-scale joins, query pagination, security certification, or a validated prognostic model. The complete walkthrough is [lessons 1-2](/docs/lessons/001-oncology-prognosis-from-files).
