@@ -1,27 +1,27 @@
 ---
-title: "Hands-on Post-training"
-description: "Understand agentic RL and modern post-training through PyTorch, evidence, and experiments."
+title: "Hands-on Post-training for Coding Agents"
+description: "Start with a coding issue. Build the environment, derive the learning rule, and test every step in PyTorch."
 ---
 
 <CardGroup cols={2}>
-  <Card title="Start with the learning route" icon="book-open" href="/tutorial/README">
-    Follow the progression from token distributions to policy updates and agent systems.
+  <Card title="Start with the bug" icon="code" href="/tutorial/chapters/01-coding-task">
+    Use DeepSWE as context, then reproduce and verify one concrete clamp repair.
   </Card>
-  <Card title="Why gather a sampled token?" icon="code" href="/tutorial/chapters/02-token-probabilities">
-    Derive the quantity, inspect every vocabulary gradient, and compare alternative objectives.
+  <Card title="Build the coding environment" icon="terminal" href="/tutorial/chapters/02-coding-environment">
+    Construct tools, validation, repository state, tests, and submission from scratch.
   </Card>
-  <Card title="On-policy distillation" icon="arrows-rotate" href="/tutorial/chapters/08-on-policy-distillation">
-    Separate student prefixes, teacher distributions, KL values, and correct gradients.
+  <Card title="Follow the learning sequence" icon="book-open" href="/tutorial/README">
+    Task → environment → trajectory → probability → feedback → update.
   </Card>
-  <Card title="Build from oncology records" icon="database" href="/docs/lessons/001-oncology-prognosis-from-files">
-    Work from compressed CSV files through evidence, tools, and the existing verl interfaces.
+  <Card title="Inspect on-policy distillation" icon="arrows-rotate" href="/tutorial/chapters/10-on-policy-distillation">
+    Derive teacher guidance at student coding prefixes and verify its gradients.
   </Card>
 </CardGroup>
 
-## Learn the mechanism before adopting a recipe
+## Every mechanism has a coding question behind it
 
-Each chapter starts with a concrete question, derives its assumptions, executes a small example, and examines failure modes. PyTorch is the teaching framework. Existing public infrastructure handles the production path; small kernels make its statistical choices inspectable.
+Why must the agent execute a test rather than claim it passed? Which generated tokens are actions? Why gather a selected log-probability? How does a verifier score become a gradient? Each chapter answers the question left by the previous chapter, using the same coding repair and visible function definitions.
 
-The first edition includes fourteen new chapters with fifteen executable blocks and seven existing oncology lesson files. Outputs are captured from actual executions. The frontier review is dated **2026-10-13** and distinguishes mathematical results, public implementation evidence, and recent research proposals.
+The revised edition contains **15 chapters and 22 executed Python blocks**. Code has captured outputs; formulas use separate display-math delimiters; flow and sequence diagrams explain interaction and training. DeepSWE supplies a public infrastructure reference, while the experiments remain intentionally small enough to inspect.
 
-Read [the research alternatives](/tutorial/chapters/11-research-frontier) and [the source ledger](/tutorial/sources) before treating a technique as a default. This edition is an executable foundation with a bounded categorical-policy capstone; autonomous clinical model training remains a separate milestone.
+Begin with [the coding task](/tutorial/chapters/01-coding-task), then follow [the reading order](/tutorial/README). The final lab trains a small patch-selection policy against executable tests. A full model-backed DeepSWE reproduction is outside the experiments completed here.

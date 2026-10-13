@@ -1,5 +1,7 @@
 # The oncology-first curriculum
 
+This is historical teaching material. The active course is now the [coding-first post-training tutorial](../../tutorial/README.md). The sequence below is retained for reproducing earlier project experiments and is not exported in the current site.
+
 Read these lessons **in numerical order**. One synthetic patient, one baseline index, and one prognosis task connect the entire course. You do not need to read the historical A/B or emergency cases first.
 
 Each lesson introduces a problem that the preceding lesson leaves unresolved. Code blocks run in order within a fresh session for that lesson; an actual captured Output block immediately follows every Python block. The main lessons 1-4 use the standard library. The detailed chapter 3A and lessons 5-6 use the existing vp environment; chapter 3A also uses the cached Qwen tokenizer.

@@ -1,49 +1,25 @@
 # nanoAstra
 
-Learn modern post-training and Agentic RL through PyTorch code, then build a small clinical reasoning agent. The active case is **cancer prognosis from longitudinal compressed CSV exports**. Documentation is in English; tutoring conversation may be in Chinese.
+Learn modern post-training and Agentic RL through coding tasks and visible PyTorch implementations. Documentation is English; tutoring conversation may be Chinese. DeepSWE supplies the public system reference, and one authored clamp repair connects the executable examples.
 
-## New: Hands-on Post-training
+## Start with the coding task
 
-Read the [broader tutorial](tutorial/README.md) or open the Mintlify preview with `mint dev` from `website/`. Fourteen new chapters with fifteen verified Python blocks cover token probabilities, masks, advantages, policy gradients, values/GAE, PPO/GRPO, SFT/DPO, on-policy distillation, KL, rollout systems, evaluation, current research, and a bounded sampled-policy capstone. [The editorial guide](tutorial/editorial-guide.md) explains the D2L-inspired teaching progression; [the source ledger](tutorial/sources.md) separates mathematical identities, observed experiments, and author-reported proposals.
+Read [chapter 1](tutorial/chapters/01-coding-task.md), then follow the [dependency-based learning route](tutorial/README.md). The fifteen chapters contain twenty-two executed Python blocks, local definitions of every teaching function, centered display equations, and interaction/training diagrams.
 
-The existing oncology-first route below remains the domain case study. The [site generator](scripts/build_tutorial_site.py) creates its MDX reading edition from canonical Markdown; [experiment 008](experiments/008-posttraining-tutorial.md) records reproducibility and limits.
+**Coding issue → tools/environment → trajectory → token probability → feedback → policy update.** Later chapters develop values/GAE, PPO/GRPO, SFT/DPO, on-policy distillation, KL/entropy, rollout systems, evaluation, current alternatives, and an executable coding-patch capstone.
 
-## Start here: lesson 1
+## Run and read
 
-Read [Lesson 1: oncology prognosis from files](docs/lessons/001-oncology-prognosis-from-files.md), then follow the [six-lesson sequence](docs/lessons/README.md) in order:
+```sh
+# Existing remote environment, from /home/user/nanoAstra:
+.venv/bin/python scripts/check_tutorial_snippets.py
 
-**Files and task -> evidence reconstruction -> agent environment -> outcomes and reward -> policy gradient -> verl and GRPO.**
+# Local reading interface:
+python3 scripts/build_tutorial_site.py
+cd website
+mint dev
+```
 
-The same synthetic patient connects every lesson. Each executable Python block has its actual output directly underneath. There is no need to read the historical A/B or emergency case first.
+The checker rejects project helper imports and inline display-math delimiters. Source Markdown is canonical; the Mintlify edition is generated. [Experiment 009](experiments/009-coding-tutorial.md) records the revised verification. [Sources](tutorial/sources.md) and [editorial conventions](tutorial/editorial-guide.md) distinguish public reports, mathematical assumptions, and repository measurements.
 
-The task assumption is pretreatment metastatic NSCLC with a 180-day all-cause mortality endpoint. All records and outcomes are invented. The examples do not constitute a calibrated survival model or clinical benchmark.
-
-The [data dictionary](docs/design/003-oncology-data-contract.md), [clinical files](fixtures/oncology/clinical), and [generator](scripts/generate_oncology_fixture.py) are supporting references. The main lessons 1-4 need only the standard library; [chapter 3A](docs/lessons/003a-tool-schemas-to-model-tokens.md) and lessons 5-6 use the existing vp environment, with no new local dependencies.
-
-## RL curriculum and project records
-
-- [Lesson and concept index](docs/lessons/README.md)
-- [Learning roadmap](docs/roadmap.md)
-- [Infrastructure choice](docs/design/002-infrastructure.md)
-- [H200 update and reproduction](experiments/002-remote-h200.md)
-- [Current curriculum and output verification](experiments/006-oncology-curriculum.md)
-- [Discussion archive](docs/discussions/README.md)
-- [References](docs/references/README.md)
-- [Progress and decisions](PROGRESS.md)
-
-Earlier lessons are in the [historical archive](docs/archive/README.md), separate from the current reading order. Original experiment measurements remain unchanged.
-
-## Repository layout
-
-| Directory | Purpose |
-| --- | --- |
-| `fixtures/oncology/clinical/` | Small invented gzip CSV exports |
-| `fixtures/oncology/evaluator_only/` | Outcome data, excluded from the agent tool |
-| `src/nanoastra/` | Domain ingestion, tools, and evaluation helpers |
-| `configs/` | Real verl tool schemas |
-| `scripts/` | Reproduction commands and demonstrations |
-| `tests/` | Behavioral and information-boundary checks |
-| `docs/` | Lessons, data contracts, discussions, references |
-| `experiments/` | Recorded results and limitations |
-
-Current demonstrations validate data projection and framework interfaces. Complete autonomous multi-turn training and clinical evaluation remain unfinished. The remote machine is an execution mirror; no hosted Git repository has been created.
+The capstone learns a finite patch-selection policy from actual test execution. It is not a complete language-model or DeepSWE training reproduction. Earlier source, fixtures, and experiments remain in the repository as historical records and are excluded from the active reading site. No public hosted site or remote GitHub repository has been created.

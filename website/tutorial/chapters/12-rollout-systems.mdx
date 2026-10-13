@@ -1,0 +1,64 @@
+---
+title: "Rollout systems: throughput is part of the experiment"
+---
+
+For the clamp issue, one repair may finish after a short edit; another may spend many tokens inspecting files and rerunning tests. A training system batches these unequal traces. We therefore need to state how action-token contributions are reduced before distributing the update.
+
+A correct loss can still fail when the generation engine and training engine disagree about tokenization, policy versions, or probability conventions. The system must preserve the statistical contract while distributing expensive generation and updates.
+
+## Collect, score, update, synchronize
+
+A synchronous cycle freezes a behavior policy, samples task groups, executes tools, evaluates results, recomputes current log-probabilities, updates, then synchronizes rollout weights. Asynchronous collection overlaps work but creates policy lag. A version number should travel with each sampled token stream rather than being inferred from batch arrival time.
+
+Use original sampled IDs to score the observed actions. Re-tokenizing an assistant string after tools are inserted may produce a different sequence; rebuilding a full chat template may insert or remove delimiters. Our earlier hand-authored tool trace illustrates ownership, not exact replay of a model tokenizer.
+
+## Reductions are system-sensitive
+
+Gradient accumulation and distributed workers need the intended global denominator. Averaging per-microbatch token means weights short and long microbatches differently from a global token mean. The same problem appears when trajectories have different action lengths.
+
+The following experiment demonstrates three different reductions on the same artificial token values.
+
+## Construct all three reductions
+
+Count valid action tokens with `mask.sum(-1)`. Multiply by the mask, then sum values within each sequence. Averaging those totals gives sequence-sum weighting. Dividing each total by its own count before averaging gives equal weight to each sequence's mean. Dividing the grand total by the grand count gives equal weight to each token. The function exposes these as separate branches, because changing the denominator changes the objective.
+
+```python
+import torch
+def reduce_tokens(values, mask, reduction="sequence_sum"):
+    """Choose trajectory weighting explicitly; accepts [..., time]."""
+    counts = mask.sum(-1)
+    if (counts == 0).any():
+        raise ValueError("Empty action sequence; diagnose collection rather than hiding it")
+    totals = (values * mask).sum(-1)
+    if reduction == "sequence_sum":
+        return totals.mean()
+    if reduction == "sequence_mean":
+        return (totals / counts).mean()
+    if reduction == "token_mean":
+        return totals.sum() / counts.sum()
+    raise ValueError(reduction)
+values = torch.tensor([[1.0, 0.0, 0.0], [3.0, 3.0, 3.0]])
+mask = torch.tensor([[1.0, 0.0, 0.0], [1.0, 1.0, 1.0]])
+for reduction in ["sequence_sum", "sequence_mean", "token_mean"]:
+    print(reduction, reduce_tokens(values, mask, reduction).item())
+```
+
+Output:
+
+```text
+sequence_sum 5.0
+sequence_mean 2.0
+token_mean 2.5
+```
+
+## Design review
+
+Plan KV-cache memory, teacher serving, tool concurrency, rollout length tails, and cancellation. Increasing parallel tool calls changes the interaction semantics if actions were intended to depend on preceding results. Reading a file and overwriting it need different retry/idempotency handling. A patch based on an outdated file version should not be retried blindly.
+
+An invalid tool schema can cause collection failures long before the optimizer runs. Instrument parser success, tool exceptions, tool latency, stop reasons, and fraction of usable trajectories. Keep throughput metrics alongside quality; reward per update can conceal unequal generation budgets.
+
+Use the pinned public rLLM DeepSWE example as an infrastructure reference and the public verl kernels for objective inspection. These teaching kernels do not replace its scheduling, sequence packing, or distributed normalization. No full asynchronous trainer has been implemented here.
+
+**Exercise.** Two workers produce 10 and 100 action tokens. Derive the global token-mean denominator and compare it with averaging their local means. Describe what metadata is needed to reject stale rollouts.
+
+**Next.** Build [an evaluation contract](/tutorial/chapters/13-evaluation-and-design).

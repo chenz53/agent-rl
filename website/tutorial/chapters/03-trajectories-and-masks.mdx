@@ -2,39 +2,47 @@
 title: "Who generated each token?"
 ---
 
-A multi-turn agent alternates policy output and environment observations. Before computing a reward-weighted loss, establish token ownership. One incorrectly included tool-response segment can train the model to imitate records that it was supposed to retrieve.
+A multi-turn agent alternates policy output and environment observations. Chapter 2 produced a read/edit/test/submit trace. Before assigning probabilities or computing a loss, establish ownership of its text. One incorrectly included tool-response segment can train the model to imitate test output that should have come from execution.
 
 ## Context is not an action
 
 An assistant segment may contain reasoning text, a function request, or a final answer. If these tokens were sampled by the rollout policy and the objective trains them, they belong in the action mask. Prompt and environment tokens condition the model but have zero action mask. Template-supplied delimiters need their actual provenance checked; a thinking tag is not proof of generated reasoning.
 
-A trajectory log should preserve original sampled IDs, segment boundaries, policy version, actual sampling log-probabilities, tool inputs/outputs, reward components, and stop reason. A reconstructed chat rendering helps inspect visibility but may not reproduce sampled IDs. The existing Lesson 3A demonstrates this distinction with Qwen's real tokenizer.
+A trajectory log should preserve original sampled IDs, segment boundaries, policy version, actual sampling log-probabilities, tool inputs/outputs, reward components, and stop reason. A reconstructed chat rendering helps inspect visibility but may not reproduce sampled IDs. Chapter 2 distinguishes hand-authored messages from actual sampled tokens; a full model integration must retain its tokenizer and template version.
 
 ## Three masks, three jobs
 
-Attention controls what tokens can attend to. Padding masks identify valid sequence positions. Action masks select policy loss positions. Masking a tool result out of loss does not mask it out of attention. Packed batches additionally need boundaries that prevent one patient's sequence attending to another patient's tokens.
+Attention controls what tokens can attend to. Padding masks identify valid sequence positions. Action masks select policy loss positions. Masking a tool result out of loss does not mask it out of attention. Packed batches additionally need boundaries that prevent one coding task's sequence attending to another coding task's tokens.
 
-The experiment contains invented positions. Gradient is zero at environment positions in this loss, while a real transformer could still propagate gradient through its processing of their embeddings when generating later actions.
+The following hand-authored segments describe the clamp repair. There is no tokenizer yet: one mask entry represents one segment. Chapter 4 will refine ownership to tokens; chapter 6 will use it in a loss. No gradient calculation is required to understand this boundary.
 
 ```python
 import torch
-from nanoastra.posttraining import policy_gradient_loss
-logp = torch.tensor([[-1.0, -2.0, -3.0, -4.0, -5.0]], requires_grad=True)
-mask = torch.tensor([[0.0, 1.0, 0.0, 1.0, 1.0]])
-loss = policy_gradient_loss(logp, torch.tensor([0.3]), mask)
-loss.backward()
-print("loss:", round(loss.item(), 4))
-print("direct log-prob gradients:", logp.grad.tolist())
-print("masked gradient zero:", bool((logp.grad[mask == 0] == 0).all()))
+segments = [
+    ("issue", "Fix clamp bounds", "environment"),
+    ("reasoning", "Inspect the implementation", "policy"),
+    ("tool call", '{"name":"read_file","arguments":{"path":"clamp.py"}}', "policy"),
+    ("tool result", "def clamp ...", "environment"),
+    ("patch and submission", "write_file ... submit ...", "policy"),
+]
+# One abstract slot per segment; chapter 4 refines this to token positions.
+mask = torch.tensor([owner == "policy" for _, _, owner in segments])
+for (name, _, owner), selected in zip(segments, mask.tolist()):
+    print(f"{name}: owner={owner}, action_mask={int(selected)}")
+print("selected segment count:", int(mask.sum()))
 ```
 
 Output:
 
 ```text
-loss: 3.3
-direct log-prob gradients: [[-0.0, -0.30000001192092896, -0.0, -0.30000001192092896, -0.30000001192092896]]
-masked gradient zero: True
+issue: owner=environment, action_mask=0
+reasoning: owner=policy, action_mask=1
+tool call: owner=policy, action_mask=1
+tool result: owner=environment, action_mask=0
+patch and submission: owner=policy, action_mask=1
+selected segment count: 3
 ```
+
 
 ## Failure analysis
 
@@ -42,4 +50,4 @@ A run stopped at the generation limit is not necessarily a completed answer. Kee
 
 **Exercise.** Design a trace with generated reasoning, a call, two tool responses, and a final answer. Assign ownership before assigning any reward. Then intentionally drop a tool response from context and describe which later log-probabilities must change.
 
-**Next.** Use [grouped rollouts](/tutorial/chapters/04-rewards-and-advantages) to compute learning weights.
+**Next question.** How does the policy generate its reasoning and call text? Study [token probabilities](/tutorial/chapters/04-token-probabilities); rewards come afterward.

@@ -1,5 +1,6 @@
 """Execute trusted tutorial chapters and verify their adjacent stdout blocks."""
 import argparse
+import ast
 import contextlib
 import io
 import json
@@ -8,7 +9,6 @@ from pathlib import Path
 import re
 import sys
 ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / 'src'))
 PAIR = re.compile(r'```python\n(?P<code>.*?)\n```\n\nOutput:\n\n```text\n(?P<output>.*?)\n```', re.S)
 
 def main():
@@ -19,6 +19,11 @@ def main():
     records = []
     for path in sorted((ROOT/'tutorial/chapters').glob('*.md')):
         source = path.read_text()
+        prose_parts = re.split(r"```.*?```", source, flags=re.S)
+        for part in prose_parts:
+            for line in part.splitlines():
+                if "$$" in line and line.strip() != "$$":
+                    raise ValueError(f"{path}: display math delimiters must be on separate lines")
         if len(PAIR.findall(source)) != len(re.findall(r'^```python$', source, re.M)):
             raise ValueError(f'{path}: every Python block needs adjacent output')
         namespace = {'__name__': 'tutorial_snippet'}
@@ -26,6 +31,12 @@ def main():
         def execute(match):
             nonlocal block
             block += 1
+            tree = ast.parse(match['code'])
+            for node in ast.walk(tree):
+                if isinstance(node, ast.ImportFrom) and (node.module or "").startswith("nanoastra"):
+                    raise ValueError(f"{path}: teaching functions must be defined in the chapter")
+                if isinstance(node, ast.Import) and any(alias.name.startswith("nanoastra") for alias in node.names):
+                    raise ValueError(f"{path}: project helper imports are forbidden")
             capture = io.StringIO()
             with contextlib.redirect_stdout(capture):
                 exec(compile(match['code'], str(path), 'exec'), namespace)

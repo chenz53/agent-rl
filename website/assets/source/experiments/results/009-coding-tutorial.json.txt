@@ -1,0 +1,138 @@
+{
+  "chapters": 15,
+  "executed_blocks": 22,
+  "outputs": [
+    {
+      "chapter": "01-coding-task.md",
+      "block": 1,
+      "stdout": "repository file:\ndef clamp(value, lower, upper):\n    return min(lower, max(value, upper))\nissue reproduction: 0\nexpected: 3",
+      "matched": true
+    },
+    {
+      "chapter": "01-coding-task.md",
+      "block": 2,
+      "stdout": "baseline checks: {'inside': False, 'below': True, 'above': False, 'negative bounds': False, 'equal bounds': True, 'reversed bounds': False}\nbaseline pass count: 2 / 6",
+      "matched": true
+    },
+    {
+      "chapter": "01-coding-task.md",
+      "block": 3,
+      "stdout": "reference checks: {'inside': True, 'below': True, 'above': True, 'negative bounds': True, 'equal bounds': True, 'reversed bounds': True}\nreference pass count: 6 / 6",
+      "matched": true
+    },
+    {
+      "chapter": "02-coding-environment.md",
+      "block": 1,
+      "stdout": "tool names: ['read_file', 'write_file', 'run_tests', 'submit']\nwrite declaration: {\"description\": \"Replace the source\", \"name\": \"write_file\", \"parameters\": {\"additionalProperties\": false, \"properties\": {\"content\": {\"type\": \"string\"}, \"path\": {\"enum\": [\"clamp.py\"], \"type\": \"string\"}}, \"required\": [\"path\", \"content\"], \"type\": \"object\"}}",
+      "matched": true
+    },
+    {
+      "chapter": "02-coding-environment.md",
+      "block": 2,
+      "stdout": "baseline public results: {'inside': False}\nfixed evaluator results: {'inside': True, 'below': True, 'above': True, 'negative bounds': True, 'equal bounds': True, 'reversed bounds': True}",
+      "matched": true
+    },
+    {
+      "chapter": "02-coding-environment.md",
+      "block": 3,
+      "stdout": "read_file -> source returned reward: 0.0 remaining: 7\nrun_tests -> {'results': {'inside': False}} reward: 0.0 remaining: 6\nwrite_file -> {'status': 'written'} reward: 0.0 remaining: 5\nrun_tests -> {'results': {'inside': True}} reward: 0.0 remaining: 4\nsubmit -> {'status': 'submitted'} reward: 1.0 remaining: 3\nstop reason: submitted\ntrace length: 5\nevaluator-only test names disclosed: False\nreset restores broken file: True",
+      "matched": true
+    },
+    {
+      "chapter": "03-trajectories-and-masks.md",
+      "block": 1,
+      "stdout": "issue: owner=environment, action_mask=0\nreasoning: owner=policy, action_mask=1\ntool call: owner=policy, action_mask=1\ntool result: owner=environment, action_mask=0\npatch and submission: owner=policy, action_mask=1\nselected segment count: 3",
+      "matched": true
+    },
+    {
+      "chapter": "04-token-probabilities.md",
+      "block": 1,
+      "stdout": "full distribution: tensor([[0.0871, 0.2369, 0.6439, 0.0321]], dtype=torch.float64)\nselected shape: (1,)\nselected log-probability: tensor([-0.4402], dtype=torch.float64)\nall-logit gradients: tensor([[ 0.0261,  0.0711, -0.1068,  0.0096]], dtype=torch.float64)\ngradient identity: True\nshift invariant: True",
+      "matched": true
+    },
+    {
+      "chapter": "04-token-probabilities.md",
+      "block": 2,
+      "stdout": "full logits: (2, 3, 5, 7)\naligned targets: (2, 3, 4)\nselected log-probs: (2, 3, 4)\nflattened model batch: (6, 5)\ncross-entropy agreement: True",
+      "matched": true
+    },
+    {
+      "chapter": "05-rewards-and-advantages.md",
+      "block": 1,
+      "stdout": "rewards shape: (2, 4)\ncentered: tensor([[ 0.3000,  0.1000, -0.3000, -0.1000],\n        [-0.3000, -0.1000,  0.1000,  0.3000]], dtype=torch.float64)\nleave-one-out: tensor([[ 0.4000,  0.1333, -0.4000, -0.1333],\n        [-0.4000, -0.1333,  0.1333,  0.4000]], dtype=torch.float64)\nG/(G-1) identity: True\nall-equal group: tensor([[0., 0., 0., 0.]])",
+      "matched": true
+    },
+    {
+      "chapter": "06-policy-gradients.md",
+      "block": 1,
+      "stdout": "selected probability before: 0.25\nselected probability after: 0.255667\nincreased: True",
+      "matched": true
+    },
+    {
+      "chapter": "06-policy-gradients.md",
+      "block": 2,
+      "stdout": "masked loss: 2.1\nposition gradients: [-0.3, -0.3, -0.0, -0.3]\ntool-result gradient excluded: True",
+      "matched": true
+    },
+    {
+      "chapter": "07-values-and-returns.md",
+      "block": 1,
+      "stdout": "TD residuals: [0.2, 0.2, 0.4]\nGAE advantages: [0.751, 0.58, 0.4]\nlambda-return targets: [0.951, 0.98, 1.0]",
+      "matched": true
+    },
+    {
+      "chapter": "08-ppo-and-grpo.md",
+      "block": 1,
+      "stdout": "ratios: tensor([[1.4000, 1.0000],\n        [0.6000, 1.0000]])\nsurrogate loss: -0.03\nclipped positions have zero gradient: True",
+      "matched": true
+    },
+    {
+      "chapter": "09-sft-and-preferences.md",
+      "block": 1,
+      "stdout": "chosen=-3.0, rejected=-5.0, loss=0.313262\nchosen=-5.0, rejected=-3.0, loss=1.313262",
+      "matched": true
+    },
+    {
+      "chapter": "10-on-policy-distillation.md",
+      "block": 1,
+      "stdout": "fixed-prefix reverse KL: 0.315205\nexact gradient: tensor([-0.1278,  0.4262, -0.0877, -0.2107], dtype=torch.float64)\nenumerated score-function gradient: tensor([-0.1278,  0.4262, -0.0877, -0.2107], dtype=torch.float64)\ngradient match: True\nnaive expected gradient nearly zero: True",
+      "matched": true
+    },
+    {
+      "chapter": "11-kl-and-entropy.md",
+      "block": 1,
+      "stdout": "pointwise log-ratios: [0.470004, -0.916291]\nexact KL: 0.192745\nentropy: 0.500402\nnegative sampled value exists: True",
+      "matched": true
+    },
+    {
+      "chapter": "12-rollout-systems.md",
+      "block": 1,
+      "stdout": "sequence_sum 5.0\nsequence_mean 2.0\ntoken_mean 2.5",
+      "matched": true
+    },
+    {
+      "chapter": "13-evaluation-and-design.md",
+      "block": 1,
+      "stdout": "general repair public: True evaluator: True\ninside-only patch public: True evaluator: False\nunchanged input public: True evaluator: False",
+      "matched": true
+    },
+    {
+      "chapter": "14-research-frontier.md",
+      "block": 1,
+      "stdout": "full reverse KL: 0.100898\nrenormalized top-2 KL: 0.00321\ndiscarded student mass: 0.2",
+      "matched": true
+    },
+    {
+      "chapter": "15-coding-capstone.md",
+      "block": 1,
+      "stdout": "executable patch rewards: [0.0, 0.0, 1.0, 0.0]",
+      "matched": true
+    },
+    {
+      "chapter": "15-coding-capstone.md",
+      "block": 2,
+      "stdout": "initial patch policy: [0.25, 0.25, 0.25, 0.25]\ntrained patch policy: [0.0267, 0.0261, 0.9215, 0.0257]\ncorrect patch probability increased: True\nexpected evaluator reward improved: True",
+      "matched": true
+    }
+  ]
+}

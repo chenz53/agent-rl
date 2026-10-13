@@ -1,16 +1,7 @@
-# Learning roadmap
+# Current learning roadmap
 
-The project now has a [broader PyTorch post-training route](../tutorial/README.md) and the original oncology-first domain route. The domain route is a single sequence. Begin with [lesson 1](lessons/001-oncology-prognosis-from-files.md); the [lesson index](lessons/README.md) is the authoritative reading order.
+The active route is the [coding-first PyTorch post-training tutorial](../tutorial/README.md). Begin with a concrete bug and executable checks, construct read/edit/test/submit tools, identify generated trajectory segments, and only then introduce token probabilities and learning weights.
 
-1. Open the compressed clinical files and define the prognosis task, patient, and index.
-2. Reconstruct longitudinal evidence without future information, duplicate revisions, or unit errors.
-3. Define the evidence-acquisition environment and query decisions. Within lesson 3, read [chapter 3A](lessons/003a-tool-schemas-to-model-tokens.md) to trace schemas, complete tool results, message envelopes, and actual model input tokens.
-4. Define outcomes, censoring, evaluation, and candidate feedback.
-5. Explain how a collected trajectory produces a policy gradient.
-6. Connect the mechanism to real verl tools, group advantages, and policy loss.
+The sequence is task → environment → trajectory → probabilities → reward/advantage → policy update → values/returns → PPO/GRPO → SFT/DPO → on-policy distillation → KL/entropy → systems → evaluation → research alternatives → executable patch-selection capstone.
 
-Each lesson uses the same patient and attaches captured output immediately below executable code. New terminology appears when the workflow needs it. Do not jump to historical GPU material before establishing the clinical task and evidence boundary.
-
-After the six lessons, implement a bounded non-RL model rollout, verify real tokens/masks and stopping, establish appropriate independent evaluation, and then connect a full trainer. Later work includes exploration, rollout throughput, policy lag, failure recovery, calibration, censoring-aware analysis, and controlled research reproduction.
-
-Progress follows understanding and verified experiments, not a fixed timetable for expertise.
+DeepSWE is the public system reference. Every teaching function is defined in its chapter, and every executable Python block has captured output. The next scale-up milestone is a tokenizer-backed coding-agent rollout in an isolated repository environment, followed by independently evaluated training. Earlier lessons remain project history and are outside the active site.

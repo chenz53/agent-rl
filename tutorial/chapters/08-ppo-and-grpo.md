@@ -1,0 +1,72 @@
+# PPO and GRPO are families of concrete choices
+
+The previous chapters derived one fresh-sample update for clamp repairs. Reusing the same expensive coding traces for several updates changes the policy while keeping the traces fixed. That mismatch motivates the current/old probability ratio below. Each row is an illustrative clamp rollout; its two columns stand for generated action positions.
+
+Rollouts are expensive. After collecting them with an old policy, a trainer may perform multiple updates. The current policy then differs from the data-generating policy. Ratios and clipping address this reuse, but their precise placement and reduction define the algorithm.
+
+## Distinguish three distributions
+
+The behavior policy generated the tokens. The current policy is being optimized. A reference policy may regularize drift. They need not be the same model version. Stored old log-probabilities are detached; current log-probabilities are recomputed with gradients at the observed prefixes.
+
+At an action token, r=exp(log p_current - log p_old). A token-ratio PPO surrogate takes the minimum of rA and clipped(r)A, then minimizes its negative. The minimum handles both advantage signs: clipping constrains incentives, not every possible update. At identical policies, r=1; the gradient is still nonzero because current probabilities depend on theta.
+
+[PPO](https://arxiv.org/abs/1707.06347) introduced this clipped surrogate. [DeepSeekMath](https://arxiv.org/abs/2402.03300) introduced GRPO as a group-relative approach. A group baseline alone does not specify clipping, KL, reduction, or sampling correction. Those remain implementation choices.
+
+## Inspect clipping on a tiny batch
+
+The tensors below are stipulated log-probabilities. This computes only the policy surrogate, not a complete PPO or GRPO trainer.
+
+## Construct the surrogate and its reduction
+
+`reduce_tokens` multiplies by the action mask and checks every trajectory has at least one action. Its explicit reduction modes distinguish per-sequence sums, per-sequence means, and one pooled token mean. In `clipped_policy_loss`, subtract detached old log-probabilities from current log-probabilities, exponentiate to form ratios, broadcast `[N]` advantage weights to `[N,1]`, and compare unclipped versus clipped contributions elementwise. Finally negate the pooled token mean. These lines implement only the displayed surrogate, without a critic, KL term, or complete trainer.
+
+```python
+import torch
+def reduce_tokens(values, mask, reduction="sequence_sum"):
+    """Choose trajectory weighting explicitly; accepts [..., time]."""
+    counts = mask.sum(-1)
+    if (counts == 0).any():
+        raise ValueError("Empty action sequence; diagnose collection rather than hiding it")
+    totals = (values * mask).sum(-1)
+    if reduction == "sequence_sum":
+        return totals.mean()
+    if reduction == "sequence_mean":
+        return (totals / counts).mean()
+    if reduction == "token_mean":
+        return totals.sum() / counts.sum()
+    raise ValueError(reduction)
+
+def clipped_policy_loss(log_probs, old_log_probs, advantage, mask, eps=0.2):
+    """Token-ratio PPO surrogate only; no critic/KL/rollout correction included."""
+    ratio = (log_probs - old_log_probs.detach()).exp()
+    weights = advantage.detach().unsqueeze(-1)
+    surrogate = torch.minimum(ratio * weights, ratio.clamp(1-eps, 1+eps) * weights)
+    return -reduce_tokens(surrogate, mask, "token_mean")
+old = torch.tensor([[-1.0, -1.0], [-1.0, -1.0]])
+new = (old + torch.log(torch.tensor([[1.4, 1.0], [0.6, 1.0]]))).requires_grad_()
+a = torch.tensor([0.3, -0.3])
+loss = clipped_policy_loss(new, old, a, torch.ones_like(old))
+loss.backward()
+print("ratios:", (new.detach()-old).exp())
+print("surrogate loss:", round(loss.item(), 6))
+print("clipped positions have zero gradient:", bool(new.grad[0, 0] == 0 and new.grad[1, 0] == 0))
+```
+
+Output:
+
+```text
+ratios: tensor([[1.4000, 1.0000],
+        [0.6000, 1.0000]])
+surrogate loss: -0.03
+clipped positions have zero gradient: True
+```
+
+## What to inspect in production
+
+Record policy version lag, ratio percentiles, clipping fractions by advantage sign, entropy, reward components, and generated lengths. A scalar average ratio can hide severe token-level mismatch. Exact trajectory importance weighting is a product of ratios; practical token-ratio surrogates are not equivalent to that exact correction in an arbitrary multi-step process.
+
+[DAPO](https://arxiv.org/abs/2503.14476) and [Dr. GRPO](https://arxiv.org/abs/2503.20783) motivate examining clipping, filtering, and length weighting rather than treating a method name as a complete specification. Their results are task-specific evidence, not proof of a universal coding-agent recipe.
+
+**Exercise.** Increase r for a negative-advantage sample. Which side of the clipping interval matters? Derive the answer before changing the tensor.
+
+**Next.** Compare online reward training with [SFT and preference objectives](09-sft-and-preferences.md).

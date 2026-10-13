@@ -15,3 +15,5 @@ Only experiment 002 updates language-model parameters. Experiment 006 includes a
 - [007: Tool schemas, complete responses, and actual tokenizer traces](007-tool-schema-token-trace.md)
 
 - [008: PyTorch post-training tutorial and Mintlify reading edition](008-posttraining-tutorial.md)
+
+- [009: Coding-first, self-contained teaching edition](009-coding-tutorial.md) — current route

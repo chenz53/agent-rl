@@ -5,6 +5,9 @@ Reviewed: 2026-10-13. This ledger identifies what was actually inspected. It is 
 | Source | Evidence used | Boundary |
 | --- | --- | --- |
 | [D2L](https://github.com/d2l-ai/d2l-zh) and [softmax source](https://github.com/d2l-ai/d2l-zh/blob/master/chapter_linear-networks/softmax-regression-scratch.md) | Teaching structure and indexing explanation | Reference, no copied prose/code |
+| [DeepSWE release report](https://www.together.ai/blog/deepswe) | Coding-agent system motivation | Public report; no benchmark reproduction |
+| [Pinned rLLM SWE example](https://github.com/agentica-project/rllm/blob/7b47687f6a9ef1bf5cbd56dd1af61fff08c4b0e4/examples/swe/README.md) | Tool/environment integration reference; README inspected | SHA resolved 2026-10-13; no installation or training run |
+| [R2E-Gym](https://github.com/agentica-project/R2E-Gym) | Public repository reference | HEAD resolved to `353348a0ff690f2592025eff41b3fef4201a4d8b`; code not audited |
 | [PyTorch gather](https://pytorch.org/docs/stable/generated/torch.gather.html) | Tensor indexing semantics | Educational implementation uses installed PyTorch 2.9.1 |
 | [PPO](https://arxiv.org/abs/1707.06347), [GAE](https://arxiv.org/abs/1506.02438) | Sampled-action surrogate and value-based estimator | Tiny implementations, no full critic trainer |
 | [DeepSeekMath](https://arxiv.org/abs/2402.03300) | GRPO origin | Does not specify all present-day variants |

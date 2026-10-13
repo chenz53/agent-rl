@@ -21,3 +21,11 @@ Use original papers, official documentation, and exact source commits. Label pre
 ## Reproducibility
 
 Canonical Markdown is the source of truth; generated MDX must be rebuilt after edits. Execute trusted snippets with `scripts/check_tutorial_snippets.py`; every block needs adjacent captured Output. Use fixed CPU seeds and explicit dtype where useful. Keep experiment metadata and stdout in `experiments/`. A successful tiny gradient test is not a large-model benchmark reproduction.
+
+## Coding-first revision
+
+Use coding questions for every example, with the clamp issue as the continuous authored thread and DeepSWE as the public system reference. The dependency order is task, environment, trajectory ownership, token probability, learning signal, update. Start each chapter by answering why its mechanism is now needed.
+
+Define every teaching function visibly. Do not import project helpers. Explain argument shapes, intermediate tensors, validation, detachment, and reduction choices before using the function. Repeated local definitions preserve standalone chapter execution. PyTorch and standard-library primitives are allowed; implementation shortcuts must not conceal the mechanism.
+
+Display math must use `$$` on its own opening and closing lines with blank lines around the block. Use Mermaid for simple interaction or dependency diagrams; use numerical experiments to validate the mechanism rather than decorative diagrams. The checker must enforce helper-import and math-format rules.

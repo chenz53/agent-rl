@@ -1,11 +1,11 @@
 ---
-title: "Repository, provenance, and scope"
+title: "Repository, evidence, and scope"
 ---
 
-The canonical repository is nanoAstra. `tutorial/chapters/` holds newly authored post-training chapters; `docs/lessons/` holds the continuous oncology case study. `src/nanoastra/posttraining.py` contains small PyTorch teaching primitives. `scripts/check_tutorial_snippets.py` executes trusted chapter code and verifies stdout. `scripts/build_tutorial_site.py` regenerates this reading edition.
+This reading edition teaches post-training entirely through coding tasks. The canonical chapters are in `tutorial/chapters/`; every teaching function is defined in its chapter. `scripts/check_tutorial_snippets.py` executes the trusted examples and verifies captured output. `scripts/build_tutorial_site.py` generates the Mintlify edition.
 
-Some original lessons refer to fixture or source directories. Those directory references lead here because this interface is a book, not a file browser. Open the local repository to inspect the full trees. Linked individual source files are provided as text downloads where applicable.
+DeepSWE, rLLM, and R2E-Gym are public reference systems. The authored clamp problem makes concepts executable; it is not their dataset or benchmark. See the [source ledger](/tutorial/sources) and [editorial guide](/tutorial/editorial-guide).
 
-D2L informs the explanatory progression; its text and examples were not copied. See the [editorial policy](/tutorial/editorial-guide). All clinical fixtures are synthetic. Tiny optimizer demonstrations and author-reported benchmark results have separate evidence labels.
+The repository retains earlier material as historical project records. It is outside this edition's reading route and exported pages. The current experiment record is [009](/experiments/009-coding-tutorial).
 
-The Mintlify project is prepared locally. A hosted site has not been published. Hosting setup requires choosing a deployment destination; this repository does not invent a public GitHub URL or upload clinical data.
+The local Mintlify site has not been publicly hosted. Small coding-function execution uses trusted authored source strings; complete model-generated repair runs require isolated execution infrastructure and independent evaluation.

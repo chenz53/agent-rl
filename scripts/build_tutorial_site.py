@@ -8,11 +8,9 @@ ROOT = Path(__file__).resolve().parents[1]
 SITE = ROOT / 'website'
 
 def main():
-    # Only generated trees are replaced; never alter canonical materials.
-    for name in ('tutorial', 'docs', 'experiments', 'assets'):
-        if (SITE/name).exists():
-            shutil.rmtree(SITE/name)
-    markdown = list((ROOT/'tutorial').rglob('*.md')) + list((ROOT/'docs').rglob('*.md')) + list((ROOT/'experiments').glob('*.md'))
+    # Export only the active coding edition. Historical source remains untouched.
+    generated = set()
+    markdown = list((ROOT/'tutorial').rglob('*.md')) + [ROOT/'experiments/009-coding-tutorial.md']
     paths = {p.resolve(): p.relative_to(ROOT).with_suffix('').as_posix() for p in markdown}
     assets = set()
     for source in markdown:
@@ -42,6 +40,7 @@ def main():
                 else:
                     shutil.copyfile(resolved, destination)
                 assets.add(destination.relative_to(SITE).as_posix())
+                generated.add(destination.resolve())
                 url = '/' + destination.relative_to(SITE).as_posix()
             else:
                 # Directory references open the repository-navigation guide.
@@ -61,23 +60,31 @@ def main():
         out = SITE/(paths[source.resolve()]+'.mdx')
         out.parent.mkdir(parents=True, exist_ok=True)
         out.write_text('---\ntitle: '+json.dumps(title)+'\n---\n\n'+''.join(pieces)+'\n')
+        generated.add(out.resolve())
     chapters = [paths[p.resolve()] for p in sorted((ROOT/'tutorial/chapters').glob('*.md'))]
-    case = [paths[p.resolve()] for p in sorted((ROOT/'docs/lessons').glob('[0-9]*.md'))]
+    # Remove obsolete generated pages only after replacements have been written.
+    for name in ('tutorial', 'docs', 'experiments', 'assets'):
+        tree = SITE/name
+        if tree.exists():
+            for file in tree.rglob('*'):
+                if file.is_file() and file.resolve() not in generated:
+                    file.unlink()
     config = {
         '$schema': 'https://mintlify.com/docs.json', 'theme': 'mint',
         'name': 'nanoAstra · Hands-on Post-training',
         'colors': {'primary': '#0D9488', 'light': '#14B8A6', 'dark': '#0F766E'},
         'navigation': {'groups': [
             {'group': 'Start here', 'pages': ['index','tutorial/README']},
-            {'group': 'Foundations and policy optimization', 'pages': chapters[:8]},
-            {'group': 'Distillation, systems, and experiments', 'pages': chapters[8:]},
-            {'group': 'Oncology case study', 'pages': case},
-            {'group': 'Evidence and reproducibility', 'pages': ['tutorial/sources','tutorial/editorial-guide','experiments/008-posttraining-tutorial','about']},
+            {'group': 'Coding task and agent interaction', 'pages': chapters[:4]},
+            {'group': 'From feedback to policy updates', 'pages': chapters[4:8]},
+            {'group': 'Other post-training signals', 'pages': chapters[8:11]},
+            {'group': 'Systems, evaluation, and experiments', 'pages': chapters[11:]},
+            {'group': 'Evidence and reproducibility', 'pages': ['tutorial/sources','tutorial/editorial-guide','experiments/009-coding-tutorial','about']},
         ]},
     }
     (SITE/'docs.json').write_text(json.dumps(config, indent=2)+'\n')
-    (SITE/'build-manifest.json').write_text(json.dumps({'generated_markdown_pages': len(markdown), 'new_chapters': len(chapters), 'case_study_lessons': len(case), 'source_assets': sorted(assets)}, indent=2)+'\n')
-    print(f'Generated {len(markdown)} pages, {len(chapters)} new chapters, {len(case)} case-study lessons')
+    (SITE/'build-manifest.json').write_text(json.dumps({'generated_markdown_pages': len(markdown), 'new_chapters': len(chapters), 'active_case': 'coding repair', 'source_assets': sorted(assets)}, indent=2)+'\n')
+    print(f'Generated {len(markdown)} pages, {len(chapters)} new chapters, coding-only reading route')
 
 if __name__ == '__main__':
     main()

@@ -1,0 +1,43 @@
+---
+title: "Experiment 009: Coding-first, self-contained teaching edition"
+---
+
+Date: 2026-10-13. Supersedes the active reading route of experiment 008 in response to the learner's five requested changes.
+
+## The revised contract
+
+All current chapter examples use coding repair questions. The first chapter references DeepSWE, then reproduces the authored clamp bug and constructs an executable verifier. The second builds read/write/test/submit tools and state from scratch. Trajectory ownership precedes token probabilities, which precede rewards and updates. Every teaching function is defined locally; no chapter imports `nanoastra` helpers. Display equations have opening/closing `$$` on separate lines. Mermaid diagrams show the repair loop, runtime boundary, and sampled-policy update loop.
+
+The user's existing manual formula-formatting change was preserved by carrying the expression to renamed chapter 4 and normalizing all display equations to the same convention.
+
+## Reproduce
+
+```sh
+# In the existing vp checkout:
+.venv/bin/python scripts/check_tutorial_snippets.py
+
+# Generate and preview from the local checkout:
+python3 scripts/build_tutorial_site.py
+cd website
+mint broken-links
+mint dev
+```
+
+Environment: existing `vp` Python 3.12.3 and PyTorch 2.9.1+cu126. Compact tensor tests run on CPU. The checker uses fresh namespaces per chapter and rejects project helper imports. Source and test strings are trusted, authored teaching fixtures; there is no claim that Python `exec` is a secure sandbox.
+
+## Scope of the measured behavior
+
+The baseline clamp source passes two of six stated evaluator cases. The reference repair passes all six. The environment trace executes a read, failed public test, edit, successful public test, and submission. The final patch-selection capstone derives binary rewards by actually evaluating four authored patches and performs 80 sampled on-policy updates.
+
+[Captured outputs](/assets/source/experiments/results/009-coding-tutorial.json.txt) contain fifteen chapters and twenty-two Python blocks. Strict re-execution, site lint, and rendered-page inspection are recorded below after execution.
+
+DeepSWE integration documentation is a pinned reference; its large-model training and benchmark results were not reproduced. Earlier project lessons are retained locally as history and excluded from this coding reading edition.
+
+## Observed verification
+
+- All 22 executable blocks across 15 chapters passed a strict fresh-run stdout comparison, helper-import checks, and display-math formatting checks.
+- The scripted coding environment returns public failure before editing, public success afterward, and terminal reward 1.0 on submission; evaluator-only test names do not appear in tool observations.
+- Executable candidate rewards are `[0.0, 0.0, 1.0, 0.0]`; the sampled patch policy raises correct-patch probability from 0.25 to approximately 0.9215.
+- `mint broken-links` passes. The reading edition exports 19 Markdown-derived pages and no historical domain pages or assets.
+- Browser inspection confirms the revised task/environment/trajectory/probability navigation order, actual executed code/output, a rendered repair-loop Mermaid SVG, and visibly centered display equations in chapter 4.
+- The existing local Mintlify preview runs at `http://localhost:3333`. No public deployment or complete DeepSWE run occurred.

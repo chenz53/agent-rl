@@ -47,3 +47,7 @@ Added Lesson 3A within the oncology-first route: 13 executed examples trace tool
 ## 2026-10-13: broader PyTorch post-training tutorial
 
 Expanded to fourteen new chapters and fifteen executed Python blocks, including full-vocabulary versus sampled-token objectives, grouping/baseline design, values/GAE, SFT/DPO, on-policy distillation, KL, system contracts, and a complete small sampled-policy update. Generated a Mintlify reading edition incorporating the existing oncology track. Sources and frontier proposals are dated and evidence-labeled. See [experiment 008](experiments/008-posttraining-tutorial.md). No full autonomous clinical-model training or public deployment is claimed.
+
+## 2026-10-13: coding-first revision
+
+The learner replaced the domain case with coding tasks and requested locally constructed functions, a connected learning order, display-math line breaks, and useful visuals. The active route now has fifteen chapters and twenty-two executable blocks. It starts from a clamp issue, then tools/environment, trajectory ownership, token probabilities, feedback, and updates. All own helpers are defined in chapter code. The site exports only this coding edition; earlier domain work is history. See [experiment 009](experiments/009-coding-tutorial.md). The new patch-selection capstone uses executable tests; it is not a complete DeepSWE reproduction.
