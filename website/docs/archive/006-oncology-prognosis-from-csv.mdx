@@ -48,7 +48,7 @@ MIMIC-IV uses names such as `patients`, `admissions`, `diagnoses_icd`, `labevent
 
 OMOP uses domains such as `condition_occurrence`, `measurement`, `drug_exposure`, and `note`. Its oncology work links disease/treatment episodes to lower-level events. A mapping to that model would require explicit terminology and event relationships; changing filenames would not make this fixture OMOP-compliant. [OHDSI oncology model](https://ohdsi.github.io/OncologyWG/model.html).
 
-The separate [evaluator_only/mortality.csv.gz](/assets/source/fixtures/oncology/evaluator_only/mortality.csv.gz.txt) is never loaded by the agent-facing projection. It contains death and follow-up information for label construction. This is a code-level boundary for the read-only tool, not an OS sandbox: do not give a future model an unrestricted shell with access to that directory.
+The separate [evaluator_only/mortality.csv.gz](/assets/source/fixtures/oncology/evaluator_only/mortality.csv.txt) is never loaded by the agent-facing projection. It contains death and follow-up information for label construction. This is a code-level boundary for the read-only tool, not an OS sandbox: do not give a future model an unrestricted shell with access to that directory.
 
 ## 3. Read the compressed CSV correctly
 

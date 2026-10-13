@@ -21,7 +21,7 @@
     "assets/source/experiments/results/006-curriculum-snippets.json.txt",
     "assets/source/experiments/results/007-schema-chapter-snippets.json.txt",
     "assets/source/experiments/results/008-posttraining-tutorial.json.txt",
-    "assets/source/fixtures/oncology/evaluator_only/mortality.csv.gz.txt",
+    "assets/source/fixtures/oncology/evaluator_only/mortality.csv.txt",
     "assets/source/scripts/demo_gpu_update.py.txt",
     "assets/source/scripts/demo_tool_roundtrip.py.txt",
     "assets/source/scripts/generate_oncology_fixture.py.txt",

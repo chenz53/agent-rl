@@ -1,4 +1,5 @@
 """Generate the Mintlify reading edition from canonical repository Markdown."""
+import gzip
 import json
 from pathlib import Path
 import re
@@ -33,9 +34,13 @@ def main():
                 relative = resolved.relative_to(ROOT)
                 destination = SITE/'assets/source'/relative
                 # Source files become explicit downloadable text; no execution.
-                destination = destination.with_name(destination.name + '.txt')
+                destination = destination.with_name(destination.name.removesuffix(".gz") + ".txt")
                 destination.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(resolved, destination)
+                if resolved.suffix == ".gz":
+                    with gzip.open(resolved, "rt", encoding="utf-8") as handle:
+                        destination.write_text(handle.read())
+                else:
+                    shutil.copyfile(resolved, destination)
                 assets.add(destination.relative_to(SITE).as_posix())
                 url = '/' + destination.relative_to(SITE).as_posix()
             else:
