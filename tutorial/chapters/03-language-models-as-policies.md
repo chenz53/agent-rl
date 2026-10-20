@@ -1,0 +1,515 @@
+# 3. Language Models as Policies
+
+Chapter 2 wrote a policy as a conditional distribution $\pi(a\mid s)$ and treated it as a table. A coding agent's policy is a language model. Its state is a token prefix, its actions are strings, and the probabilities of those strings come from a softmax over a vocabulary of up to hundreds of thousands of entries. Every algorithm in Part II consumes one quantity from this model, the log-probability of the tokens the agent actually emitted. This chapter shows how to compute that quantity correctly, and explains why "correctly" depends on how the tokens were sampled.
+
+We build four things and save them for the rest of the book: the selected-token log-probability, the entropy of a next-token distribution, a sampler that reports the probability of what it sampled under the distribution it actually used, and **TinyAgent**, the small transformer that later chapters train on the BugFix gym. We then switch to the real Qwen3-0.6B model to measure what changes at production vocabulary sizes: the memory of the logits tensor, chunked log-probability computation, and the precision of bf16 log-probabilities.
+
+## 3.1 From next-token prediction to a policy
+
+A language model with parameters $\theta$ defines a distribution over the next token $y_i$ given a prefix $c_i$ (the prompt plus every token before position $i$). For a response $y = (y_1, \dots, y_n)$ the probability factorizes autoregressively:
+
+$$
+\pi_\theta(y \mid c) = \prod_{i=1}^{n} \pi_\theta(y_i \mid c_i), \qquad \log \pi_\theta(y \mid c) = \sum_{i=1}^{n} \log \pi_\theta(y_i \mid c_i).
+$$
+
+This factorization makes the model a policy at two granularities at once. At the **token level**, the state is the prefix $c_i$ and the action is one token $y_i$. At the **turn level** (Chapter 2's casting), the action $a_t$ is a whole message, such as `<call> read </call>`, and its log-probability is the sum of the token log-probabilities inside it. Both views use the same per-token numbers. They differ only in how later chapters assign credit to those numbers.
+
+The model outputs **logits** $z \in \mathbb{R}^V$, one per vocabulary entry. The next-token distribution is the softmax of the logits, so the log-probability of the chosen token $y$ is
+
+$$
+\log \pi_\theta(y \mid c) = z_y - \log \sum_{v=1}^{V} \exp z_v .
+$$
+
+The second term, the log-partition function, couples the chosen token to every other entry of the vocabulary. In code this is a `log_softmax` over the vocabulary axis followed by a `gather` of the chosen index. The batch and time axes pass through untouched: logits of shape `[B, T, V]` and ids of shape `[B, T]` produce log-probabilities of shape `[B, T]`.
+
+```python
+#@save
+import math
+import random
+import re
+from dataclasses import dataclass, field
+import torch
+from torch import nn
+import torch.nn.functional as F
+```
+
+```python
+#@save
+def selected_log_probs(logits, ids):
+    """Log-probability of each chosen id: logits [..., V], ids [...] -> [...]."""
+    if logits.dtype in (torch.float16, torch.bfloat16):
+        logits = logits.float()                    # normalize in fp32 (Section 3.6)
+    logp = torch.log_softmax(logits, dim=-1)        # [..., V], normalized over V
+    return logp.gather(-1, ids.unsqueeze(-1)).squeeze(-1)
+```
+
+`gather` reads one entry along the last axis for every leading index. `ids.unsqueeze(-1)` gives the index tensor the required trailing axis of length 1, and `squeeze(-1)` removes it again. The function upcasts half-precision logits before normalizing. Section 3.6 measures why this matters.
+
+We check the function against the negative cross-entropy that every pretraining loop already computes, and against the property that separates a log-probability from a raw logit: adding a constant to every logit leaves the distribution unchanged.
+
+```python
+torch.manual_seed(0)
+logits = torch.randn(2, 3, 5)                       # [B, T, V]
+ids = torch.randint(0, 5, (2, 3))                   # [B, T]
+logp = selected_log_probs(logits, ids)              # [B, T]
+ce = F.cross_entropy(logits.reshape(-1, 5), ids.reshape(-1), reduction='none')
+print('logp shape:', tuple(logp.shape))
+print('equals -cross_entropy:', torch.allclose(logp, -ce.view(2, 3)))
+print('sequence log-probs [B]:', logp.sum(-1).round(decimals=4))
+shifted = logits + 7.0
+print('logp unchanged by shift:', torch.allclose(selected_log_probs(shifted, ids), logp))
+raw = lambda z: z.gather(-1, ids.unsqueeze(-1))
+print('raw logit unchanged by shift:', torch.allclose(raw(shifted), raw(logits)))
+```
+
+Output:
+
+```text
+logp shape: (2, 3)
+equals -cross_entropy: True
+sequence log-probs [B]: tensor([-4.7175, -3.5096])
+logp unchanged by shift: True
+raw logit unchanged by shift: False
+```
+
+The selected log-probability equals the negative per-token cross-entropy, so a policy-gradient loss and an SFT loss read the same number from the model. They differ in which tokens they include and how they weight them. Summing over the time axis gives the sequence log-probability of each of the two sequences. The last line shows the common bug of gathering logits without normalizing: the gathered logit moves by 7 when nothing about the distribution has changed, so it cannot be a probability.
+
+> **Pitfall.** `logits.gather(...)` followed by a loss runs without error and trains something. It increases the chosen logit without pushing down the alternatives through the partition function, so it optimizes a different objective. Always normalize over the full vocabulary before gathering.
+
+## 3.2 Stable log-probabilities and entropy
+
+The formula $z_y - \log\sum_v \exp z_v$ is exact, but each way of evaluating it in floating point fails differently. Computing `softmax(z)` and then taking `log` underflows: when a logit is far below the maximum, its probability rounds to zero in fp32 and its log becomes `-inf`. Exponentiating large logits directly overflows instead. The **log-sum-exp** identity removes both problems by factoring out the maximum $m = \max_v z_v$:
+
+$$
+\log \sum_v \exp z_v = m + \log \sum_v \exp(z_v - m).
+$$
+
+Every exponent is now at most zero, so nothing overflows, and the largest term contributes exactly 1, so the sum never underflows to zero. `torch.log_softmax` and `torch.logsumexp` implement this identity.
+
+```python
+z = torch.tensor([0.0, -50.0, -120.0])              # one far-below-max logit
+print('softmax().log():', z.softmax(-1).log())
+print('log_softmax():  ', z.log_softmax(-1))
+big = torch.tensor([1000.0, 999.0])
+naive = big.exp().sum().log()
+m = big.max()
+stable = m + (big - m).exp().sum().log()
+print('naive logsumexp:', naive.item(), '| stable:', round(stable.item(), 4),
+      '| torch:', round(torch.logsumexp(big, 0).item(), 4))
+```
+
+Output:
+
+```text
+softmax().log(): tensor([  0., -50., -inf])
+log_softmax():   tensor([   0.,  -50., -120.])
+naive logsumexp: inf | stable: 1000.3132 | torch: 1000.3132
+```
+
+The third token has probability $e^{-120} \approx 10^{-52}$, below the smallest fp32 subnormal, so `softmax().log()` reports `-inf` while `log_softmax` returns the exact $-120$. Policy-gradient code multiplies this value by an advantage. A `-inf` turns into `nan` and destroys the whole batch, so the failure is not cosmetic. The naive log-sum-exp of `[1000, 999]` overflows to `inf`, and the shifted version returns $1000 + \log(1 + e^{-1}) = 1000.3133$.
+
+The **entropy** of the next-token distribution, $H(\pi(\cdot\mid c)) = -\sum_v p_v \log p_v$, measures how spread out the policy is at a prefix. RL monitors it constantly, because a collapsing entropy means the policy has stopped exploring (Chapter 10). We compute it from `log_softmax` as well. One detail matters: sampling filters such as top-p set some logits to $-\infty$. For those tokens $p_v = 0$ and $\log p_v = -\infty$, and the product $0 \cdot (-\infty)$ is `nan` in floating point. The limit is 0, so we write that explicitly.
+
+```python
+#@save
+def entropy_from_logits(logits):
+    """Entropy of softmax(logits) over the last axis: [..., V] -> [...]."""
+    logp = torch.log_softmax(logits.float(), dim=-1)
+    p = logp.exp()
+    return -(p * torch.where(p > 0, logp, 0.0)).sum(-1)   # 0 * log 0 := 0
+```
+
+```python
+V = 5
+print('uniform:', round(entropy_from_logits(torch.zeros(V)).item(), 4),
+      '= log V =', round(math.log(V), 4))
+print('peaked: ', round(entropy_from_logits(torch.tensor([8.0, 0, 0, 0, 0])).item(), 4))
+masked = torch.tensor([1.0, 1.0, float('-inf'), float('-inf'), float('-inf')])
+print('two live tokens:', round(entropy_from_logits(masked).item(), 4), '= log 2 =', round(math.log(2), 4))
+```
+
+Output:
+
+```text
+uniform: 1.6094 = log V = 1.6094
+peaked:  0.0121
+two live tokens: 0.6931 = log 2 = 0.6931
+```
+
+The uniform distribution attains the maximum entropy $\log V$, a peaked distribution approaches zero, and a distribution with three masked tokens has exactly the entropy of a fair coin and no `nan`. The maximum $\log V$ is worth remembering as a scale. For Qwen3's vocabulary it is about 11.9 nats, and a trained model's per-token entropy on code is usually a small fraction of that.
+
+## 3.3 Sampling defines the behavior policy
+
+A deployed model rarely samples from $\mathrm{softmax}(z)$ directly. Inference stacks transform the logits first, and those transformations define the policy that generated the data. Three are standard:
+
+- **Temperature** $\tau$ divides the logits: $p \propto \exp(z/\tau)$. A value $\tau < 1$ sharpens the distribution, $\tau > 1$ flattens it, and $\tau \to 0$ approaches greedy decoding.
+- **Top-k** keeps the $k$ largest logits and renormalizes.
+- **Top-p** (nucleus) sorts the tokens by probability and keeps the smallest prefix whose cumulative probability reaches $p$, then renormalizes.
+
+The book's rule follows from the definition of a policy. **The behavior policy $\mu$ is the distribution the sampler actually drew from, including temperature and truncation.** When a trainer later needs the probability of a sampled token, for example the denominator of an importance ratio (Chapter 8), it must use $\mu$ and not the raw softmax. The Qwen3 model card recommends temperature 0.6, top-p 0.95, and top-k 20 for thinking mode, and it warns against greedy decoding ([Qwen3-0.6B model card](https://huggingface.co/Qwen/Qwen3-0.6B), inspected 2026-10-13). A rollout that follows that advice samples from a distribution that differs from $\mathrm{softmax}(z)$ at every position.
+
+We implement the transformation once, so the sampler and any trainer that wants to reproduce it share one definition. `sampling_log_probs` returns the full log-distribution of the sampler, with `-inf` for excluded tokens, and `sample_next` draws from it and returns the log-probability of the drawn token under that same distribution.
+
+```python
+#@save
+def sampling_log_probs(logits, temperature=1.0, top_p=1.0):
+    """Log-probs of the distribution actually sampled from: [..., V] -> [..., V], -inf = excluded."""
+    logp = torch.log_softmax(logits.float() / temperature, dim=-1)
+    if top_p >= 1.0:
+        return logp
+    sorted_logp, order = logp.sort(dim=-1, descending=True)
+    mass_before = sorted_logp.exp().cumsum(-1) - sorted_logp.exp()   # mass of strictly larger tokens
+    drop = torch.zeros_like(logp, dtype=torch.bool).scatter(-1, order, mass_before >= top_p)
+    return torch.log_softmax(logp.masked_fill(drop, float('-inf')), dim=-1)
+
+
+def sample_next(logits, temperature=1.0, top_p=1.0, generator=None):
+    """Sample from logits [B, V] -> (ids [B], logp [B]) under the sampling distribution."""
+    if temperature <= 0:                           # greedy: a deterministic policy
+        ids = logits.argmax(-1)
+        return ids, torch.zeros(ids.shape)          # log 1 = 0
+    logp = sampling_log_probs(logits, temperature, top_p)
+    ids = torch.multinomial(logp.exp(), 1, generator=generator).squeeze(-1)
+    return ids, logp.gather(-1, ids.unsqueeze(-1)).squeeze(-1)
+```
+
+The top-p rule keeps a token when the probability mass of the tokens ranked above it is still below $p$. The most likely token is therefore always kept, and the kept set is the smallest prefix that reaches $p$. `scatter` writes the drop decision from sorted order back to vocabulary order. Greedy decoding is treated as a deterministic policy: the chosen token has probability 1 under it, so its log-probability is 0. That value is correct, but it also shows why greedy data cannot feed a policy-gradient estimator, since the policy assigns zero probability to every alternative it might have explored.
+
+The next block draws 20,000 samples at each of three settings from one six-token distribution and compares the empirical frequencies with the probabilities that `sampling_log_probs` reports.
+
+```python
+logits6 = torch.tensor([[2.0, 1.5, 1.0, 0.0, -1.0, -2.0]])          # [1, V]
+gen = torch.Generator().manual_seed(0)
+for temperature, top_p in [(1.0, 1.0), (0.5, 1.0), (1.0, 0.8)]:
+    probs = sampling_log_probs(logits6, temperature, top_p).exp()[0]
+    draws, _ = sample_next(logits6.expand(20000, 6), temperature, top_p, generator=gen)
+    freq = torch.bincount(draws, minlength=6) / 20000
+    print(f'T={temperature} top_p={top_p}: p =', [round(x, 3) for x in probs.tolist()])
+    print('                   freq =', [round(x, 3) for x in freq.tolist()])
+```
+
+Output:
+
+```text
+T=1.0 top_p=1.0: p = [0.459, 0.278, 0.169, 0.062, 0.023, 0.008]
+                   freq = [0.457, 0.28, 0.174, 0.059, 0.022, 0.008]
+T=0.5 top_p=1.0: p = [0.656, 0.241, 0.089, 0.012, 0.002, 0.0]
+                   freq = [0.653, 0.24, 0.093, 0.011, 0.002, 0.0]
+T=1.0 top_p=0.8: p = [0.506, 0.307, 0.186, 0.0, 0.0, 0.0]
+                   freq = [0.5, 0.304, 0.196, 0.0, 0.0, 0.0]
+```
+
+In every row the empirical frequencies match the reported probabilities to within sampling noise (a standard error of about 0.0035 at this sample size). At temperature 0.5 the top token's probability grows from 0.459 to 0.656. With top-p 0.8 the last three tokens are excluded entirely: their sampling probability is exactly 0, and the remaining three are renormalized. A trainer that scores those samples with the raw softmax (the first row) would use the wrong denominator in every importance ratio.
+
+![Figure 3.1: Entropy of a next-token distribution as a function of temperature, for logits of three scales, and the token probabilities of one distribution at three temperatures.](../figures/ch03-temperature.svg)
+
+Figure 3.1 shows both effects of temperature. In the left panel, every curve rises monotonically from 0 (greedy) toward the ceiling $\log V$. Sharper logits (larger scale) need a higher temperature to reach the same entropy. The right panel shows the mechanism: lowering $\tau$ moves mass to the top token, and raising it spreads mass toward the tail. A rollout temperature therefore sets the exploration level of RL directly, and Chapter 10 returns to this when it discusses entropy collapse.
+
+## 3.4 TinyAgent
+
+The rest of the book needs a policy that is small enough to train with RL on a CPU in about a minute, yet is a real autoregressive transformer, so that every phenomenon we study (format learning, entropy collapse, reward hacking, length effects) arises from the same mechanics as in a large model. **TinyAgent** is a pre-norm decoder-only transformer with learned positional embeddings, a causal mask, and an untied output head. Its interface is the only thing later chapters rely on: ids `[B, T]` in, logits `[B, T, V]` out. `rollout` (Chapter 5) accepts any module with that interface.
+
+We use PyTorch's `nn.TransformerEncoderLayer` with a causal mask instead of writing attention by hand. The reader already knows the transformer block, and the book's subject is what happens around it. Dropout is disabled, because RL needs the forward pass at sampling time and at training time to compute the same distribution. Section 3.7 shows what a mismatch costs.
+
+```python
+#@save
+class TinyAgent(nn.Module):
+    """Small causal transformer policy: ids [B, T] -> logits [B, T, V]."""
+    def __init__(self, vocab_size, d_model=64, n_layers=2, n_heads=4, max_len=256):
+        super().__init__()
+        self.max_len = max_len
+        self.tok_emb = nn.Embedding(vocab_size, d_model)
+        self.pos_emb = nn.Embedding(max_len, d_model)
+        layer = nn.TransformerEncoderLayer(d_model, n_heads, 4 * d_model, dropout=0.0,
+                                           batch_first=True, norm_first=True)
+        self.blocks = nn.TransformerEncoder(layer, n_layers, enable_nested_tensor=False)
+        self.norm = nn.LayerNorm(d_model)
+        self.head = nn.Linear(d_model, vocab_size)
+
+    def forward(self, ids):
+        T = ids.shape[1]
+        h = self.tok_emb(ids) + self.pos_emb(torch.arange(T, device=ids.device))  # [B, T, D]
+        causal = nn.Transformer.generate_square_subsequent_mask(T, device=ids.device)
+        h = self.blocks(h, mask=causal, is_causal=True)                            # [B, T, D]
+        return self.head(self.norm(h))                                             # [B, T, V]
+```
+
+Chapter 5 builds a vocabulary of a little over 300 words for the BugFix gym, so we instantiate a model of that size here. Two properties must hold before we trust it as a policy. The output must have the right shape, and the model must be causal: the logits at position $t$ may not depend on any token after $t$. Otherwise the probability of a token would depend on its own future, and the factorization of Section 3.1 would no longer describe the model.
+
+```python
+torch.manual_seed(0)
+model = TinyAgent(vocab_size=320)
+n_params = sum(p.numel() for p in model.parameters())
+ids = torch.randint(0, 320, (2, 12))                     # [B, T]
+logits = model(ids)                                      # [B, T, V]
+print('parameters:', n_params, '| logits shape:', tuple(logits.shape))
+edited = ids.clone()
+edited[:, 8:] = 0                                        # change only the future of position 7
+same = torch.allclose(model(edited)[:, :8], logits[:, :8], atol=1e-6)
+print('positions 0-7 unaffected by tokens 8-11:', same)
+print('initial entropy (mean):', round(entropy_from_logits(logits).mean().item(), 3),
+      '| log V =', round(math.log(320), 3))
+```
+
+Output:
+
+```text
+parameters: 157760 | logits shape: (2, 12, 320)
+positions 0-7 unaffected by tokens 8-11: True
+initial entropy (mean): 5.601 | log V = 5.768
+```
+
+TinyAgent has about 158 thousand parameters, and more than a third of them (57,664) sit in the token embedding, the positional embedding, and the output layer. Changing tokens 8 to 11 leaves the logits at positions 0 to 7 unchanged, so the causal mask works. The freshly initialized model has an entropy close to $\log V$: it is nearly a uniform distribution over the vocabulary. Chapter 5 shows what such a policy does in the gym. It almost never emits a well-formed tool call.
+
+`sequence_log_probs` connects the model to the training objective. It runs one forward pass over a complete sequence and returns the log-probability of every token after the first. The logits at position $t$ predict token $t+1$, so the logits are trimmed at the end and the ids at the start. The output has shape `[B, T-1]`, and its column $j$ belongs to token `ids[:, j+1]`. Every mask and every stored log-probability in this book uses that alignment, which we call the **predicted positions**.
+
+```python
+#@save
+def sequence_log_probs(model, ids):
+    """Log-probs of ids[:, 1:] given their prefixes: ids [B, T] -> [B, T-1]."""
+    logits = model(ids)                                   # [B, T, V]
+    return selected_log_probs(logits[:, :-1], ids[:, 1:])
+```
+
+```python
+logp = sequence_log_probs(model, ids)                     # [B, T-1]
+by_hand = torch.log_softmax(model(ids[:, :5])[0, 3], -1)[ids[0, 4]]
+print('shape:', tuple(logp.shape), '| column 3 predicts token 4:',
+      torch.allclose(logp[0, 3], by_hand, atol=1e-6))
+print('mean log-prob:', round(logp.mean().item(), 3), '| uniform would give', round(-math.log(320), 3))
+```
+
+Output:
+
+```text
+shape: (2, 11) | column 3 predicts token 4: True
+mean log-prob: -5.923 | uniform would give -5.768
+```
+
+The hand computation feeds only the first five tokens, takes the logits at position 3, and reads off token 4. It agrees with column 3 of the full-sequence result, which confirms the alignment and, again, causality. The mean log-prob is close to $-\log 320$, as expected for a near-uniform model.
+
+## 3.5 Generating with a KV-free loop
+
+To act, the policy must generate. The simplest correct generator calls the model on the whole prefix, samples the next token from the logits at the last position, appends the token, and repeats. It recomputes every earlier position at every step, so it does not need a key-value (KV) cache. We record the sampler's log-probability of each token, because that number is the behavior policy's probability of the action, and the trainer cannot reconstruct it if the sampling settings are lost.
+
+```python
+def generate(model, prefix, n_new, temperature=1.0, generator=None):
+    """KV-free sampling loop: returns ids [1, P+n] and sampling log-probs [1, n]."""
+    ids, logps = list(prefix), []
+    with torch.no_grad():
+        for _ in range(n_new):
+            logits = model(torch.tensor([ids]))[:, -1]           # [1, V]: whole prefix again
+            next_id, logp = sample_next(logits, temperature, generator=generator)
+            ids.append(int(next_id))
+            logps.append(float(logp))
+    return torch.tensor([ids]), torch.tensor([logps])
+```
+
+The sampled log-probabilities must agree with what the trainer computes from a single forward pass over the finished sequence. At temperature 1 the two are the same quantity. At temperature 0.7 they are not, unless the trainer applies the same temperature to its logits.
+
+```python
+gen = torch.Generator().manual_seed(1)
+prefix = [1, 7, 42, 9]
+for temperature in [1.0, 0.7]:
+    seq, sample_logp = generate(model, prefix, 16, temperature, generator=gen)
+    with torch.no_grad():
+        train_logp = sequence_log_probs(model, seq)[:, len(prefix) - 1:]           # raw softmax
+        matched = selected_log_probs(model(seq)[:, :-1] / temperature, seq[:, 1:])[:, len(prefix) - 1:]
+    print(f'T={temperature}: max |sample - raw trainer| = {(sample_logp - train_logp).abs().max():.2e}',
+          f'| max |sample - tempered trainer| = {(sample_logp - matched).abs().max():.2e}')
+```
+
+Output:
+
+```text
+T=1.0: max |sample - raw trainer| = 9.54e-07 | max |sample - tempered trainer| = 9.54e-07
+T=0.7: max |sample - raw trainer| = 4.82e-01 | max |sample - tempered trainer| = 4.77e-07
+```
+
+At temperature 1, the sampler and the trainer agree to about $10^{-7}$, which is fp32 rounding between a forward pass over a short prefix and one over the full sequence. At temperature 0.7, the untempered trainer is off by up to 0.48 nats on a token, because it scores the tokens under a different, flatter distribution than the one that produced them. Dividing the trainer's logits by the same temperature restores agreement. Section 3.7 turns this into a design rule.
+
+The KV-free loop is quadratic. Generating $n$ tokens after a prompt of length $P$ runs the model over $\sum_{t=P}^{P+n-1} t$ positions, while a KV cache stores each position's keys and values once and processes only the new token at every step.
+
+```python
+for P, n in [(4, 16), (40, 60), (2000, 8000)]:
+    kv_free = sum(range(P, P + n))
+    print(f'prompt {P:>5}, new {n:>5}: KV-free positions {kv_free:>12,} | with cache {P + n:>7,}',
+          f'| ratio {kv_free / (P + n):,.0f}x')
+```
+
+Output:
+
+```text
+prompt     4, new    16: KV-free positions          184 | with cache      20 | ratio 9x
+prompt    40, new    60: KV-free positions        4,170 | with cache     100 | ratio 42x
+prompt  2000, new  8000: KV-free positions   47,996,000 | with cache  10,000 | ratio 4,800x
+```
+
+For TinyAgent's episodes, which stay under about 160 tokens, the overhead is a few dozen times the cached cost, and the full-prefix forward pass is a few hundred microseconds. We accept that in exchange for a generator with no cache bookkeeping. At production lengths, ten thousand tokens of agent context, the ratio reaches thousands, and every inference engine used for RL rollouts (vLLM, SGLang, and similar) keeps a paged KV cache. The cache does not change the probabilities. It changes their cost, and it introduces a second implementation of the forward pass whose numerics can differ from the trainer's (Chapter 13).
+
+## 3.6 Real vocabularies: Qwen3-0.6B
+
+TinyAgent's vocabulary is small enough that the `[B, T, V]` logits tensor is negligible. In a real model it is often the largest activation in the step. We load the Qwen3-0.6B tokenizer and configuration from the check host's local cache. Nothing is downloaded.
+
+```python
+from transformers import AutoConfig, AutoTokenizer
+qtok = AutoTokenizer.from_pretrained('Qwen/Qwen3-0.6B')
+qcfg = AutoConfig.from_pretrained('Qwen/Qwen3-0.6B')
+print('tokenizer entries:', len(qtok), '| lm_head rows V:', qcfg.vocab_size,
+      '| hidden D:', qcfg.hidden_size, '| tied embeddings:', qcfg.tie_word_embeddings)
+for B, T in [(1, 2048), (8, 4096), (64, 16384)]:
+    gb = B * T * qcfg.vocab_size * 4 / 1e9
+    print(f'B={B:>2}, T={T:>5}: fp32 logits {gb:8.1f} GB')
+```
+
+Output:
+
+```text
+tokenizer entries: 151669 | lm_head rows V: 151936 | hidden D: 1024 | tied embeddings: True
+B= 1, T= 2048: fp32 logits      1.2 GB
+B= 8, T= 4096: fp32 logits     19.9 GB
+B=64, T=16384: fp32 logits    637.3 GB
+```
+
+The tokenizer defines 151,669 entries, while the output layer has 151,936 rows. The extra rows are padding that real text never produces. They still take part in the softmax, and a correctly trained model gives them negligible probability. One sequence of 2,048 tokens already needs 1.2 GB of fp32 logits, and a modest RL batch of 8 sequences of 4,096 tokens needs about 20 GB. That is for the forward pass alone. `log_softmax` materializes a second tensor of the same size, and autograd keeps what it needs for the backward pass. A typical agentic RL batch of 64 long trajectories would need terabytes. The model weights themselves (0.6 B parameters) are a rounding error by comparison.
+
+Before addressing the memory, we look at what these log-probabilities say. The next block loads the model in fp32 on the CPU and scores the buggy `clamp` from Chapter 1 and its fix, token by token.
+
+```python
+from transformers import AutoModelForCausalLM
+qwen = AutoModelForCausalLM.from_pretrained('Qwen/Qwen3-0.6B', dtype=torch.float32).eval()
+buggy = 'def clamp(value, lower, upper):\n    return min(lower, max(value, upper))\n'
+fixed = 'def clamp(value, lower, upper):\n    return max(lower, min(value, upper))\n'
+for name, text in [('buggy', buggy), ('fixed', fixed)]:
+    q_ids = qtok(text, return_tensors='pt').input_ids                      # [1, T]
+    with torch.no_grad():
+        q_logp = selected_log_probs(qwen(q_ids).logits[:, :-1], q_ids[:, 1:])[0]  # [T-1]
+    pieces = qtok.convert_ids_to_tokens(q_ids[0, 1:])
+    tail = [f'{p.replace("Ġ", " ")}:{v:.2f}' for p, v in zip(pieces, q_logp.tolist())][8:14]
+    print(f'{name}: T={q_ids.shape[1]}, sum log-prob {q_logp.sum():.2f} | body:', ' '.join(tail))
+```
+
+Output:
+
+```text
+buggy: T=18, sum log-prob -40.96 | body:  return:-0.86  min:-4.03 (lower:-5.17 ,:-0.02  max:-3.74 (value:-3.79
+fixed: T=18, sum log-prob -30.31 | body:  return:-0.86  max:-0.90 (lower:-0.26 ,:-0.00  min:-0.06 (value:-3.22
+```
+
+Both strings tokenize to 18 tokens, and they differ only in the body of the `return` line. The model finds the buggy body much less likely: `min` and `(lower` cost 4.03 and 5.17 nats in the buggy version, while `max` and `(lower` cost 0.90 and 0.26 in the fixed one. The sequence log-probabilities differ by more than 10 nats. A pretrained model already carries a prior about what correct code looks like, and RL on coding tasks starts from that prior rather than from the near-uniform policy of an untrained TinyAgent.
+
+![Figure 3.2: Per-token log-probabilities of the buggy and fixed clamp source under Qwen3-0.6B. Darker cells are less likely tokens.](../figures/ch03-qwen-logp-strip.svg)
+
+Figure 3.2 draws the same numbers as two token strips. Read it from left to right. The signature line is identical in both rows, including the very surprising first token ` clamp` (there is no context to predict a function name). The rows diverge at ` min` and ` max`, where the buggy row turns dark. The closing `))\n` is unlikely in both rows because the model expected the function to continue.
+
+Now the memory. Log-probabilities of chosen tokens do not require the full `[B, T, V]` tensor at once. The output layer is a matrix product of the final hidden states `[B, T, D]` with the embedding matrix `[V, D]`, so we can process the time axis in chunks. Each chunk builds its own logits, normalizes them, gathers the chosen tokens, and discards the logits. The peak logits memory drops from $B \cdot T \cdot V$ to $B \cdot C \cdot V$ for chunk length $C$.
+
+```python
+#@save
+def chunked_log_probs(hidden, weight, ids, chunk_size=128):
+    """Selected-token log-probs without a full [B, T, V] tensor: hidden [B, T, D], weight [V, D], ids [B, T] -> [B, T]."""
+    pieces = []
+    for start in range(0, hidden.shape[1], chunk_size):
+        logits = hidden[:, start:start + chunk_size] @ weight.T          # [B, C, V]
+        pieces.append(selected_log_probs(logits, ids[:, start:start + chunk_size]))
+    return torch.cat(pieces, dim=1)
+```
+
+We test it on a few hundred tokens of Python source, comparing it with the full computation.
+
+```python
+code = '\n'.join(f'def f{i}(x, y):\n    total = 0\n    for k in range(x, y + {i}):\n'
+                 f'        total += k * {i}\n    return max(total, {i})\n' for i in range(12))
+c_ids = qtok(code, return_tensors='pt').input_ids                        # [1, T]
+with torch.no_grad():
+    hidden = qwen.model(c_ids).last_hidden_state                         # [1, T, D]
+    full = selected_log_probs(qwen.lm_head(hidden)[:, :-1], c_ids[:, 1:])
+    chunked = chunked_log_probs(hidden[:, :-1], qwen.lm_head.weight, c_ids[:, 1:], chunk_size=64)
+T = c_ids.shape[1] - 1
+print('tokens scored:', T, '| max |full - chunked|:', f'{(full - chunked).abs().max():.1e}')
+print(f'peak logits: full {T * qcfg.vocab_size * 4 / 1e6:.0f} MB, chunk of 64 {64 * qcfg.vocab_size * 4 / 1e6:.0f} MB')
+```
+
+Output:
+
+```text
+tokens scored: 499 | max |full - chunked|: 4.5e-06
+peak logits: full 303 MB, chunk of 64 39 MB
+```
+
+The chunked and full log-probabilities agree to fp32 rounding, and the largest logits buffer shrinks by the ratio of the sequence length to the chunk length. This is the forward-pass saving. During training, autograd would still keep every chunk's logits for the backward pass unless each chunk is recomputed during the backward pass. Production trainers therefore use fused or recomputing kernels that never store the full logits tensor. Chapter 14 returns to this when it budgets memory for long trajectories.
+
+The last measurement concerns precision. Trainers and inference engines usually run the model in bf16, which keeps fp32's exponent range but has only 8 bits of mantissa. We score the same code once with fp32 weights and once with bf16 weights, normalizing in fp32 in both cases.
+
+```python
+qwen_bf16 = AutoModelForCausalLM.from_pretrained('Qwen/Qwen3-0.6B', dtype=torch.bfloat16).eval()
+with torch.no_grad():
+    lp32 = selected_log_probs(qwen(c_ids).logits[:, :-1], c_ids[:, 1:])[0]
+    lp16 = selected_log_probs(qwen_bf16(c_ids).logits[:, :-1], c_ids[:, 1:])[0]
+diff = lp16 - lp32
+ratio = diff.exp()                                   # pi_bf16 / pi_fp32 per token
+print(f'|bf16 - fp32| log-prob: mean {diff.abs().mean():.4f}, max {diff.abs().max():.4f} nats')
+print(f'per-token ratio: min {ratio.min():.3f}, max {ratio.max():.3f}',
+      f'| sequence log-prob gap {diff.sum():.3f} nats over {len(diff)} tokens')
+```
+
+Output:
+
+```text
+|bf16 - fp32| log-prob: mean 0.0028, max 0.1268 nats
+per-token ratio: min 0.955, max 1.135 | sequence log-prob gap 0.517 nats over 499 tokens
+```
+
+The same weights at two precisions disagree by about 0.003 nats per token on average, but by up to 0.13 nats on individual tokens. As probability ratios, single tokens range from 0.955 to 1.135. The errors do not cancel over the sequence: the 499 per-token errors add up to a sequence log-probability gap of 0.52 nats, a sequence-level ratio of $e^{0.52} \approx 1.7$. This is the seed of the **training–inference mismatch** of Chapter 13: if the inference engine samples in bf16 and the trainer recomputes in a different precision or with different kernels, the importance ratio $\pi_\theta / \mu$ differs from 1 before any update has happened.
+
+![Figure 3.3: bf16 minus fp32 log-probability for each token of the code sample, against the fp32 log-probability.](../figures/ch03-bf16-gap.svg)
+
+Figure 3.3 plots each token's error against its fp32 log-probability. The code is repetitive, so most of the 499 tokens are predicted with near certainty and sit in the cluster at the right, with errors below 0.05 nats. The largest errors, up to 0.13 nats, belong to the few tokens the model found unlikely, where small changes in the logits move the log-probability more. Those low-probability tokens are the exploratory actions that RL most wants to reinforce or suppress, so the precision error is concentrated where the learning signal is.
+
+## 3.7 Design problems in practice
+
+> **Problem: temperature mismatch between rollout and training.** *Symptom:* at the first optimization step after a rollout, before any parameter has changed, the PPO ratio is not 1 and the approximate KL is already positive. The clip fraction is nonzero on a policy that has not moved. *Cause:* the sampler drew tokens from $\mathrm{softmax}(z/\tau)$, and the trainer scores them with $\mathrm{softmax}(z)$. The two are different policies (Section 3.5 measured gaps of up to 0.48 nats on a near-uniform model, and the gap grows with the sharpness of the logits). *Options:* (a) sample RL rollouts at $\tau = 1$, which costs whatever quality the lower temperature bought. (b) Divide the trainer's logits by the same $\tau$, which is cheap but must be applied everywhere log-probs are computed, including the reference model and entropy. (c) Treat the rollout as off-policy data and correct with importance weights, which adds variance. *Default:* the book samples at $\tau = 1$ during training and uses the sampling log-probs that the rollout stores, so mismatches show up as a measurable ratio rather than a silent bias. If a deployment needs $\tau \ne 1$, apply the same $\tau$ inside the trainer.
+
+The next block reproduces the symptom: tokens sampled at $\tau = 0.7$, then scored by an untempered trainer, give a ratio far from 1 with no update in between.
+
+```python
+gen = torch.Generator().manual_seed(2)
+seq, sample_logp = generate(model, [1, 7, 42, 9], 64, temperature=0.7, generator=gen)
+with torch.no_grad():
+    trainer_logp = sequence_log_probs(model, seq)[:, 3:]              # tau = 1
+ratio = (trainer_logp - sample_logp).exp()
+print(f'ratio pi/mu before any update: mean {ratio.mean():.3f}, min {ratio.min():.3f}, max {ratio.max():.3f}')
+print(f'fraction outside [0.8, 1.2]: {((ratio < 0.8) | (ratio > 1.2)).float().mean():.2f}')
+```
+
+Output:
+
+```text
+ratio pi/mu before any update: mean 1.007, min 0.664, max 1.804
+fraction outside [0.8, 1.2]: 0.36
+```
+
+Even with a near-uniform model, 36% of the sampled tokens fall outside a standard PPO clip range, and individual ratios reach 0.66 and 1.80. The policy has not changed, so all of this clipping is spurious and comes only from the bookkeeping.
+
+> **Problem: top-p truncation makes log-probs undefined.** *Symptom:* `inf` or `nan` in importance ratios or in KL estimates, usually in a small number of tokens. *Cause:* under top-p or top-k the behavior distribution $\mu$ gives probability exactly 0 to tokens outside the kept set, so $\log \mu = -\infty$. Any quantity that divides by $\mu$ or evaluates $\log\mu$ on a token sampled by a different distribution breaks. More subtly, $\pi_\theta$ puts mass where $\mu$ has none, so importance sampling from $\mu$ cannot estimate expectations under $\pi_\theta$ at all, however many samples are drawn. *Options:* (a) sample training rollouts without truncation. (b) Store the truncation (or recompute it identically) and evaluate the trainer's policy on the truncated support, which changes the objective to that of the truncated policy. (c) Clip or mask tokens with extreme ratios, which hides the problem. *Default:* no top-p or top-k in training rollouts. Truncate only for evaluation and deployment.
+
+> **Problem: the precision of bf16 log-probs.** *Symptom:* per-token ratios that scatter around 1 by several percent at step 0, and a KL to the reference model that is never exactly 0 even when the policy is the reference. *Cause:* bf16 has an 8-bit mantissa. Section 3.6 measured a mean error of 0.003 nats per token on Qwen3-0.6B, single-token ratios between 0.955 and 1.135, and a sequence-level gap of 0.52 nats over 499 tokens. *Options:* (a) compute the output layer and the log-softmax in fp32 (as `selected_log_probs` does for half-precision inputs), which is cheap. (b) Run the whole model in fp32 for log-prob recomputation, which roughly doubles memory and time. (c) Recompute the behavior log-probs in the trainer instead of trusting the engine's values, and correct for the remaining mismatch (Chapter 13). *Default:* fp32 normalization always. Recompute `old_logp` in the trainer when the engine and trainer use different kernels, and monitor the step-0 ratio as a health metric.
+
+> **Problem: the memory blow-up of `[B, T, V]` logits.** *Symptom:* out-of-memory errors that appear only when the response length grows mid-training. Agentic RL lengthens responses over time, so a run that fit at step 100 fails at step 2,000. *Cause:* the logits tensor scales with $B \cdot T \cdot V$, and $V$ is about 152k for Qwen3. Section 3.6 computed 20 GB for 8 sequences of 4,096 tokens. *Options:* (a) chunk the time axis (Section 3.6), recomputing chunks in the backward pass. (b) Use a fused linear-plus-log-softmax kernel that never materializes the logits. (c) Compute logits only at action positions, since tool-output tokens have no loss (Chapter 5), which saves the most when observations dominate the context. (d) Reduce the micro-batch size, which lowers throughput. *Default:* chunked or fused log-probs from the start, combined with a token-budget batch size (Chapter 14) instead of a fixed number of sequences.
+
+## Summary
+
+- A language model is a policy at the token level, and at the turn level through sums of token log-probabilities. The log-probability of a chosen token is $z_y - \operatorname{logsumexp}(z)$, computed with `log_softmax` and `gather`, and it equals the negative cross-entropy.
+- Compute log-probabilities and entropy with log-sum-exp, never with `softmax().log()`. Handle $0 \cdot \log 0$ explicitly when filters set logits to $-\infty$.
+- Temperature, top-k, and top-p define the behavior policy. `sample_next` returns the log-probability under the distribution actually sampled, and a trainer that scores the same tokens must use the same transformation or treat the data as off-policy.
+- TinyAgent is a 158k-parameter causal transformer with the interface ids `[B, T]` → logits `[B, T, V]`. `sequence_log_probs` aligns its outputs to the predicted positions `ids[:, 1:]`.
+- At production vocabulary sizes, the logits tensor dominates memory, so chunked or fused log-probs are required. bf16 log-probs differ from fp32 by about 0.003 nats per token on average and up to 0.13 nats on single tokens, and the errors accumulate over a sequence (measured here on Qwen3-0.6B).
+
+## Exercises
+
+1. Add a `top_k` argument to a copy of `sampling_log_probs` and verify, with 20,000 samples as in Section 3.3, that the empirical frequencies match. What is the entropy of a top-k distribution when the remaining $k$ logits are equal?
+2. Change an assumption: train-time dropout. Give TinyAgent `dropout=0.1`, put it in training mode, and repeat the sampler/trainer comparison of Section 3.5 at temperature 1. How large is the step-0 ratio spread now, and what does that imply for using dropout during RL?
+3. Show that greedy decoding is the $\tau \to 0$ limit of temperature sampling by computing `sampling_log_probs` of the argmax token for $\tau \in \{1, 0.3, 0.1, 0.01\}$. Explain why greedy rollouts give a policy gradient of zero.
+4. Extend Section 3.6: compute bf16 log-probabilities with the log-softmax also in bf16 (skip the upcast). How much larger is the error? Which tokens are affected most?
+5. Using `chunked_log_probs`, write a version that computes log-probs only at positions where a given mask is 1. For a trajectory in which 80% of tokens are tool output, by how much does the peak logits memory fall?
+6. Design review: a colleague proposes to store only the sampled token ids from the inference engine and to recompute all log-probabilities in the trainer, "since the weights are the same." List the conditions under which this is exact, the conditions under which it silently changes the objective (temperature, top-p, precision, kernels), and the metric you would add to the dashboard to detect a violation.

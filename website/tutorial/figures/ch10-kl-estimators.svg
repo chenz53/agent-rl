@@ -1,0 +1,105 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1080 400" width="1080" height="400" role="img" aria-label="KL estimators k1, k2, k3 as the policy moves away from the reference">
+<style>
+svg{--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--neutral:#f0efec;--panel:#f4f3ef;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--s6:#008300;--s7:#6250d6;--s8:#e34948;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme: dark){svg{--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--neutral:#383835;--panel:#232322;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--s7:#9085e9;--s8:#e66767}}
+.bg{fill:var(--surface)} .t{fill:var(--ink)} .t2{fill:var(--ink2)} .m{fill:var(--muted)}
+.title{font-size:15px;font-weight:600;fill:var(--ink)} .sub{font-size:12px;fill:var(--ink2)}
+.lab{font-size:12px;fill:var(--ink2)} .tick{font-size:11px;fill:var(--muted);font-variant-numeric:tabular-nums}
+.grid{stroke:var(--grid);stroke-width:1} .axis{stroke:var(--axis);stroke-width:1}
+.box{fill:var(--panel);stroke:var(--axis);stroke-width:1} .edge{stroke:var(--ink2);stroke-width:1.5;fill:none}
+.ring{stroke:var(--surface);stroke-width:2} .note{font-size:11px;fill:var(--ink2)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--ink2)"/></marker></defs>
+<rect class="bg" width="1080" height="400" rx="8"/>
+<text class="title" x="20" y="30">KL estimators k1, k2, k3 as the policy moves away from the reference</text>
+<text class="sub" x="20" y="48">Exact moments over 50 outcomes (no sampling). Right: error of the expected gradient of each estimator used as a loss, against the true gradient of KL(pi || ref).</text>
+<text class="lab" x="64" y="96" font-weight="600">Bias</text>
+<line class="grid" x1="64" x2="300.0" y1="348.0" y2="348.0"/>
+<text class="tick" x="58" y="352.0" text-anchor="end">0</text>
+<line class="grid" x1="64" x2="300.0" y1="287.2" y2="287.2"/>
+<text class="tick" x="58" y="291.2" text-anchor="end">0.5</text>
+<line class="grid" x1="64" x2="300.0" y1="226.5" y2="226.5"/>
+<text class="tick" x="58" y="230.5" text-anchor="end">1</text>
+<line class="grid" x1="64" x2="300.0" y1="165.7" y2="165.7"/>
+<text class="tick" x="58" y="169.7" text-anchor="end">1.5</text>
+<line class="axis" x1="64" x2="300.0" y1="348.0" y2="348.0"/>
+<line class="axis" x1="88.6" x2="88.6" y1="348" y2="352"/>
+<text class="tick" x="88.6" y="364" text-anchor="middle">1e-03</text>
+<line class="axis" x1="150.9" x2="150.9" y1="348" y2="352"/>
+<text class="tick" x="150.9" y="364" text-anchor="middle">0.01</text>
+<line class="axis" x1="213.2" x2="213.2" y1="348" y2="352"/>
+<text class="tick" x="213.2" y="364" text-anchor="middle">0.1</text>
+<line class="axis" x1="275.5" x2="275.5" y1="348" y2="352"/>
+<text class="tick" x="275.5" y="364" text-anchor="middle">1</text>
+<text class="lab" x="182.0" y="382" text-anchor="middle">true KL(pi || ref)</text>
+<text class="lab" x="20" y="227.0" text-anchor="middle" transform="rotate(-90 20 227.0)">relative bias  E[k]/KL - 1</text>
+<clipPath id="clip124928737233904"><rect x="64" y="104" width="236.0" height="246"/></clipPath>
+<polyline points="64.0,348.0 72.6,348.0 81.1,348.0 89.7,348.0 98.2,348.0 106.8,348.0 115.3,348.0 123.8,348.0 132.3,348.0 140.8,348.0 149.2,348.0 157.7,348.0 166.1,348.0 174.5,348.0 182.8,348.0 191.1,348.0 199.3,348.0 207.5,348.0 215.6,348.0 223.6,348.0 231.5,348.0 239.3,348.0 247.0,348.0 254.5,348.0 262.0,348.0 269.4,348.0 276.8,348.0 284.3,348.0 292.0,348.0 300.0,348.0" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip124928737233904)"/>
+<polyline points="64.0,347.1 72.6,347.0 81.1,346.9 89.7,346.6 98.2,346.4 106.8,346.1 115.3,345.8 123.8,345.3 132.3,344.8 140.8,344.2 149.2,343.4 157.7,342.5 166.1,341.3 174.5,339.9 182.8,338.1 191.1,336.0 199.3,333.2 207.5,329.8 215.6,325.6 223.6,320.3 231.5,313.6 239.3,305.3 247.0,295.0 254.5,282.2 262.0,266.6 269.4,247.5 276.8,224.5 284.3,196.6 292.0,162.6 300.0,119.7" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip124928737233904)"/>
+<polyline points="64.0,348.0 72.6,348.0 81.1,348.0 89.7,348.0 98.2,348.0 106.8,348.0 115.3,348.0 123.8,348.0 132.3,348.0 140.8,348.0 149.2,348.0 157.7,348.0 166.1,348.0 174.5,348.0 182.8,348.0 191.1,348.0 199.3,348.0 207.5,348.0 215.6,348.0 223.6,348.0 231.5,348.0 239.3,348.0 247.0,348.0 254.5,348.0 262.0,348.0 269.4,348.0 276.8,348.0 284.3,348.0 292.0,348.0 300.0,348.0" fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip124928737233904)"/>
+<text class="note" x="71.1" y="340.7" text-anchor="start">k1 and k3: exactly 0</text>
+<text class="lab" x="424.0" y="96" font-weight="600">Spread of one sample</text>
+<line class="grid" x1="424.0" x2="660.0" y1="348.0" y2="348.0"/>
+<text class="tick" x="418.0" y="352.0" text-anchor="end">1</text>
+<line class="grid" x1="424.0" x2="660.0" y1="250.3" y2="250.3"/>
+<text class="tick" x="418.0" y="254.3" text-anchor="end">10</text>
+<line class="grid" x1="424.0" x2="660.0" y1="152.6" y2="152.6"/>
+<text class="tick" x="418.0" y="156.6" text-anchor="end">100</text>
+<line class="axis" x1="424.0" x2="660.0" y1="348.0" y2="348.0"/>
+<line class="axis" x1="448.6" x2="448.6" y1="348" y2="352"/>
+<text class="tick" x="448.6" y="364" text-anchor="middle">1e-03</text>
+<line class="axis" x1="510.9" x2="510.9" y1="348" y2="352"/>
+<text class="tick" x="510.9" y="364" text-anchor="middle">0.01</text>
+<line class="axis" x1="573.2" x2="573.2" y1="348" y2="352"/>
+<text class="tick" x="573.2" y="364" text-anchor="middle">0.1</text>
+<line class="axis" x1="635.5" x2="635.5" y1="348" y2="352"/>
+<text class="tick" x="635.5" y="364" text-anchor="middle">1</text>
+<text class="lab" x="542.0" y="382" text-anchor="middle">true KL(pi || ref)</text>
+<text class="lab" x="380.0" y="227.0" text-anchor="middle" transform="rotate(-90 380.0 227.0)">per-sample std / KL</text>
+<clipPath id="clip124928743009184"><rect x="424.0" y="104" width="236.0" height="246"/></clipPath>
+<polyline points="424.0,167.4 432.6,174.1 441.1,180.7 449.7,187.4 458.2,194.1 466.8,200.7 475.3,207.3 483.8,214.0 492.3,220.5 500.8,227.1 509.2,233.6 517.7,240.1 526.1,246.6 534.5,253.0 542.8,259.3 551.1,265.6 559.3,271.7 567.5,277.8 575.6,283.7 583.6,289.5 591.5,295.2 599.3,300.7 607.0,306.0 614.5,311.1 622.0,316.1 629.4,321.0 636.8,325.9 644.3,330.9 652.0,336.2 660.0,342.0" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip124928743009184)"/>
+<polyline points="424.0,337.6 432.6,337.5 441.1,337.4 449.7,337.2 458.2,336.9 466.8,336.7 475.3,336.4 483.8,336.0 492.3,335.6 500.8,335.1 509.2,334.5 517.7,333.8 526.1,333.0 534.5,332.1 542.8,331.0 551.1,329.7 559.3,328.3 567.5,326.6 575.6,324.6 583.6,322.4 591.5,319.9 599.3,317.1 607.0,313.9 614.5,310.5 622.0,306.8 629.4,302.9 636.8,298.7 644.3,294.5 652.0,290.2 660.0,285.9" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip124928743009184)"/>
+<polyline points="424.0,338.4 432.6,338.4 441.1,338.4 449.7,338.4 458.2,338.4 466.8,338.3 475.3,338.3 483.8,338.3 492.3,338.3 500.8,338.2 509.2,338.2 517.7,338.1 526.1,338.1 534.5,338.0 542.8,337.9 551.1,337.7 559.3,337.6 567.5,337.3 575.6,337.0 583.6,336.6 591.5,336.0 599.3,335.2 607.0,334.0 614.5,332.4 622.0,330.0 629.4,326.8 636.8,322.6 644.3,317.6 652.0,312.7 660.0,309.3" fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip124928743009184)"/>
+<text class="lab" x="784.0" y="96" font-weight="600">Gradient as a loss</text>
+<line class="grid" x1="784.0" x2="1020.0" y1="348.0" y2="348.0"/>
+<text class="tick" x="778.0" y="352.0" text-anchor="end">0</text>
+<line class="grid" x1="784.0" x2="1020.0" y1="261.6" y2="261.6"/>
+<text class="tick" x="778.0" y="265.6" text-anchor="end">0.5</text>
+<line class="grid" x1="784.0" x2="1020.0" y1="175.1" y2="175.1"/>
+<text class="tick" x="778.0" y="179.1" text-anchor="end">1</text>
+<line class="axis" x1="784.0" x2="1020.0" y1="348.0" y2="348.0"/>
+<line class="axis" x1="808.6" x2="808.6" y1="348" y2="352"/>
+<text class="tick" x="808.6" y="364" text-anchor="middle">1e-03</text>
+<line class="axis" x1="870.9" x2="870.9" y1="348" y2="352"/>
+<text class="tick" x="870.9" y="364" text-anchor="middle">0.01</text>
+<line class="axis" x1="933.2" x2="933.2" y1="348" y2="352"/>
+<text class="tick" x="933.2" y="364" text-anchor="middle">0.1</text>
+<line class="axis" x1="995.5" x2="995.5" y1="348" y2="352"/>
+<text class="tick" x="995.5" y="364" text-anchor="middle">1</text>
+<text class="lab" x="902.0" y="382" text-anchor="middle">true KL(pi || ref)</text>
+<text class="lab" x="740.0" y="227.0" text-anchor="middle" transform="rotate(-90 740.0 227.0)">relative gradient error</text>
+<clipPath id="clip124928744114176"><rect x="784.0" y="104" width="236.0" height="246"/></clipPath>
+<polyline points="784.0,175.1 792.6,175.1 801.1,175.1 809.7,175.1 818.2,175.1 826.8,175.1 835.3,175.1 843.8,175.1 852.3,175.1 860.8,175.1 869.2,175.1 877.7,175.1 886.1,175.1 894.5,175.1 902.8,175.1 911.1,175.1 919.3,175.1 927.5,175.1 935.6,175.1 943.6,175.1 951.5,175.1 959.3,175.1 967.0,175.1 974.5,175.1 982.0,175.1 989.4,175.1 996.8,175.1 1004.3,175.1 1012.0,175.1 1020.0,175.1" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip124928744114176)"/>
+<polyline points="784.0,348.0 792.6,348.0 801.1,348.0 809.7,348.0 818.2,348.0 826.8,348.0 835.3,348.0 843.8,348.0 852.3,348.0 860.8,348.0 869.2,348.0 877.7,348.0 886.1,348.0 894.5,348.0 902.8,348.0 911.1,348.0 919.3,348.0 927.5,348.0 935.6,348.0 943.6,348.0 951.5,348.0 959.3,348.0 967.0,348.0 974.5,348.0 982.0,348.0 989.4,348.0 996.8,348.0 1004.3,348.0 1012.0,348.0 1020.0,348.0" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip124928744114176)"/>
+<polyline points="784.0,346.3 792.6,346.0 801.1,345.7 809.7,345.3 818.2,344.8 826.8,344.3 835.3,343.6 843.8,342.9 852.3,342.0 860.8,341.0 869.2,339.7 877.7,338.3 886.1,336.6 894.5,334.6 902.8,332.3 911.1,329.5 919.3,326.3 927.5,322.4 935.6,317.8 943.6,312.5 951.5,306.1 959.3,298.5 967.0,289.6 974.5,279.1 982.0,266.5 989.4,251.4 996.8,232.9 1004.3,210.3 1012.0,183.3 1020.0,154.1" fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip124928744114176)"/>
+<text class="note" x="791.1" y="337.6" text-anchor="start">k2 (= k3+): exact</text>
+<line x1="64" x2="82" y1="72" y2="72" stroke="var(--s1)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="88" y="76" font-size="12" text-anchor="start">k1</text>
+<line x1="120" x2="138" y1="72" y2="72" stroke="var(--s2)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="144" y="76" font-size="12" text-anchor="start">k2</text>
+<line x1="176" x2="194" y1="72" y2="72" stroke="var(--s3)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="200" y="76" font-size="12" text-anchor="start">k3</text>
+<line x1="424.0" x2="442.0" y1="72" y2="72" stroke="var(--s1)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="448.0" y="76" font-size="12" text-anchor="start">k1</text>
+<line x1="480.0" x2="498.0" y1="72" y2="72" stroke="var(--s2)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="504.0" y="76" font-size="12" text-anchor="start">k2</text>
+<line x1="536.0" x2="554.0" y1="72" y2="72" stroke="var(--s3)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="560.0" y="76" font-size="12" text-anchor="start">k3</text>
+<line x1="784.0" x2="802.0" y1="72" y2="72" stroke="var(--s1)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="808.0" y="76" font-size="12" text-anchor="start">k1</text>
+<line x1="840.0" x2="858.0" y1="72" y2="72" stroke="var(--s2)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="864.0" y="76" font-size="12" text-anchor="start">k2</text>
+<line x1="896.0" x2="914.0" y1="72" y2="72" stroke="var(--s3)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="920.0" y="76" font-size="12" text-anchor="start">k3</text>
+</svg>

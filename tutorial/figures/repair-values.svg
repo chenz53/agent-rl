@@ -1,0 +1,80 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 860 380" width="860" height="380" role="img" aria-label="Discounting and step costs change the preferred policy">
+<style>
+svg{--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--neutral:#f0efec;--panel:#f4f3ef;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--s6:#008300;--s7:#6250d6;--s8:#e34948;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme: dark){svg{--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--neutral:#383835;--panel:#232322;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--s7:#9085e9;--s8:#e66767}}
+.bg{fill:var(--surface)} .t{fill:var(--ink)} .t2{fill:var(--ink2)} .m{fill:var(--muted)}
+.title{font-size:15px;font-weight:600;fill:var(--ink)} .sub{font-size:12px;fill:var(--ink2)}
+.lab{font-size:12px;fill:var(--ink2)} .tick{font-size:11px;fill:var(--muted);font-variant-numeric:tabular-nums}
+.grid{stroke:var(--grid);stroke-width:1} .axis{stroke:var(--axis);stroke-width:1}
+.box{fill:var(--panel);stroke:var(--axis);stroke-width:1} .edge{stroke:var(--ink2);stroke-width:1.5;fill:none}
+.ring{stroke:var(--surface);stroke-width:2} .note{font-size:11px;fill:var(--ink2)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--ink2)"/></marker></defs>
+<rect class="bg" width="860" height="380" rx="8"/>
+<text class="title" x="20" y="30">Discounting and step costs change the preferred policy</text>
+<text class="sub" x="20" y="48">V(unread) computed exactly with policy_evaluation on the repair MDP</text>
+<line class="grid" x1="64" x2="370.0" y1="328.0" y2="328.0"/>
+<text class="tick" x="58" y="332.0" text-anchor="end">0</text>
+<line class="grid" x1="64" x2="370.0" y1="270.9" y2="270.9"/>
+<text class="tick" x="58" y="274.9" text-anchor="end">0.25</text>
+<line class="grid" x1="64" x2="370.0" y1="213.7" y2="213.7"/>
+<text class="tick" x="58" y="217.7" text-anchor="end">0.5</text>
+<line class="grid" x1="64" x2="370.0" y1="156.6" y2="156.6"/>
+<text class="tick" x="58" y="160.6" text-anchor="end">0.75</text>
+<line class="grid" x1="64" x2="370.0" y1="99.4" y2="99.4"/>
+<text class="tick" x="58" y="103.4" text-anchor="end">1</text>
+<line class="axis" x1="64" x2="370.0" y1="328.0" y2="328.0"/>
+<line class="axis" x1="64.0" x2="64.0" y1="328" y2="332"/>
+<text class="tick" x="64.0" y="344" text-anchor="middle">0.5</text>
+<line class="axis" x1="125.2" x2="125.2" y1="328" y2="332"/>
+<text class="tick" x="125.2" y="344" text-anchor="middle">0.6</text>
+<line class="axis" x1="186.4" x2="186.4" y1="328" y2="332"/>
+<text class="tick" x="186.4" y="344" text-anchor="middle">0.7</text>
+<line class="axis" x1="247.6" x2="247.6" y1="328" y2="332"/>
+<text class="tick" x="247.6" y="344" text-anchor="middle">0.8</text>
+<line class="axis" x1="308.8" x2="308.8" y1="328" y2="332"/>
+<text class="tick" x="308.8" y="344" text-anchor="middle">0.9</text>
+<line class="axis" x1="370.0" x2="370.0" y1="328" y2="332"/>
+<text class="tick" x="370.0" y="344" text-anchor="middle">1</text>
+<text class="lab" x="217.0" y="362" text-anchor="middle">discount gamma (step cost 0)</text>
+<text class="lab" x="20" y="208.0" text-anchor="middle" transform="rotate(-90 20 208.0)">V(unread)</text>
+<clipPath id="clip139215642106272"><rect x="64" y="86" width="306.0" height="244"/></clipPath>
+<polyline points="64.0,303.9 70.1,302.4 76.2,300.8 82.4,299.2 88.5,297.4 94.6,295.6 100.7,293.7 106.8,291.8 113.0,289.7 119.1,287.6 125.2,285.4 131.3,283.2 137.4,280.8 143.6,278.3 149.7,275.8 155.8,273.1 161.9,270.4 168.0,267.6 174.2,264.6 180.3,261.6 186.4,258.5 192.5,255.2 198.6,251.9 204.8,248.4 210.9,244.8 217.0,241.1 223.1,237.2 229.2,233.3 235.4,229.2 241.5,225.0 247.6,220.6 253.7,216.1 259.8,211.5 266.0,206.7 272.1,201.8 278.2,196.7 284.3,191.5 290.4,186.1 296.6,180.6 302.7,174.8 308.8,168.9 314.9,162.9 321.0,156.6 327.2,150.2 333.3,143.5 339.4,136.7 345.5,129.7 351.6,122.4 357.8,115.0 363.9,107.3 370.0,99.4" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip139215642106272)"/>
+<polyline points="64.0,282.3 70.1,280.4 76.2,278.6 82.4,276.6 88.5,274.7 94.6,272.7 100.7,270.7 106.8,268.6 113.0,266.5 119.1,264.3 125.2,262.2 131.3,260.0 137.4,257.7 143.6,255.4 149.7,253.1 155.8,250.7 161.9,248.3 168.0,245.9 174.2,243.4 180.3,240.9 186.4,238.4 192.5,235.8 198.6,233.2 204.8,230.6 210.9,227.9 217.0,225.1 223.1,222.4 229.2,219.6 235.4,216.7 241.5,213.9 247.6,211.0 253.7,208.0 259.8,205.0 266.0,202.0 272.1,199.0 278.2,195.9 284.3,192.8 290.4,189.6 296.6,186.4 302.7,183.2 308.8,179.9 314.9,176.6 321.0,173.2 327.2,169.8 333.3,166.4 339.4,163.0 345.5,159.5 351.6,155.9 357.8,152.4 363.9,148.8 370.0,145.1" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip139215642106272)"/>
+<polyline points="64.0,293.7 70.1,293.0 76.2,292.3 82.4,291.7 88.5,291.0 94.6,290.3 100.7,289.6 106.8,288.9 113.0,288.2 119.1,287.5 125.2,286.9 131.3,286.2 137.4,285.5 143.6,284.8 149.7,284.1 155.8,283.4 161.9,282.7 168.0,282.1 174.2,281.4 180.3,280.7 186.4,280.0 192.5,279.3 198.6,278.6 204.8,277.9 210.9,277.3 217.0,276.6 223.1,275.9 229.2,275.2 235.4,274.5 241.5,273.8 247.6,273.1 253.7,272.5 259.8,271.8 266.0,271.1 272.1,270.4 278.2,269.7 284.3,269.0 290.4,268.3 296.6,267.7 302.7,267.0 308.8,266.3 314.9,265.6 321.0,264.9 327.2,264.2 333.3,263.5 339.4,262.9 345.5,262.2 351.6,261.5 357.8,260.8 363.9,260.1 370.0,259.4" fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip139215642106272)"/>
+<line class="grid" x1="494.0" x2="800.0" y1="261.8" y2="261.8"/>
+<text class="tick" x="488.0" y="265.8" text-anchor="end">0</text>
+<line class="grid" x1="494.0" x2="800.0" y1="179.0" y2="179.0"/>
+<text class="tick" x="488.0" y="183.0" text-anchor="end">0.5</text>
+<line class="grid" x1="494.0" x2="800.0" y1="96.3" y2="96.3"/>
+<text class="tick" x="488.0" y="100.3" text-anchor="end">1</text>
+<line class="axis" x1="494.0" x2="800.0" y1="261.8" y2="261.8"/>
+<line class="axis" x1="494.0" x2="494.0" y1="328" y2="332"/>
+<text class="tick" x="494.0" y="344" text-anchor="middle">0</text>
+<line class="axis" x1="596.0" x2="596.0" y1="328" y2="332"/>
+<text class="tick" x="596.0" y="344" text-anchor="middle">0.1</text>
+<line class="axis" x1="698.0" x2="698.0" y1="328" y2="332"/>
+<text class="tick" x="698.0" y="344" text-anchor="middle">0.2</text>
+<line class="axis" x1="800.0" x2="800.0" y1="328" y2="332"/>
+<text class="tick" x="800.0" y="344" text-anchor="middle">0.3</text>
+<text class="lab" x="647.0" y="362" text-anchor="middle">step cost per action (gamma = 1)</text>
+<text class="lab" x="450.0" y="208.0" text-anchor="middle" transform="rotate(-90 450.0 208.0)">V(unread)</text>
+<clipPath id="clip139215642106704"><rect x="494.0" y="86" width="306.0" height="244"/></clipPath>
+<polyline points="494.0,96.3 499.1,100.0 504.2,103.7 509.3,107.4 514.4,111.2 519.5,114.9 524.6,118.6 529.7,122.3 534.8,126.1 539.9,129.8 545.0,133.5 550.1,137.2 555.2,141.0 560.3,144.7 565.4,148.4 570.5,152.1 575.6,155.9 580.7,159.6 585.8,163.3 590.9,167.0 596.0,170.8 601.1,174.5 606.2,178.2 611.3,181.9 616.4,185.7 621.5,189.4 626.6,193.1 631.7,196.8 636.8,200.6 641.9,204.3 647.0,208.0 652.1,211.7 657.2,215.4 662.3,219.2 667.4,222.9 672.5,226.6 677.6,230.3 682.7,234.1 687.8,237.8 692.9,241.5 698.0,245.2 703.1,249.0 708.2,252.7 713.3,256.4 718.4,260.1 723.5,263.9 728.6,267.6 733.7,271.3 738.8,275.0 743.9,278.8 749.0,282.5 754.1,286.2 759.2,289.9 764.3,293.7 769.4,297.4 774.5,301.1 779.6,304.8 784.7,308.6 789.8,312.3 794.9,316.0 800.0,319.7" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip139215642106704)"/>
+<polyline points="494.0,129.4 499.1,131.9 504.2,134.3 509.3,136.8 514.4,139.3 519.5,141.8 524.6,144.3 529.7,146.8 534.8,149.2 539.9,151.7 545.0,154.2 550.1,156.7 555.2,159.2 560.3,161.7 565.4,164.1 570.5,166.6 575.6,169.1 580.7,171.6 585.8,174.1 590.9,176.6 596.0,179.0 601.1,181.5 606.2,184.0 611.3,186.5 616.4,189.0 621.5,191.4 626.6,193.9 631.7,196.4 636.8,198.9 641.9,201.4 647.0,203.9 652.1,206.3 657.2,208.8 662.3,211.3 667.4,213.8 672.5,216.3 677.6,218.8 682.7,221.2 687.8,223.7 692.9,226.2 698.0,228.7 703.1,231.2 708.2,233.7 713.3,236.1 718.4,238.6 723.5,241.1 728.6,243.6 733.7,246.1 738.8,248.6 743.9,251.0 749.0,253.5 754.1,256.0 759.2,258.5 764.3,261.0 769.4,263.4 774.5,265.9 779.6,268.4 784.7,270.9 789.8,273.4 794.9,275.9 800.0,278.3" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip139215642106704)"/>
+<polyline points="494.0,212.1 499.1,213.8 504.2,215.4 509.3,217.1 514.4,218.8 519.5,220.4 524.6,222.1 529.7,223.7 534.8,225.4 539.9,227.0 545.0,228.7 550.1,230.3 555.2,232.0 560.3,233.7 565.4,235.3 570.5,237.0 575.6,238.6 580.7,240.3 585.8,241.9 590.9,243.6 596.0,245.2 601.1,246.9 606.2,248.6 611.3,250.2 616.4,251.9 621.5,253.5 626.6,255.2 631.7,256.8 636.8,258.5 641.9,260.1 647.0,261.8 652.1,263.4 657.2,265.1 662.3,266.8 667.4,268.4 672.5,270.1 677.6,271.7 682.7,273.4 687.8,275.0 692.9,276.7 698.0,278.3 703.1,280.0 708.2,281.7 713.3,283.3 718.4,285.0 723.5,286.6 728.6,288.3 733.7,289.9 738.8,291.6 743.9,293.2 749.0,294.9 754.1,296.6 759.2,298.2 764.3,299.9 769.4,301.5 774.5,303.2 779.6,304.8 784.7,306.5 789.8,308.1 794.9,309.8 800.0,311.4" fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip139215642106704)"/>
+<line class="axis" x1="494.0" x2="800.0" y1="261.8" y2="261.8" stroke-dasharray="4 3"/>
+<line x1="64" x2="82" y1="72" y2="72" stroke="var(--s1)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="88" y="76" font-size="12" text-anchor="start">careful</text>
+<line x1="155" x2="173" y1="72" y2="72" stroke="var(--s2)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="179" y="76" font-size="12" text-anchor="start">read-edit-submit</text>
+<line x1="309" x2="327" y1="72" y2="72" stroke="var(--s3)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="333" y="76" font-size="12" text-anchor="start">blind</text>
+<line x1="494.0" x2="512.0" y1="72" y2="72" stroke="var(--s1)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="518.0" y="76" font-size="12" text-anchor="start">careful</text>
+<line x1="585.0" x2="603.0" y1="72" y2="72" stroke="var(--s2)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="609.0" y="76" font-size="12" text-anchor="start">read-edit-submit</text>
+<line x1="739.0" x2="757.0" y1="72" y2="72" stroke="var(--s3)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="763.0" y="76" font-size="12" text-anchor="start">blind</text>
+</svg>

@@ -1,0 +1,646 @@
+---
+title: "2. \u5f3a\u5316\u5b66\u4e60\u57fa\u7840"
+---
+
+[第 1 章](/tutorial/zh/chapters/01-introduction)让一个脚本化的智能体走完了 `clamp` 修复。智能体读取、编辑、测试并提交，随后隐藏测试返回了一个数字。在要求模型*学会*这种行为之前，我们需要一种描述它的精确语言。这种语言必须说清楚：智能体控制什么，观测到什么，什么是随机的，目标是什么，以及当一个决策的后果在几轮之后才出现时，如何衡量这个决策的好坏。
+
+本章提供这种语言。它是马尔可夫决策过程的标准理论，但每个对象都在一个**修复 MDP**（repair MDP）上用几行 torch 构建出来；修复 MDP 是对 `clamp` 回合的七状态抽象。由于这个 MDP 很小，我们可以用一次线性求解*精确地*计算价值，用采样来核对它们，找到最优策略，并用自动求导对目标求导。这些精确计算没有一个能在换成语言模型之后保留下来，而准确地看清它们为何失效，就能解释从[第 6 章](/tutorial/zh/chapters/06-policy-gradient)开始的一切设计。
+
+我们为全书其余部分保存两个函数 `discounted_return` 和 `policy_evaluation`，外加修复 MDP 的构建函数和 `value_iteration`，后续章节把它们用作精确参照。
+
+## 2.1 马尔可夫决策过程
+
+一个强化学习问题由两部分组成：选择动作（action）的**智能体**（agent），以及做出响应的**环境**（environment）。二者之间的接口是一个循环。在每一步 $t$，环境处于状态（state）$s_t$，智能体选择动作 $a_t$，环境返回奖励（reward）$r_t$ 和下一个状态 $s_{t+1}$。当环境到达一个**终止**状态时，循环结束。
+
+**马尔可夫决策过程**（Markov decision process，MDP）把这个循环形式化为一个元组 $(\mathcal{S}, \mathcal{A}, P, R, \rho_0, \gamma)$：
+
+- $\mathcal{S}$ 是状态集合，$\mathcal{A}$ 是动作集合。
+- $P(s' \mid s, a)$ 是在 $s$ 中采取 $a$ 后转移到 $s'$ 的转移概率。
+- $R(s, a)$ 是在 $s$ 中采取 $a$ 的期望即时奖励。
+- $\rho_0$ 是初始状态的分布。
+- $\gamma \in [0, 1]$ 是折扣因子（discount factor，见 2.4 节）。
+
+*马尔可夫*一词是对状态的一个断言：$(r_t, s_{t+1})$ 的分布只通过 $(s_t, a_t)$ 依赖于历史，
+
+$$
+\Pr(s_{t+1}, r_t \mid s_0, a_0, \dots, s_t, a_t) = \Pr(s_{t+1}, r_t \mid s_t, a_t).
+$$
+
+正是这一性质使状态成为*状态*。本章的一切都依赖于它，2.7 节和设计问题会回到它不成立的情形。
+
+### 修复 MDP
+
+我们把 `clamp` 回合抽象为七个状态。智能体从文件 `unread` 开始。读取后进入 `read`。编辑会产生 `edited_ok` 或 `edited_bad`，而编辑正确的概率取决于智能体是否掌握了信息：在读取文件之后、或在看到失败测试之后所做的编辑，成功概率为 0.8；其他任何编辑都是猜测，成功概率为 0.3。测试一个已编辑的文件会使其进入 `passed` 或 `failed`。提交会以 `done` 结束回合，如果文件正确则支付奖励 1，否则为 0。所有数字都是为教学而虚构的，并非在任何模型上测得。
+
+```python
+#@save
+REPAIR_STATES = ['unread', 'read', 'edited_ok', 'edited_bad', 'passed', 'failed', 'done']
+REPAIR_ACTIONS = ['read', 'edit', 'test', 'submit']
+
+
+def repair_transitions(state):
+    """Return {action: [(next_state, prob), ...]} for one non-terminal repair state."""
+    p_fix = 0.8 if state in ('read', 'failed') else 0.3  # informed edit vs a guess
+    after_read = 'read' if state == 'unread' else state
+    after_test = {'edited_ok': 'passed', 'edited_bad': 'failed'}.get(state, state)
+    return {'read': [(after_read, 1.0)],
+            'edit': [('edited_ok', p_fix), ('edited_bad', 1 - p_fix)],
+            'test': [(after_test, 1.0)],
+            'submit': [('done', 1.0)]}
+```
+
+`repair_transitions` 就是上面文字描述的规格：读取只有一次有用，测试只会改变已编辑的文件，每次编辑都是一次全新的随机抽取。在其他状态下读取或测试会使状态保持不变，这是一个耗费一步的自环。
+
+表格型 MDP 把 $P$ 存为形状为 `[S, A, S]` 的张量，把 $R$ 存为 `[S, A]`。我们根据规格填充这两者。终止状态 `done` 在 $P$ 中对应一个全零行：到达它的回合直接停止。这使 $P$ 成为*次随机*（substochastic）矩阵（非终止状态的行和为 1，终止状态的行和为 0），这一约定让我们无需对终止做特殊处理就能求解价值。
+
+```python
+#@save
+import torch
+
+
+def make_repair_mdp(step_cost=0.0):
+    """Build the repair MDP: P [S, A, S] (terminal rows all zero) and R [S, A], float64."""
+    S, A = len(REPAIR_STATES), len(REPAIR_ACTIONS)
+    P = torch.zeros(S, A, S, dtype=torch.float64)
+    R = torch.zeros(S, A, dtype=torch.float64)
+    for s, state in enumerate(REPAIR_STATES[:-1]):          # 'done' stays all zero
+        for a, outcomes in enumerate(repair_transitions(state).values()):
+            for next_state, prob in outcomes:
+                P[s, a, REPAIR_STATES.index(next_state)] += prob
+            R[s, a] -= step_cost                             # every live action costs
+        if state in ('edited_ok', 'passed'):
+            R[s, REPAIR_ACTIONS.index('submit')] += 1.0      # correct submission
+    return P, R
+```
+
+奖励位于从正确状态执行的 `submit` 动作上。可选的 `step_cost` 对每个动作收费；2.9 节会用到它。我们来检查这些张量。
+
+```python
+P, R = make_repair_mdp()
+print('P shape:', tuple(P.shape), ' R shape:', tuple(R.shape))
+print('row sums (live states):', P.sum(-1)[:-1].unique().tolist())
+print('row sums (done):', P.sum(-1)[-1].tolist())
+s, a = REPAIR_STATES.index('read'), REPAIR_ACTIONS.index('edit')
+print('P[read, edit] =', {k: round(v, 3) for k, v in zip(REPAIR_STATES, P[s, a].tolist())})
+print('R[:, submit] =', R[:, 3].tolist())
+```
+
+Output:
+
+```text
+P shape: (7, 4, 7)  R shape: (7, 4)
+row sums (live states): [1.0]
+row sums (done): [0.0, 0.0, 0.0, 0.0]
+P[read, edit] = {'unread': 0.0, 'read': 0.0, 'edited_ok': 0.8, 'edited_bad': 0.2, 'passed': 0.0, 'failed': 0.0, 'done': 0.0}
+R[:, submit] = [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0]
+```
+
+每个非终止的状态-动作行都是一个概率分布，终止行为零，唯一的正奖励位于 `submit` 列中 `edited_ok` 和 `passed` 对应的位置。图 2.1 画出了同样的张量。
+
+![图 2.1：修复 MDP。立体块是状态，地面上的轨道是标注了动作和概率的转移，两条强调色（蓝色）的提交支付奖励 1。](/tutorial/figures/repair-mdp.svg)
+
+沿着两条编辑分支看。从 `unread` 出发，一次猜测只有 30% 的概率进入 `edited_ok`。从 `read` 或 `failed` 出发，有信息的编辑以 80% 的概率成功。`test` 箭头并不改变文件是否正确；它们只是把智能体移到一个*报告*正确与否的状态。在这里的完全可观测情形下，报告智能体已经知道的事情没有任何价值。2.7 节表明，一旦智能体看不到状态，它就会获得价值。
+
+## 2.2 策略、轨迹与回报
+
+**策略**（policy）$\pi(a \mid s)$ 是每个状态上关于动作的分布。在表格型 MDP 中，它是一个各行之和为 1 的张量 `policy: [S, A]`。确定性策略在每个状态上把全部质量放在一个动作上。对语言模型而言，策略就是模型本身：$\pi_\theta(a \mid s)$ 是模型在给定上下文时输出动作 $a$ 的概率。
+
+策略与 MDP 共同定义了一个关于**轨迹**（trajectory）$\tau = (s_0, a_0, r_0, s_1, a_1, r_1, \dots, s_T)$ 的分布：
+
+$$
+p_\pi(\tau) = \rho_0(s_0) \prod_{t=0}^{T-1} \pi(a_t \mid s_t)\, P(s_{t+1} \mid s_t, a_t).
+$$
+
+这个分解把智能体控制的部分（$\pi$）与它不控制的部分（$\rho_0$ 和 $P$）分开了。正是这种分离使策略梯度无需环境模型就能工作：[第 6 章](/tutorial/zh/chapters/06-policy-gradient)对 $\log p_\pi(\tau)$ 求导，$P$ 因子因为不依赖于 $\theta$ 而消失。
+
+一条轨迹的**回报**（return）是其奖励的折扣和，
+
+$$
+G_0 = \sum_{t=0}^{T-1} \gamma^{t} r_t,
+$$
+
+而强化学习的**目标**是从初始分布出发的期望回报，$J(\pi) = \mathbb{E}_{\tau \sim p_\pi}[G_0]$。对参数化策略，我们写作 $J(\theta)$。计算回报是我们保存的第一个函数。
+
+```python
+#@save
+def discounted_return(rewards, gamma):
+    """Discounted sum over the last axis: rewards [..., T] -> returns [...]."""
+    T = rewards.shape[-1]
+    discounts = gamma ** torch.arange(T, dtype=rewards.dtype)   # [T]
+    return (rewards * discounts).sum(-1)
+```
+
+```python
+rewards = torch.tensor([[0., 0., 0., 1.],      # success on the 4th action
+                        [0., 0., 1., 0.]])     # success on the 3rd (then padding)
+print('gamma=1.0 :', discounted_return(rewards, 1.0).tolist())
+print('gamma=0.9 :', [round(v, 4) for v in discounted_return(rewards, 0.9).tolist()])
+```
+
+Output:
+
+```text
+gamma=1.0 : [1.0, 1.0]
+gamma=0.9 : [0.729, 0.81]
+```
+
+当 $\gamma = 1$ 时，两条轨迹的价值都是 1：回报只记录修复*是否*成功。当 $\gamma = 0.9$ 时，较快的成功价值 $0.9^2 = 0.81$，较慢的价值 $0.9^3 = 0.729$，因此折扣还编码了成功*何时*发生。第二条轨迹奖励之后的填充零不改变任何东西，这就是为什么只要填充值为零，填充过的奖励张量在这里是安全的。
+
+为了估计 $J$，我们可以采样。下面的函数通过从 `policy[s]` 中抽取动作、从 `P[s, a]` 中抽取下一个状态来展开一个回合（episode），直到到达终止行。
+
+```python
+def sample_episode(P, R, policy, generator, start=0, max_steps=100):
+    """Roll out one episode; return (states, actions, rewards) as Python lists."""
+    states, actions, rewards = [start], [], []
+    s = start
+    for _ in range(max_steps):
+        if P[s].sum() == 0:                     # terminal: no outgoing mass
+            break
+        a = torch.multinomial(policy[s], 1, generator=generator).item()
+        actions.append(a)
+        rewards.append(R[s, a].item())
+        s = torch.multinomial(P[s, a], 1, generator=generator).item()
+        states.append(s)
+    return states, actions, rewards
+```
+
+我们需要具体的策略。`deterministic_policy` 把每个状态一个动作名的列表转换为一个独热（one-hot）的 `[S, A]` 张量。我们定义三个在整章中都会用到的策略：
+
+- **careful**（谨慎）：读取、编辑、测试，测试通过后提交，失败后重新编辑；
+- **read-edit-submit**（读取-编辑-提交）：读取、编辑一次，不测试就提交；
+- **blind**（盲目）：立即编辑并提交。
+
+```python
+def deterministic_policy(action_names):
+    """One action name per state (length S) -> one-hot policy [S, A]."""
+    policy = torch.zeros(len(REPAIR_STATES), len(REPAIR_ACTIONS), dtype=torch.float64)
+    for s, name in enumerate(action_names):
+        policy[s, REPAIR_ACTIONS.index(name)] = 1.0
+    return policy
+
+# one action per state: unread, read, edited_ok, edited_bad, passed, failed, done
+careful = deterministic_policy(['read', 'edit', 'test',   'test',   'submit', 'edit', 'submit'])
+read_edit_submit = deterministic_policy(['read', 'edit', 'submit', 'submit', 'submit', 'edit', 'submit'])
+blind = deterministic_policy(['edit', 'edit', 'submit', 'submit', 'submit', 'edit', 'submit'])
+```
+
+现在开始采样。每一行打印 careful 策略的一个回合，表示为一串动作及其导致的状态。
+
+```python
+gen = torch.Generator().manual_seed(0)
+for _ in range(3):
+    states, actions, rewards = sample_episode(P, R, careful, gen)
+    path = ' -> '.join(f'{REPAIR_ACTIONS[a]}:{REPAIR_STATES[s]}'
+                       for a, s in zip(actions, states[1:]))
+    print(f'return={sum(rewards):.0f}  len={len(actions)}  {path}')
+```
+
+Output:
+
+```text
+return=1  len=4  read:read -> edit:edited_ok -> test:passed -> submit:done
+return=1  len=4  read:read -> edit:edited_ok -> test:passed -> submit:done
+return=1  len=10  read:read -> edit:edited_bad -> test:failed -> edit:edited_bad -> test:failed -> edit:edited_bad -> test:failed -> edit:edited_ok -> test:passed -> submit:done
+```
+
+careful 策略总是以一次成功的提交结束，但回合长度是随机的：每次测试失败都会再增加一次编辑和一次测试。随机性来自环境（$P$），而不是来自策略，策略本身是确定性的。$J$ 的蒙特卡洛估计对许多回合的回报取平均。
+
+```python
+def mc_value(P, R, policy, gamma, n, seed=0):
+    """Monte Carlo estimate of J = E[G_0] from state 0, with its standard error."""
+    gen = torch.Generator().manual_seed(seed)
+    returns = []
+    for _ in range(n):
+        rewards = torch.tensor(sample_episode(P, R, policy, gen)[2], dtype=torch.float64)
+        returns.append(discounted_return(rewards, gamma))   # scalar tensor
+    returns = torch.stack(returns)                            # [n]
+    return returns.mean().item(), (returns.std() / n ** 0.5).item()
+
+for name, pol in [('careful', careful), ('read-edit-submit', read_edit_submit), ('blind', blind)]:
+    mean, stderr = mc_value(P, R, pol, gamma=0.9, n=4000)
+    print(f'{name:17s} J(gamma=0.9) ~ {mean:.4f} +/- {stderr:.4f}')
+```
+
+Output:
+
+```text
+careful           J(gamma=0.9) ~ 0.6947 +/- 0.0011
+read-edit-submit  J(gamma=0.9) ~ 0.6466 +/- 0.0051
+blind             J(gamma=0.9) ~ 0.2711 +/- 0.0065
+```
+
+这些是带有标准误的估计（见[附录 A.1](/tutorial/zh/chapters/A-math#a-1-蒙特卡洛估计与误差棒)）。在 $\gamma = 0.9$ 下，careful 策略领先于 read-edit-submit，但领先幅度小于其成功概率上 20 个百分点的优势（1.0 对 0.8）所暗示的程度，因为它的成功来得更晚，折扣也更多。接下来我们精确地计算同样的数字。
+
+## 2.3 价值函数与贝尔曼方程
+
+单个回合的回报是有噪声的。**状态价值函数**（state-value function）把噪声平均掉：
+
+$$
+V^\pi(s) = \mathbb{E}_\pi\Big[\sum_{k \ge 0} \gamma^k r_{t+k} \,\Big|\, s_t = s\Big],
+$$
+
+而**动作价值函数**（action-value function）还额外以第一个动作为条件：
+
+$$
+Q^\pi(s, a) = \mathbb{E}_\pi\Big[\sum_{k \ge 0} \gamma^k r_{t+k} \,\Big|\, s_t = s, a_t = a\Big].
+$$
+
+把回报拆分为第一个奖励和其余部分。从 $s_{t+1}$ 开始的其余部分是同一类型的回报，因此它的条件期望是 $V^\pi(s_{t+1})$。这就得到**贝尔曼期望方程**（Bellman expectation equations）：
+
+$$
+Q^\pi(s, a) = R(s, a) + \gamma \sum_{s'} P(s' \mid s, a)\, V^\pi(s'), \qquad V^\pi(s) = \sum_a \pi(a \mid s)\, Q^\pi(s, a).
+$$
+
+把第一个方程代入第二个方程，消去 $Q$：
+
+$$
+V^\pi = r_\pi + \gamma P_\pi V^\pi, \qquad r_\pi(s) = \sum_a \pi(a\mid s) R(s,a), \quad P_\pi(s, s') = \sum_a \pi(a\mid s) P(s'\mid s,a).
+$$
+
+这是一个含 $|\mathcal{S}|$ 个未知数的线性方程组，$(I - \gamma P_\pi) V^\pi = r_\pi$。只要 $I - \gamma P_\pi$ 可逆，它就有唯一解。对任意 $\gamma < 1$ 这都成立，因为 $P_\pi$ 是次随机的，其谱半径至多为 1。对 $\gamma = 1$，当且仅当策略从每个状态出发都以概率 1 到达终止状态（即*正常*（proper）策略）时它才成立。求解这个方程组就是**精确策略评估**（exact policy evaluation），也是我们保存的第二个函数。
+
+```python
+#@save
+def policy_evaluation(P, R, policy, gamma):
+    """Exact V^pi by linear solve. P [S, A, S], R [S, A], policy [S, A] -> V [S]."""
+    P_pi = torch.einsum('sa,sat->st', policy, P)       # [S, S] state-to-state under pi
+    r_pi = (policy * R).sum(-1)                         # [S]   expected reward under pi
+    eye = torch.eye(P.shape[0], dtype=P.dtype)
+    return torch.linalg.solve(eye - gamma * P_pi, r_pi)
+```
+
+`einsum` 和求和这两行就是 $P_\pi$ 和 $r_\pi$ 的定义；求解就是贝尔曼方程。与蒙特卡洛结果比较一下。
+
+```python
+for name, pol in [('careful', careful), ('read-edit-submit', read_edit_submit), ('blind', blind)]:
+    V = policy_evaluation(P, R, pol, gamma=0.9)
+    print(f'{name:17s} V(unread) = {V[0].item():.4f}   V = {[round(v, 3) for v in V.tolist()]}')
+```
+
+Output:
+
+```text
+careful           V(unread) = 0.6959   V = [0.696, 0.773, 0.9, 0.696, 1.0, 0.773, 0.0]
+read-edit-submit  V(unread) = 0.6480   V = [0.648, 0.72, 1.0, 0.0, 1.0, 0.72, 0.0]
+blind             V(unread) = 0.2700   V = [0.27, 0.72, 1.0, 0.0, 1.0, 0.72, 0.0]
+```
+
+$V(\text{unread})$ 的精确值与 2.2 节的蒙特卡洛估计在大约一个标准误之内吻合，这正是应有的结果。完整的向量揭示了更多信息。在 careful 策略下，$V(\text{passed}) = 1$：距离一个确定的奖励只差一步，而且这一步不打折扣，因为奖励在剩余回合的 $t = 0$ 时到达。对每个策略都有 $V(\text{done}) = 0$，因为终止之后什么都不会发生。
+
+动作价值可以用一行代码从 $V$ 得到，它们正是策略改进步骤所比较的量。**优势**（advantage）$A^\pi(s,a) = Q^\pi(s,a) - V^\pi(s)$ 衡量动作 $a$ 比策略在 $s$ 中的平均行为好多少。[第 7 章](/tutorial/zh/chapters/07-advantages-and-credit)整章都在讲如何估计它。
+
+```python
+gamma = 0.9
+V = policy_evaluation(P, R, careful, gamma)
+Q = R + gamma * torch.einsum('sat,t->sa', P, V)          # [S, A]
+A = Q - V[:, None]                                         # [S, A] advantage
+for state in ['unread', 'edited_ok', 'edited_bad']:
+    s = REPAIR_STATES.index(state)
+    print(f'{state:10s} Q =', [f'{q:.3f}' for q in Q[s].tolist()],
+          ' A =', [f'{x:+.3f}' for x in A[s].tolist()])
+residual = (V - (careful * Q).sum(-1)).abs().max().item()
+print(f'Bellman residual max |V - sum_a pi Q| = {residual:.1e}')
+```
+
+Output:
+
+```text
+unread     Q = ['0.696', '0.681', '0.626', '0.000']  A = ['+0.000', '-0.014', '-0.070', '-0.696']
+edited_ok  Q = ['0.810', '0.681', '0.900', '1.000']  A = ['-0.090', '-0.219', '+0.000', '+0.100']
+edited_bad Q = ['0.626', '0.681', '0.696', '0.000']  A = ['-0.070', '-0.014', '+0.000', '-0.696']
+Bellman residual max |V - sum_a pi Q| = 0.0e+00
+```
+
+各列依次是 `read, edit, test, submit`。careful 策略所采取动作的优势按定义恰好为 0。其他条目则很有信息量。在 `edited_ok` 中，提交的优势为 $+0.100$：careful 的 `test` 在一个已经正确的文件上花费了一个被折扣的步骤，其代价恰好是奖励的 $1 - 0.9$ 倍。在 `edited_bad` 中，提交的优势为 $-0.696$，因为它丢掉了该状态的全部价值。一个依据这些数字行动的策略会在 `edited_ok` 中提交，在 `edited_bad` 中继续测试，因为在那里 `test` 的动作价值最高。这就是 2.5 节的策略改进步骤。最后一行在机器精度下验证了贝尔曼方程。
+
+> **陷阱。** 当 $\gamma$ 接近 1 时，$I - \gamma P_\pi$ 接近奇异，float32 下的 `torch.linalg.solve` 可能出现明显的漂移。修复 MDP 全程使用 float64。在大规模训练中，只要以低精度累加长时程回报或对数概率之和，就会出现同样的问题。
+
+## 2.4 折扣
+
+折扣因子扮演着两种不同的角色，把二者混为一谈是常见的困惑来源。
+
+1. **一种建模选择。** $\gamma < 1$ 表示 $k$ 步之后的奖励只值当前同样奖励的 $\gamma^k$。几何折扣等价于一个在每一步都以概率 $1-\gamma$ 独立终止的回合，因此它的*有效时间跨度*约为 $1/(1-\gamma)$ 步。
+2. **一种数学上的便利。** $\gamma < 1$ 保证 $I - \gamma P_\pi$ 可逆，并保证即使对永不终止的策略，回报也是有界的。
+
+一个编程回合是有限的：它以 `submit` 结束，或在轮数预算耗尽时结束。我们关心的是它是否成功，而在第 5 轮而不是第 3 轮找到的等价修复，对用户来说价值并不更低。这支持用 $\gamma = 1$ 作为任务的模型。但折扣会改变哪个策略更受青睐。在一系列 $\gamma$ 下评估这三个策略。
+
+```python
+print('gamma   careful  read-edit-submit  blind')
+for gamma in [1.0, 0.99, 0.95, 0.9, 0.8, 0.6]:
+    values = [policy_evaluation(P, R, pol, gamma)[0].item()
+              for pol in (careful, read_edit_submit, blind)]
+    print(f'{gamma:<6}  ' + '  '.join(f'{v:7.4f}' for v in values))
+```
+
+Output:
+
+```text
+gamma   careful  read-edit-submit  blind
+1.0      1.0000   0.8000   0.3000
+0.99     0.9655   0.7841   0.2970
+0.95     0.8370   0.7220   0.2850
+0.9      0.6959   0.6480   0.2700
+0.8      0.4697   0.5120   0.2400
+0.6      0.1862   0.2880   0.1800
+```
+
+在 $\gamma = 1$ 时，careful 策略以概率 1 成功，read-edit-submit 为 0.8，blind 为 0.3；这些就是成功概率，因为唯一的奖励是末尾的 1。随着 $\gamma$ 下降，所有价值都下降，但 careful 下降得最快，因为它的成功需要更多步骤。大约在 $\gamma = 0.85$ 以下，read-edit-submit 超过了 careful：折扣已经短视到宁愿接受 20% 的失败概率，也不愿承担测试的代价。图 2.2 展示了这一交叉，以及每步代价带来的类似效应。
+
+![图 2.2：三个固定策略的初始状态价值，分别作为折扣（左，无每步代价）和每步代价（右，gamma = 1）的函数。](/tutorial/figures/repair-values.svg)
+
+看两个交叉点。在左图中，只要 $\gamma$ 足够低，单靠折扣就会使不做测试的策略更可取。在右图中，在 $\gamma = 1$ 下，一旦每步代价超过每个动作约 0.13，也会发生同样的事情。这两个旋钮都在告诉智能体时间是昂贵的，而且二者都可能改变*最优行为*，而不仅仅是价值的尺度。这正是 2.9 节前两个设计问题的内容。
+
+## 2.5 最优策略，以及为什么我们不去计算它
+
+评估告诉我们一个策略有多好。**改进**让它变得更好。**策略改进定理**指出：如果 $\pi'$ 相对于 $Q^\pi$ 是贪心的，即 $\pi'(s) = \arg\max_a Q^\pi(s,a)$，那么对每个状态都有 $V^{\pi'}(s) \ge V^\pi(s)$。证明很简短。贪心性给出 $Q^\pi(s, \pi'(s)) \ge V^\pi(s)$；在 $\pi'$ 下把贝尔曼方程一步一步展开，并在每一步应用同样的不等式即可。
+
+交替进行评估和改进会收敛到一个**最优策略** $\pi^*$，其价值满足**贝尔曼最优方程**：
+
+$$
+V^*(s) = \max_a \Big[R(s,a) + \gamma \sum_{s'} P(s' \mid s,a)\, V^*(s')\Big].
+$$
+
+**价值迭代**（value iteration）把右端作为更新反复应用，直到它不再变化。对 $\gamma < 1$，该更新在最大范数下是一个压缩映射，因此从任何起点出发都会收敛。
+
+```python
+#@save
+def value_iteration(P, R, gamma, iters=10_000, tol=1e-12):
+    """Optimal values and a greedy policy. P [S, A, S], R [S, A] -> (V* [S], actions [S])."""
+    V = torch.zeros(P.shape[0], dtype=P.dtype)
+    for _ in range(iters):
+        Q = R + gamma * torch.einsum('sat,t->sa', P, V)    # [S, A]
+        V_new = Q.max(-1).values
+        if (V_new - V).abs().max() < tol:
+            return V_new, Q.argmax(-1)
+        V = V_new
+    return V, Q.argmax(-1)
+```
+
+```python
+V_star, best = value_iteration(P, R, gamma=0.9)
+print('V*      :', [round(v, 3) for v in V_star.tolist()])
+print('pi*     :', dict(zip(REPAIR_STATES[:-1], [REPAIR_ACTIONS[a] for a in best[:-1].tolist()])))
+print('careful :', round(policy_evaluation(P, R, careful, 0.9)[0].item(), 4),
+      ' optimal:', round(V_star[0].item(), 4))
+```
+
+Output:
+
+```text
+V*      : [0.773, 0.859, 1.0, 0.773, 1.0, 0.859, 0.0]
+pi*     : {'unread': 'read', 'read': 'edit', 'edited_ok': 'submit', 'edited_bad': 'test', 'passed': 'submit', 'failed': 'edit'}
+careful : 0.6959  optimal: 0.7733
+```
+
+最优策略先读取、再编辑，然后做了上面任何一个固定策略都没有做过的事：它在 `edited_ok` 中立即提交，在 `edited_bad` 中*测试*。测试一个已知有误的文件是有用的，因为它会通向 `failed`，而从这个状态出发，有信息的编辑有 80% 的成功率，而不是在 `edited_bad` 中做一次 30% 的猜测。并且它从不测试一个正确的文件，因为它能看到文件是正确的。careful 与最优策略之间的差距，就是在答案已知时仍然去测试的代价。
+
+### 为什么这无法扩展到语言模型
+
+价值迭代需要一张每个状态一个条目的表，以及对所有动作的遍历。对于 2.8 节 token 级建模下的语言模型，一个状态是一个 token 前缀，一个动作是一个 token。数一数它们。
+
+```python
+import math
+vocab, horizon = 151_000, 1_000                 # a Qwen3-sized vocabulary, a short episode
+log10_prefixes = horizon * math.log10(vocab)
+print(f'distinct length-{horizon} token prefixes: about 10^{log10_prefixes:.0f}')
+print(f'actions per state (vocabulary):          {vocab:,}')
+```
+
+Output:
+
+```text
+distinct length-1000 token prefixes: about 10^5179
+actions per state (vocabulary):          151,000
+```
+
+没有任何一张表能索引 10 的五千多次方个状态，而且从一个前缀到其后继的转移还包含我们无法枚举的环境响应。替代方案是直接在策略空间中搜索：把 $\pi_\theta$ 参数化，用梯度上升来爬升 $J(\theta)$。在修复 MDP 上我们仍然可以*精确地*做到这一点，因为 `policy_evaluation` 是可微的：它只是一个 einsum 和一次线性求解。
+
+```python
+torch.manual_seed(0)
+P_c, R_c = make_repair_mdp(step_cost=0.05)
+logits = torch.zeros(len(REPAIR_STATES), len(REPAIR_ACTIONS), dtype=torch.float64,
+                     requires_grad=True)                      # theta: [S, A]
+opt = torch.optim.SGD([logits], lr=2.0)
+for step in range(301):
+    J = policy_evaluation(P_c, R_c, torch.softmax(logits, -1), gamma=1.0)[0]
+    if step in (0, 10, 50, 100, 300):
+        print(f'step {step:3d}  J = {J.item():.4f}')
+    opt.zero_grad()
+    (-J).backward()                                           # ascend J
+    opt.step()
+greedy = logits.argmax(-1)[:-1].tolist()
+print('greedy actions:', [REPAIR_ACTIONS[a] for a in greedy])
+print('optimal J     :', round(value_iteration(P_c, R_c, 1.0)[0][0].item(), 4))
+```
+
+Output:
+
+```text
+step   0  J = 0.0154
+step  10  J = 0.4476
+step  50  J = 0.7775
+step 100  J = 0.8032
+step 300  J = 0.8182
+greedy actions: ['read', 'edit', 'submit', 'test', 'submit', 'edit']
+optimal J     : 0.825
+```
+
+均匀随机策略的起始价值接近零（0.0154）：在每步代价为 0.05 时，随机智能体要为许多无用的动作付费，而且常常提交一个错误的文件。对 softmax logits 做梯度上升，300 步后价值爬升到 0.8182，接近最优的 0.825，而且学到的策略的贪心动作与价值迭代一致。剩下的差距来自 softmax 策略向确定性策略逼近时缓慢的最后阶段：logits 必须无限增长才能把全部质量放在一个动作上。这就是策略梯度方法，只不过这里享有一项在真实场景中不存在的便利：$\nabla_\theta J$ 是通过对环境模型求导精确算出的。语言模型没有这样的模型。[第 6 章](/tutorial/zh/chapters/06-policy-gradient)展示如何仅从采样的轨迹中估计同一个梯度。
+
+## 2.6 老虎机：单步情形
+
+**老虎机**（bandit）是回合只持续一步的 MDP。没有下一个状态，因此 $Q(a) = R(a)$，唯一的问题是哪个动作的期望奖励最高。**上下文老虎机**（contextual bandit）在开始时额外抽取一个上下文 $x$：$Q(x, a) = \mathbb{E}[r \mid x, a]$。
+
+单轮 RLVR 就是一个上下文老虎机。上下文是提示，动作是*整个*回答，奖励是验证器对该回答的评分。回答是逐 token 生成的，但环境在 token 之间不做反应，因此除了策略之外，唯一的随机性来自提示。GRPO 等方法把每个提示当作一个小型老虎机问题：采样 $G$ 个回答，观察 $G$ 个奖励，并把概率推向更好的那些（[第 9 章](/tutorial/zh/chapters/09-grpo-and-variants)）。
+
+老虎机把表格型 MDP 所掩盖的问题单独拎了出来：**探索**（exploration）。一个动作的价值在尝试之前是未知的，而一个不再尝试某个动作的策略永远无法得知它其实是好的。比较一个*贪心*学习器（总是选择估计均值最高的臂）和 *epsilon-贪心*学习器（以概率 $\epsilon$ 随机选一个臂）。我们并行运行 2,000 个独立副本。
+
+```python
+def run_bandit(means, steps, eps, runs=2000, seed=0):
+    """Sample-average learner on a Bernoulli bandit; returns (mean reward, P(best arm most pulled))."""
+    gen = torch.Generator().manual_seed(seed)
+    K = means.numel()
+    counts, totals = torch.ones(runs, K), torch.zeros(runs, K)   # one optimistic pull each
+    totals += (torch.rand(runs, K, generator=gen) < means).float()
+    earned = torch.zeros(runs)
+    for _ in range(steps):
+        greedy = (totals / counts).argmax(-1)                         # [runs]
+        explore = torch.rand(runs, generator=gen) < eps
+        arm = torch.where(explore, torch.randint(K, (runs,), generator=gen), greedy)
+        reward = (torch.rand(runs, generator=gen) < means[arm]).float()
+        counts[torch.arange(runs), arm] += 1
+        totals[torch.arange(runs), arm] += reward
+        earned += reward
+    found = (counts.argmax(-1) == means.argmax()).float().mean()
+    return (earned / steps).mean().item(), found.item()
+```
+
+```python
+means = torch.tensor([0.3, 0.5, 0.6])
+for eps in [0.0, 0.05, 0.2]:
+    avg, found = run_bandit(means, steps=500, eps=eps)
+    print(f'eps={eps:<4}  avg reward={avg:.3f}  best arm most pulled in {found:.1%} of runs')
+print('best possible avg reward = 0.600')
+```
+
+Output:
+
+```text
+eps=0.0   avg reward=0.509  best arm most pulled in 51.8% of runs
+eps=0.05  avg reward=0.557  best arm most pulled in 73.8% of runs
+eps=0.2   avg reward=0.554  best arm most pulled in 85.4% of runs
+best possible avg reward = 0.600
+```
+
+贪心学习器会锁定在最初几次带噪声的拉动后看起来最好的那只臂上，只在 51.8% 的运行中最终选定最好的臂，因为没有任何机制迫使它重新尝试早期拉动返回 0 的臂。当 $\epsilon = 0.05$ 时，最好的臂在 73.8% 的运行中胜出，平均奖励从 0.509 升至 0.557。当 $\epsilon = 0.2$ 时，最好的臂在 85.4% 的运行中胜出，但平均奖励没有进一步提高，因为每五次拉动中仍有一次被随机浪费掉。这就是探索与利用之间的权衡。
+
+语言模型强化学习很少使用显式的 $\epsilon$-贪心，但同样的问题无处不在。策略只通过它自己的采样分布进行探索。温度和 $\pi_\theta$ 的熵（[第 10 章](/tutorial/zh/chapters/10-kl-entropy-regularization)）就是探索的旋钮。如果模型从未为某个任务采样出一次成功的修复，那么该任务的奖励总是 0，任何梯度方法都无法从一个它从未观测到的信号中学习。这就是为什么起始策略的通过率是强化学习训练之前要检查的第一个数字（[第 1 章 1.8 节](/tutorial/zh/chapters/01-introduction#1-8-实践中的设计问题)）。
+
+## 2.7 部分可观测
+
+到目前为止，智能体能看到状态。真实的编程智能体看不到。它看到的是问题描述、工具的输出以及它自己的消息。它看不到将要为它评分的隐藏测试，看不到它没有读过的那部分仓库，也看不到它的编辑是否正确。**部分可观测 MDP**（partially observable MDP，POMDP）增加了一个观测函数 $O(o \mid s)$：环境的状态像在 MDP 中一样演化，但智能体只接收到一个观测（observation）$o_t$。
+
+POMDP 中的智能体应当以它的完整历史 $h_t = (o_0, a_0, o_1, \dots, o_t)$ 为条件，或者以**信念**（belief）$b_t(s) = \Pr(s_t = s \mid h_t)$ 为条件，后者是历史的充分统计量。一个只把当前观测映射到动作的策略可能严格次优。对语言模型而言，上下文窗口*就是*历史：模型以之前的每一条消息和工具输出为条件。这是一个优势，也正因如此，上下文截断（2.9 节）是一种建模上的改变，而不仅仅是一个工程细节。
+
+在修复 MDP 中，让 `edited_ok` 和 `edited_bad` 看起来完全相同：编辑之后，智能体只能看到 `edited`。其他每个状态都按其本身被观测。
+
+```python
+OBSERVE = {'unread': 'start', 'read': 'read', 'edited_ok': 'edited', 'edited_bad': 'edited',
+           'passed': 'pass', 'failed': 'fail', 'done': 'done'}
+
+def observation_policy(rule):
+    """Map {observation: action} to a state policy [S, A]; aliased states share an action."""
+    return deterministic_policy([rule[OBSERVE[state]] for state in REPAIR_STATES])
+
+base = {'start': 'read', 'read': 'edit', 'pass': 'submit', 'fail': 'edit', 'done': 'submit'}
+P_c, R_c = make_repair_mdp(step_cost=0.05)
+for after_edit in ['submit', 'test']:
+    pol = observation_policy({**base, 'edited': after_edit})
+    print(f'edited -> {after_edit:6s}  V(unread) = {policy_evaluation(P_c, R_c, pol, 1.0)[0]:.4f}')
+print(f'full observability   V*(unread) = {value_iteration(P_c, R_c, 1.0)[0][0]:.4f}')
+```
+
+Output:
+
+```text
+edited -> submit  V(unread) = 0.6500
+edited -> test    V(unread) = 0.7750
+full observability   V*(unread) = 0.8250
+```
+
+在每步代价为 0.05、$\gamma = 1$ 时，观测 `edited` 在两个隐藏状态中必须导向同一个动作。编辑后盲目提交的价值为 0.65；先测试的价值为 0.775。在部分可观测条件下，测试是更好的选择，因为测试的输出揭示了隐藏变量。完全可观测下的最优值 0.825 还要更高。0.825 与 0.775 之差，就是智能体无法直接观测、必须花一步去获取的那部分信息的价值。
+
+同样的结构也出现在完整规模的问题中。读取文件、运行测试和搜索仓库都是*信息收集动作*。它们本身不获得奖励，它们的价值之所以存在，只是因为智能体只能部分地观测它的世界。仅基于结果的奖励必须教会智能体去采取这些动作，而这是一个信用分配（credit assignment）问题（[第 7 章](/tutorial/zh/chapters/07-advantages-and-credit)、[第 12 章](/tutorial/zh/chapters/12-multi-turn-and-long-horizons)）。隐藏测试按设计也永远不会被观测到。正是这一点使它们成为智能体无法直接拟合的奖励（[第 11 章](/tutorial/zh/chapters/11-rewards-and-verifiers)）。
+
+## 2.8 把 LLM 智能体建模为 MDP 的三种方式
+
+语言模型智能体可以用不止一种方式纳入 MDP 框架，而这一选择决定了代码中的“动作”“步”和“优势”分别指什么。取第 1 章中一个脚本化的回合，把它写成带归属的片段。
+
+```python
+episode = [('prompt', 'Fix clamp: clamp(3, 0, 5) returns 0, expected 3.'),
+           ('policy', '<call> read </call>'),
+           ('env',    'def clamp(value, lower, upper): return min(lower, max(value, upper))'),
+           ('policy', '<call> edit swap_minmax </call>'),
+           ('env',    'edited with swap_minmax'),
+           ('policy', '<call> test </call>'),
+           ('env',    'PASS clamp(3, 0, 5) PASS clamp(-2, 0, 5) PASS clamp(9, 0, 5)'),
+           ('policy', '<call> submit </call>')]
+tokens = [(owner, w) for owner, text in episode for w in text.split()]   # word-level "tokens"
+policy_tokens = sum(owner == 'policy' for owner, _ in tokens)
+turns = sum(owner == 'policy' for owner, _ in episode)
+print(f'total tokens={len(tokens)}  policy tokens={policy_tokens}  turns={turns}')
+print(f'{"casting":8s} {"decisions":>9s} {"env-random transitions":>23s} {"rewards":>8s}')
+print(f'{"token":8s} {policy_tokens:9d} {turns - 1:23d} {1:8d}')
+print(f'{"turn":8s} {turns:9d} {turns - 1:23d} {1:8d}')
+print(f'{"episode":8s} {1:9d} {0:23d} {1:8d}')
+```
+
+Output:
+
+```text
+total tokens=45  policy tokens=13  turns=4
+casting  decisions  env-random transitions  rewards
+token           13                       3        1
+turn             4                       3        1
+episode          1                       0        1
+```
+
+这里用按单词切分代替分词器；[第 5 章](/tutorial/zh/chapters/05-trajectories-and-templates)使用真实的 token id。三种建模方式如下：
+
+**token 级。** 状态是完整的 token 前缀 $c_i$，动作是下一个 token $y_i$，而 $\pi_\theta(y_i \mid c_i)$ 正是模型所计算的量。转移是确定性的，$c_{i+1} = c_i \oplus y_i$，*除了*在工具边界处，环境会追加策略没有选择的观测 token。这些是仅有的随机转移；在这个玩具回合中，策略的十三个 token 决策之间有三次这样的转移。这种建模换来的是 MDP 的策略与网络输出分布之间的精确对应，因此对数概率、比率和 KL 惩罚都是逐 token 的量（[第 3 章](/tutorial/zh/chapters/03-language-models-as-policies)）。代价是极长的时间跨度。单个终局奖励必须分配到数千个决策上，而且观测 token 必须通过掩码从动作集合中排除（[第 5 章](/tutorial/zh/chapters/05-trajectories-and-templates)）。
+
+**轮级。** 动作是一整条消息，这里是 `<call> edit swap_minmax </call>`，状态是到目前为止的对话。其概率是各 token 概率的乘积。时间跨度缩短为轮数，这是信用分配的自然尺度：轮级优势表达的是“这次工具调用是好的”。代价是一个组合爆炸式的巨大动作空间，以及一个由许多逐 token 比率相乘得到的比率 $\pi_\theta(a)/\pi_{\text{old}}(a)$，它可能会爆炸（[第 8 章](/tutorial/zh/chapters/08-ppo)）。
+
+**回合级。** 整条轨迹是一个动作，问题变成一个关于轨迹的上下文老虎机，任务是上下文，最终奖励是收益。这是 GRPO 类结果强化学习中隐含的建模方式（[第 9 章](/tutorial/zh/chapters/09-grpo-and-variants)）：一条轨迹中的每个策略 token 都获得相同的轨迹级优势。它换来的是简单，并且不需要价值函数。代价是放弃了回合*内部*的全部信用分配：一次无用的 `read` 和决定性的 `edit` 得到相同的信号。
+
+这些并不是相互竞争的理论。它们是对同一采样过程的三种视角，实际系统会混合使用它们。一种常见的组合是：在 token 级计算对数概率，在回合级计算优势，在轮级施加掩码。
+
+## 2.9 实践中的设计问题
+
+> **问题：为有限长度的编程回合选择折扣。** *症状：* 当 $\gamma < 1$ 时，智能体学会跳过验证步骤。当 $\gamma = 1$ 时，评论家的价值估计发散，或者一个永远循环的策略的价值没有定义。*原因：* $\gamma < 1$ 使较晚的成功价值更低，从而改变最优策略（图 2.2 中的交叉）。$\gamma = 1$ 时，对任何能够避免终止的策略，$I - P_\pi$ 都是奇异的。*可选方案：* (a) $\gamma = 1$，配合强制终止的硬性轮数或 token 预算；这与任务的成功标准相符，但预算成为环境的一部分，而被截断的回合需要一条处理规则（[第 12 章](/tutorial/zh/chapters/12-multi-turn-and-long-horizons)）。(b) 让 $\gamma$ 略低于 1，以偏向短回合为代价保持价值有界。(c) 显式的每步代价（见下一个问题），以奖励单位而不是通过折扣来表达紧迫性。*默认做法：* 本书使用 $\gamma = 1$ 加上轮数预算，并把任何紧迫性都作为显式的、经过测量的代价来处理。这是一条建议，而不是普适规则。
+
+奇异的情形很容易复现。一个永远在读取的策略永不终止。
+
+```python
+loop_forever = deterministic_policy(['read'] * len(REPAIR_STATES))
+for gamma in [0.99, 1.0]:
+    try:
+        V = policy_evaluation(P, R, loop_forever, gamma)
+        print(f'gamma={gamma}: V(unread) = {V[0].item():.4f}')
+    except torch.linalg.LinAlgError:
+        print(f'gamma={gamma}: torch.linalg.LinAlgError (I - gamma P_pi is singular)')
+```
+
+Output:
+
+```text
+gamma=0.99: V(unread) = 0.0000
+gamma=1.0: torch.linalg.LinAlgError (I - gamma P_pi is singular)
+```
+
+当 $\gamma = 0.99$ 时，这个永不终止的策略有一个良定义的价值 0：它永远得不到奖励。当 $\gamma = 1$ 时，线性方程组没有唯一解。基于采样的训练不会抛出异常；回合只是永远不会结束，这就是为什么轮数预算是环境必需的一部分，而不是一项可选的优化。
+
+> **问题：终局奖励与每步代价。** *症状：* 为了抑制过长的回合而加入每步惩罚之后，智能体开始不做测试就提交，或者不做任何编辑就立即提交。*原因：* 每步代价 $c$ 会从每个策略的价值中减去 $c$ 乘以期望回合长度，长度不同的策略损失的量也不同。超过某个阈值后，一个更短、更不可靠的策略会成为最优；在更高的阈值上，*放弃*会成为最优。*可选方案：* (a) 只使用终局奖励，配合预算，这对成功率而言是无偏的，但不产生任何提高效率的压力。(b) 一个较小的每步代价，设定在远低于使最优策略发生改变的阈值处。(c) 单独报告代价，并在评测时按代价在成功的策略之间进行选择。*默认做法：* 在训练早期只使用终局奖励；只有当效率重要时，才加入一个较小的每步代价，并且要先确认它不会在有代表性的任务上改变最优策略。
+
+```python
+for cost in [0.0, 0.05, 0.1, 0.2, 0.3, 0.5]:
+    P_c, R_c = make_repair_mdp(step_cost=cost)
+    V_star, best = value_iteration(P_c, R_c, gamma=1.0)
+    plan = '/'.join(REPAIR_ACTIONS[a] for a in best[:4].tolist())
+    print(f'step cost {cost:<4}  V*(unread)={V_star[0].item():+.3f}  '
+          f'pi*(unread/read/ok/bad) = {plan}')
+```
+
+Output:
+
+```text
+step cost 0.0   V*(unread)=+1.000  pi*(unread/read/ok/bad) = read/edit/read/edit
+step cost 0.05  V*(unread)=+0.825  pi*(unread/read/ok/bad) = read/edit/submit/test
+step cost 0.1   V*(unread)=+0.650  pi*(unread/read/ok/bad) = read/edit/submit/test
+step cost 0.2   V*(unread)=+0.300  pi*(unread/read/ok/bad) = read/edit/submit/test
+step cost 0.3   V*(unread)=-0.050  pi*(unread/read/ok/bad) = read/edit/submit/test
+step cost 0.5   V*(unread)=-0.500  pi*(unread/read/ok/bad) = submit/edit/submit/submit
+```
+
+逐列阅读最优方案。代价为 0 时，许多策略以价值 1 打平，打印出的动作只是在所有最终都会成功的策略之间任意打破平局的结果。从代价 0.05 到 0.3，最优策略保持形态不变，而它的价值下降的幅度为代价的 3.5 倍，因为最优策略平均采取 3.5 个动作。在 0.5 时，最优的第一个动作变成从 `unread` 直接 `submit`：智能体立即放弃。放弃只花费一个动作，因此一旦 $1 - 3.5c < -c$，即 $c > 0.4$，它就成为最优，此时尝试修复的期望代价超过了其奖励 1。在 LLM 训练中，这就是[第 12 章](/tutorial/zh/chapters/12-multi-turn-and-long-horizons)中“智能体学会立即提交”的病态现象，在这里用一张七状态的表格复现了出来。
+
+> **问题：前缀是马尔可夫状态吗？** *症状：* 相同的可见上下文导致不同的结果，价值估计无缘无故地充满噪声，或者在一次上下文管理方面的改动之后行为发生了变化。*原因：* 只有当 token 前缀包含了决定未来观测和奖励的全部信息时，它对*智能体的*决策过程而言才是马尔可夫的。有三种情况会破坏这一点。环境有隐藏状态，例如文件系统、隐藏测试和随机种子。上下文可能被截断或摘要，从而丢弃策略本可以利用的历史。状态抽象可能把未来不同的历史合并在一起；在修复 MDP 中，通过猜测到达的 `edited_bad` 和通过有信息的编辑到达的 `edited_bad` 之所以是同一个状态，只是因为我们声明了编辑不会记住自己是如何做出的。*可选方案：* (a) 在上下文中保留完整历史，这在长时程下代价高昂；(b) 使用显式且忠实的状态摘要，例如让工具报告当前的 diff，使截断损失更少的信息；(c) 把问题当作 POMDP 处理，并接受价值只以可观测的历史为条件。*默认做法：* 把智能体视为一个以完整上下文为条件的 POMDP 策略；让工具输出显式报告相关状态；并把截断或摘要方式的任何改动都视为策略输入分布的改变，需要重新评估。
+
+## 小结
+
+- MDP $(\mathcal{S}, \mathcal{A}, P, R, \rho_0, \gamma)$ 把智能体控制的部分 $\pi$ 与它不控制的部分 $P$ 和 $\rho_0$ 分开；轨迹分布按这些部分分解，这就是策略梯度不需要环境模型的原因。
+- 价值函数满足线性的贝尔曼期望方程。对表格型 MDP，`policy_evaluation` 精确地求解它们，结果在误差棒之内与蒙特卡洛估计一致。
+- 折扣和每步代价都不是中性的缩放：二者都可能改变哪个策略是最优的。对有限长度的编程回合，本书使用 $\gamma = 1$ 加轮数预算。
+- 价值迭代只有在状态和动作可以枚举时才能找到最优策略。语言模型做不到这一点，因此我们通过对 $J(\theta)$ 做梯度上升来优化参数化策略，在修复 MDP 上这仍然可以用自动求导精确完成。
+- 单轮 RLVR 是一个上下文老虎机，探索受限于策略自身的采样分布。真实的编程智能体是部分可观测的，这正是信息收集动作具有价值的原因。
+- LLM 智能体可以建模为 token 级、轮级或回合级的决策过程。实际系统按 token 计算对数概率，按回合或按轮计算优势，并按轮施加掩码。
+
+## 练习
+
+1. 证明当 $P_\pi$ 是次随机矩阵时，对任意 $\gamma < 1$，$I - \gamma P_\pi$ 都可逆。（提示：用最大行和来界定谱半径。）然后构造一个在 $\gamma = 1$ 时奇异的双状态例子。
+2. 把有信息编辑的成功概率从 0.8 改为 0.5。重新计算 2.4 节的价值表。careful 与 read-edit-submit 之间的交叉点会移到更高还是更低的 $\gamma$？在运行代码之前先解释原因。
+3. 修改 `make_repair_mdp`，使在 `edited_ok` 上的 `test` 以 0.1 的概率失败（一个不稳定测试）。$V^*$ 和最优策略如何变化？这对针对不稳定验证器的训练有什么预示（[第 11 章](/tutorial/zh/chapters/11-rewards-and-verifiers)）？
+4. 在 2.5 节中，把精确的 $J$ 替换为由 `mc_value` 计算的、每步 16 个采样回合的蒙特卡洛估计。为什么你不能再对它调用 `backward()`？缺少了什么？（这正是[第 6 章](/tutorial/zh/chapters/06-policy-gradient)要回答的问题。）
+5. 为 `run_bandit` 扩展一个上置信界规则：选择 $\arg\max_a \hat\mu_a + c\sqrt{\log t / n_a}$。将它与 $\epsilon = 0.05$ 的 $\epsilon$-贪心进行比较。
+6. 扩充修复 MDP 的状态，使其记住智能体是否读过文件，并使从任何状态出发的编辑当且仅当文件已被读过时以 0.8 的概率成功。你需要多少个状态？哪个策略是最优的？
+7. 设计评审：你的团队提议对每次 `test` 调用给予 $+0.1$ 的奖励，理由是“测试越多的智能体成功率越高”。利用 2.7 节和每步代价的结果，论证智能体会学到什么，并提出一种更好的方式来鼓励有用的测试。

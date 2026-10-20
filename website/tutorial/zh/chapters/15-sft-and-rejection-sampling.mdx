@@ -1,0 +1,613 @@
+---
+title: "15. SFT\u3001\u62d2\u7edd\u91c7\u6837\u4e0e\u504f\u597d"
+---
+
+第二部分只用奖励来训练策略，而[第 5 章](/tutorial/zh/chapters/05-trajectories-and-templates#5-7-采样-rollout)说明了为什么这无法从零开始：随机初始化的 TinyAgent 永远不会发出格式正确的调用，每个奖励都是 0，每个策略梯度也恰好为 0。生产中的智能体训练同样不会从零开始。它从预训练模型出发，通常在任何 RL 之前先跑若干个监督阶段：在示范（demonstration）上做监督微调（SFT），在模型自身经过筛选的成功样本上微调，以及在成对回合上做偏好优化（preference optimization）。这些阶段每次更新的成本低于 RL，更容易调试，而且往往决定了 RL 还能发现什么。
+
+本章按这些阶段在数学上的本来面目来处理它们：轨迹上的加权最大似然目标。我们用动作掩码（action mask）实现轨迹 SFT，说明拒绝采样（rejection sampling）微调其实是奖励为 0/1 的策略梯度（policy gradient），为智能体回合推导 DPO，然后在 BugFix gym 上比较这些做法。这个比较测量的是 RL 论文很少单独展示的东西：从*同一个*较弱的起始策略出发，每种做法在训练任务和留出变体上各学到了什么。
+
+```python
+#@save
+import copy
+import random
+import torch
+import torch.nn.functional as F
+import agentrl as arl
+```
+
+保存的代码通过 `arl.` 调用前面各章的内容。下一个代码块按第 5 章的方式搭建 gym 和分词器。
+
+```python
+from collections import Counter
+tasks = arl.make_tasks('all')
+tok = arl.build_tokenizer(tasks)
+train, heldout = arl.make_tasks('train'), arl.make_tasks('heldout')
+print('vocab:', tok.vocab_size, '| train tasks:', len(train), '| held-out tasks:', len(heldout))
+```
+
+Output:
+
+```text
+vocab: 316 | train tasks: 20 | held-out tasks: 10
+```
+
+## 15.1 轨迹 SFT 与动作掩码
+
+**示范**是由我们所训练的策略之外的某个主体产生的轨迹：人类、脚本化的专家或更强的模型。SFT 用最大似然把策略拟合到示范上。对单轮回复来说，这就是普通的下一 token 交叉熵。对智能体轨迹来说，问题在于应当最大化哪些 token 的似然，而答案来自轨迹本身的概率。
+
+把一条示范写成动作与观测交替的序列 $\tau = (s_0, a_0, o_0, a_1, o_1, \dots, a_{H})$，其中 $s_0$ 是提示。在固定环境中、策略 $\pi_\theta$ 之下，它的概率可以分解为策略的选择与环境的响应：
+
+$$
+p_\theta(\tau) = p(s_0) \prod_{t=0}^{H} \pi_\theta(a_t \mid h_t) \prod_{t=0}^{H-1} P(o_t \mid h_t, a_t),
+$$
+
+其中 $h_t$ 是动作 $t$ 之前的历史。每个动作是一个 token 串，所以 $\log \pi_\theta(a_t\mid h_t)$ 是其各 token 对数概率之和（[3.1 节](/tutorial/zh/chapters/03-language-models-as-policies#3-1-从下一个-token-预测到策略)）。取对数后，只有中间的乘积依赖 $\theta$：
+
+$$
+\log p_\theta(\tau) = \sum_{t}\sum_{i \in a_t} \log \pi_\theta(y_i \mid c_i) + \underbrace{\log p(s_0) + \sum_t \log P(o_t\mid h_t, a_t)}_{\text{independent of } \theta}.
+$$
+
+因此，在示范上做最大似然恰好就是带掩码的目标：对策略拥有的 token 的对数概率求和，其余部分只作为条件。动作掩码不是一种“避免在工具输出上训练”的经验技巧。它*就是*轨迹对数似然的梯度，因为环境的概率不含参数。在观测 token 上训练优化的是另一个目标，即环境模型，它会教策略去预测、并最终去编造工具输出。这与让环境动力学从策略梯度中消去的推导（第 6 章）相同，只是从监督学习的一侧来看。
+
+`sft_loss` 在一个 `collate` 批次上实现它。我们对动作 token 取平均（token 平均）。第 6 章讨论了这一选择如何对长轨迹和短轨迹重新加权。
+
+```python
+#@save
+def sft_loss(model, batch):
+    """Masked NLL on policy tokens: batch from collate (ids [B, T], action_mask [B, T-1]) -> scalar."""
+    logp = arl.sequence_log_probs(model, batch['ids'])           # [B, T-1]
+    mask = batch['action_mask']                                  # [B, T-1], 1 on policy tokens
+    return -(logp * mask).sum() / mask.sum()
+```
+
+[4.6 节](/tutorial/zh/chapters/04-environments-and-tools#4-6-脚本化基线)的 oracle 策略经 `scripted_rollout` 运行，为每个任务给出一条示范。我们在未训练的模型上比较带掩码的损失与覆盖全部预测位置的无掩码损失，并统计无掩码损失会把权重放在哪里。
+
+```python
+oracle_demos = [arl.scripted_rollout(arl.scripted_policy('oracle'), arl.BugFixEnv(), t, tok) for t in train]
+batch = arl.collate(oracle_demos, tok.pad_id)
+torch.manual_seed(0)
+fresh = arl.TinyAgent(tok.vocab_size)
+with torch.no_grad():
+    logp = arl.sequence_log_probs(fresh, batch['ids'])                 # [B, T-1]
+real = batch['attention_mask'][:, 1:]                                  # [B, T-1], non-padding
+owner = torch.stack([F.pad(t.owner[1:], (0, real.shape[1] - len(t.owner) + 1), value=-1) for t in oracle_demos])
+names = {v: k for k, v in arl.OWNER.items()}
+print('predicted tokens by owner:', {names[o]: int((owner == o).sum()) for o in range(4)})
+print(f'masked SFT loss {sft_loss(fresh, batch).item():.3f} | unmasked {-(logp * real).sum().item() / real.sum().item():.3f}')
+```
+
+Output:
+
+```text
+predicted tokens by owner: {'template': 120, 'prompt': 120, 'policy': 260, 'tool': 838}
+masked SFT loss 5.913 | unmasked 5.879
+```
+
+在 20 条 oracle 示范的 1,338 个预测位置中，只有 260 个（19%）是动作。工具输出占 838 个（63%），所以无掩码损失会把将近三分之二的梯度花在学习复现源代码清单和测试结果上。初始化时两个损失都接近 $\log 316 \approx 5.76$，所以损失值本身暴露不了这个错误，只有掩码能。
+
+## 15.2 热启动：先格式，后技能
+
+SFT 在智能体流水线中扮演两种不同的角色，而 gym 让我们能把它们分开。第一种是教**格式**：调用语法、停止 token 以及轮次的节奏。第二种是教**技能**：根据观测到的内容决定发出哪个调用。对真实模型来说，预训练加上通用指令微调提供了前者。我们为 TinyAgent 构造对应物的方法，是在格式正确但没有技能的行为上做 SFT，即第 4 章的 blind 与 random 脚本策略的混合。我们把得到的模型称为**弱基座**（weak base）。它是本章每种做法的起点。（第 6 章为第二部分构造了一个类似的基座智能体。）
+
+`sft_train` 是一个最小的循环：有放回地采样一个轨迹小批次（minibatch），在 `sft_loss` 上走一步 AdamW，并可选地每隔几步调用一个钩子，使实验可以在不重启优化器的情况下评估或保存检查点。
+
+```python
+#@save
+def sft_train(model, trajs, tok, steps=100, lr=3e-3, batch_size=32, seed=0, hook=None, every=10):
+    """Minibatch SFT on trajectories with sft_loss; hook(step) runs every `every` steps -> list of losses."""
+    opt = torch.optim.AdamW(model.parameters(), lr=lr)
+    gen = torch.Generator().manual_seed(seed)
+    losses = []
+    for step in range(1, steps + 1):
+        idx = torch.randint(len(trajs), (min(batch_size, len(trajs)),), generator=gen)
+        loss = sft_loss(model, arl.collate([trajs[i] for i in idx.tolist()], tok.pad_id))
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        losses.append(loss.item())
+        if hook is not None and step % every == 0:
+            hook(step)
+    return losses
+```
+
+为了衡量一个策略，我们用 `rollout_batch` 采样回合并对奖励取平均。`pass_rate` 同时返回轨迹，方便调用者检查；`action_entropy` 报告一个批次在动作 token 上的平均下一 token 熵（entropy），即 [3.2 节](/tutorial/zh/chapters/03-language-models-as-policies#3-2-数值稳定的对数概率与熵)的探索统计量。
+
+```python
+#@save
+def pass_rate(model, tasks, tok, n_samples=4, temperature=1.0, seed=0, reward='hidden'):
+    """Sample n_samples episodes per task in lockstep -> (mean reward, list of Trajectory)."""
+    gen = torch.Generator().manual_seed(seed)
+    batch_tasks = [t for t in tasks for _ in range(n_samples)]
+    envs = [arl.BugFixEnv(reward=reward) for _ in batch_tasks]
+    trajs = arl.rollout_batch(model, envs, batch_tasks, tok, temperature=temperature, generator=gen)
+    return sum(t.reward for t in trajs) / len(trajs), trajs
+
+
+def action_entropy(model, batch):
+    """Mean next-token entropy over action tokens of a collate batch -> float."""
+    with torch.no_grad():
+        ent = arl.entropy_from_logits(model(batch['ids'])[:, :-1])   # [B, T-1]
+    return ((ent * batch['action_mask']).sum() / batch['action_mask'].sum()).item()
+```
+
+我们生成 160 个弱行为回合，训练弱基座，并报告它的表现。
+
+```python
+def describe(model, label, seed=0):
+    rate_train, trajs = pass_rate(model, train, tok, 8, seed=seed)
+    rate_held, _ = pass_rate(model, heldout, tok, 8, seed=seed)
+    invalid = sum(t.info['n_invalid'] for t in trajs) / len(trajs)
+    reads = sum('<call> read </call>' in t.info['actions'] for t in trajs) / len(trajs)
+    ent = action_entropy(model, arl.collate(trajs, tok.pad_id))
+    print(f'{label:<12} train {rate_train:.3f} | held-out {rate_held:.3f} | invalid/ep {invalid:.2f}'
+          f' | reads {reads:.2f} | action entropy {ent:.3f}')
+
+weak_play = [arl.scripted_rollout(arl.scripted_policy(kind, seed=s), arl.BugFixEnv(), t, tok)
+             for kind in ['blind', 'random'] for s in range(4) for t in train]
+torch.manual_seed(0)
+weak = arl.TinyAgent(tok.vocab_size)
+sft_train(weak, weak_play, tok, steps=150)
+describe(weak, 'weak base')
+```
+
+Output:
+
+```text
+weak base    train 0.144 | held-out 0.138 | invalid/ep 0.06 | reads 0.29 | action entropy 0.251
+```
+
+弱基座几乎完美地学会了格式：每个回合 0.06 个格式错误的调用，而第 5 章未训练的模型每个回合有 6 个。它没有学会技能：在两个划分上，它的隐藏测试奖励都是 0.14，等于或低于 blind 策略的猜测水平（约 0.2，[4.6 节](/tutorial/zh/chapters/04-environments-and-tools#4-6-脚本化基线)），而且只在 29% 的回合中读取文件。它 0.25 nats 的动作熵是脚本混合残留的随机性，正是这一点给了 RL 可供选择的余地。
+
+现在来教技能。我们在 20 条 oracle 示范上继续训练弱基座，每 10 步评估一次。钩子还在第 20 步保存一份模型副本，15.5 节把它用作 RL 的**冷启动**（cold start）。
+
+```python
+evaluate = lambda m: (pass_rate(m, train, tok, 4)[0], pass_rate(m, heldout, tok, 4)[0])
+sft_model, hist_sft, snapshots = copy.deepcopy(weak), [(0, *evaluate(weak))], {}
+def sft_hook(step):
+    hist_sft.append((step, *evaluate(sft_model)))
+    snapshots[step] = copy.deepcopy(sft_model)
+sft_train(sft_model, oracle_demos, tok, steps=60, hook=sft_hook)
+print('oracle SFT (step, train, held-out):', [(s, round(a, 2), round(b, 2)) for s, a, b in hist_sft])
+describe(sft_model, 'oracle SFT')
+```
+
+Output:
+
+```text
+oracle SFT (step, train, held-out): [(0, 0.16, 0.05), (10, 0.47, 0.47), (20, 0.8, 0.85), (30, 0.91, 0.95), (40, 0.99, 0.9), (50, 0.97, 0.9), (60, 0.99, 0.93)]
+oracle SFT   train 0.981 | held-out 0.887 | invalid/ep 0.02 | reads 1.00 | action entropy 0.022
+```
+
+二十条示范、大约 40 个梯度步，就把弱基座的训练通过率（pass rate）提高到接近 0.99，留出变体也跟着达到约 0.9。oracle 总是先读后改，所以学生学会了依据 `read` 观测（如 `min` 或 `//` 这样的关键字）而不是函数名来选择操作，而这条规则能迁移到没见过的函数上。代价体现在最后一列：动作熵从 0.25 降到 0.02 nats，降了一个数量级。策略已经几乎是确定性的，一旦接着做 RL，这一点就很关键（15.6 节）。
+
+> **证据。** 本书测得，单个随机种子，每次评估每个任务采样 4 次（训练 80 个回合、留出 40 个回合），所以每个通过率的标准误最高约 0.06。oracle 是完美的，并覆盖每个任务族。真实示范两者都做不到，15.3 至 15.5 节展示数据来自模型自身时会发生什么变化。
+
+## 15.3 拒绝采样与专家迭代
+
+示范很贵，验证器（verifier）往往很便宜。**拒绝采样微调**（rejection-sampling fine-tuning，RFT）用模型自身取代示范者：从当前策略为每个任务采样若干回合，保留验证器接受的那些，然后在保留集上做 SFT。反复执行采样、过滤、微调就是**专家迭代**（expert iteration）；STaR 把这个循环用于推理理由，保留那些导向正确答案的理由（[Zelikman et al., 2022](https://arxiv.org/abs/2203.14465)），而数学推理上的 RFT 报告说，*不同的*正确路径越多，收益越大（[Yuan et al., 2023](https://arxiv.org/abs/2308.01825)）。有意思的问题是它与 RL 是什么关系。
+
+### RFT 是奖励为 0/1 的策略梯度
+
+设 $R(\tau) \in \{0, 1\}$，$p = \Pr_{\tau\sim\pi_\theta}[R(\tau)=1]$。[第 6 章](/tutorial/zh/chapters/06-policy-gradient)的策略梯度是
+
+$$
+\nabla_\theta J(\theta) = \mathbb{E}_{\tau\sim\pi_\theta}\big[R(\tau)\,\nabla_\theta \log \pi_\theta(\tau)\big]
+= p \;\mathbb{E}_{\tau\sim\pi_\theta}\big[\nabla_\theta \log \pi_\theta(\tau) \,\big|\, R(\tau)=1\big],
+$$
+
+因为 $R$ 在失败时为 0，成功时为 1。右边的期望是从当前策略抽取的成功轨迹的对数似然梯度，这恰好是在保留集上走一步 SFT 所估计的量。因此，**在新鲜样本上走一步 RFT，就是学习率除以成功率 $p$ 的一步策略梯度**。实际方法与这个估计量之间有三点差别：
+
+1. **归一化。** SFT 对保留的 token 取平均，策略梯度对全部采样 token 取平均。当 $p$ 很小时，RFT 每单位梯度信号走的步子更大。
+2. **没有负信号。** 失败样本不贡献任何东西。带基线 $b$ 时，策略梯度是 $\sum_i (R_i - b)\nabla\log\pi(\tau_i) = (1-b)\sum_{\text{succ}}\nabla\log\pi - b\sum_{\text{fail}}\nabla\log\pi$；RFT 只保留第一项。除了通过 softmax 的间接作用外，没有任何东西把概率*推离*失败模式。
+3. **复用。** 在固定保留集上跑多个轮次（epoch）是没有重要性校正的异策略（off-policy）更新。把保留集拟合到收敛，求解的是 $\min_\theta \mathrm{KL}\big(\pi_{\text{old}}(\cdot\mid R=1)\,\|\,\pi_\theta\big)$，即以成功为条件的旧策略。这就是**过滤式行为克隆**（filtered behavior cloning），专家迭代的每一轮都是一次这样的投影。
+
+第三点同时给出了专家迭代的长处与局限。以成功为条件的策略 $\pi_{\text{old}}(\tau\mid R=1)$ 能解决 $\pi_{\text{old}}$ 曾经成功过的每个任务，所以一轮就可能跳得很远；但它在 $\pi_{\text{old}}$ 从未成功的任务上概率质量为零，而且会复制产生成功的*任何东西*，包括侥幸猜中。我们先检验梯度恒等式。在弱基座采样的一个批次上，0/1 奖励的 token 平均策略梯度损失与保留回合上的 SFT 损失，其梯度必须精确成比例，比例为（保留的动作 token 数）/（全部动作 token 数）。
+
+```python
+def flat_grad(loss, model):
+    return torch.cat([g.flatten() for g in torch.autograd.grad(loss, list(model.parameters()), retain_graph=True)])
+
+rate, sample = pass_rate(weak, train, tok, 4, seed=7)
+kept = [t for t in sample if t.reward == 1.0]
+b_all, b_kept = arl.collate(sample, tok.pad_id), arl.collate(kept, tok.pad_id)
+logp = arl.sequence_log_probs(weak, b_all['ids'])                         # [B, T-1]
+mask, rewards = b_all['action_mask'], b_all['rewards'][:, None]           # [B, T-1], [B, 1]
+g_pg = flat_grad(-(rewards * logp * mask).sum() / mask.sum(), weak)
+g_rft = flat_grad(sft_loss(weak, b_kept), weak)
+scale = b_kept['action_mask'].sum() / mask.sum()
+print(f'kept {len(kept)} of {len(sample)} | token ratio {scale:.4f} | max |g_pg - ratio * g_rft| = {(g_pg - scale * g_rft).abs().max():.1e}')
+g_base = flat_grad(-((rewards - rewards.mean()) * logp * mask).sum() / mask.sum(), weak)
+print(f'cosine(baseline PG, RFT) = {F.cosine_similarity(g_base, g_rft, 0):.3f}')
+```
+
+Output:
+
+```text
+kept 9 of 80 | token ratio 0.0935 | max |g_pg - ratio * g_rft| = 1.4e-09
+cosine(baseline PG, RFT) = 0.985
+```
+
+恒等式在浮点舍入误差内成立：80 个回合中 9 个成功，它们占动作 token 的 9.35%，而 0/1 策略梯度恰好是 RFT 梯度乘以这个比例。加上均值基线会改变方向（余弦 0.985），因为它加入了作用于 71 个失败回合的下推项，而 RFT 丢弃了这一项。在 0.11 的成功率下，基线很小，所以每个失败的权重是 $-0.11$，而每个成功的权重是 $+0.89$，变化不大。在成功率接近 0.5 时，两项的大小相当。
+
+### 从弱基座开始的专家迭代
+
+我们跑四轮。每轮为每个训练任务采样 16 个回合（共 320 个回合），保留成功的回合，并在其上走 15 步 SFT，从上一轮的模型继续训练。
+
+```python
+rft, hist_rft, rounds = copy.deepcopy(weak), [(0, *evaluate(weak))], []
+for k in range(4):
+    rate, sample = pass_rate(rft, train, tok, 16, seed=100 + k)
+    kept = [t for t in sample if t.reward == 1.0]
+    rounds.append(dict(rate=rate, kept=kept, solved={t.info['task'] for t in kept}))
+    sft_train(rft, kept, tok, steps=15, seed=k)
+    hist_rft.append((15 * (k + 1), *evaluate(rft)))
+    print(f'round {k}: sample pass {rate:.3f}, kept {len(kept):>3}, tasks solved {len(rounds[-1]["solved"]):>2}/20'
+          f' -> train {hist_rft[-1][1]:.2f}, held-out {hist_rft[-1][2]:.2f}')
+describe(rft, 'after RFT')
+```
+
+Output:
+
+```text
+round 0: sample pass 0.153, kept  49, tasks solved 16/20 -> train 0.33, held-out 0.12
+round 1: sample pass 0.263, kept  84, tasks solved 15/20 -> train 0.68, held-out 0.23
+round 2: sample pass 0.659, kept 211, tasks solved 16/20 -> train 0.75, held-out 0.10
+round 3: sample pass 0.713, kept 228, tasks solved 15/20 -> train 0.74, held-out 0.15
+after RFT    train 0.756 | held-out 0.150 | invalid/ep 0.01 | reads 0.30 | action entropy 0.062
+```
+
+前几轮正是分析所预言的大幅跃升：训练通过率从 0.15 升到 0.33，再到 0.68，因为每一轮过滤式克隆都把策略推向它自身以成功为条件的分布，下一轮的采样通过率也反映了这一点（0.15、0.26、0.66）。随后它停滞在 0.75 附近，略低于 20 个任务中 16 个可解所施加的 0.80 上限，而留出通过率一直在 0.10 到 0.23 之间，大致是猜测水平。两项诊断解释了这两个数字。
+
+```python
+never = sorted({t.name for t in train} - rounds[0]['solved'])
+print('tasks never solved by the weak base:', never)
+first_kept = Counter(t.info['actions'][0] for t in rounds[0]['kept'])
+print('first action of kept episodes, round 0:', first_kept.most_common(3))
+```
+
+Output:
+
+```text
+tasks never solved by the weak base: ['init/count_by', 'init/factorial', 'init/pow2', 'init/sum_upto']
+first action of kept episodes, round 0: [('<call> edit swap_minmax </call>', 16), ('<call> edit fix_range_end </call>', 16), ('<call> read </call>', 10)]
+```
+
+弱基座从未解出的四个任务恰好构成一个完整的任务族 `init`。保留集中没有它的任何样例，所以任何一轮都学不会它：专家迭代只能锐化已有支撑的行为，这就是过滤式克隆的覆盖局限。而且大多数保留下来的成功回合是以编辑而不是读取开头的（第 0 轮的 49 个中有 32 个以两种编辑操作之一开头，只有 10 个以读取开头）。它们是碰巧猜对的盲猜，而能复现它们的最廉价规则就是把 issue 中的函数名映射到一个操作。这条规则在训练任务上是准确的，在留出函数上毫无用处，因为模型从没见过这些函数名，所以留出结果停留在猜测水平附近。最终策略只在 30% 的回合中读取文件。RFT 忠实于产生成功的东西，而在这里，那是运气。STaR 的“合理化”（rationalization）步骤针对模型失败的问题，在给定正确答案的条件下重新生成理由，它处理的是这个问题中覆盖的那一半（[Zelikman et al., 2022](https://arxiv.org/abs/2203.14465)）。过滤器中没有任何东西处理捷径（shortcut）的那一半。
+
+## 15.4 面向智能体轨迹的 DPO
+
+RFT 丢弃失败样本。**偏好优化**则利用它们：给定同一任务上的一对回合，一个被偏好（$\tau^+$，chosen），一个不被偏好（$\tau^-$，rejected），提高被选回合的相对似然。直接偏好优化（Direct Preference Optimization，DPO）从 KL 正则化的 RL 目标推导出这样的更新，训练时无需采样（[Rafailov et al., 2023](https://arxiv.org/abs/2305.18290)）。
+
+从 $\max_\pi \mathbb{E}_{\tau\sim\pi}[r(\tau)] - \beta\,\mathrm{KL}(\pi\,\|\,\pi_{\text{ref}})$ 出发。它的最大化解是 $\pi^*(\tau) \propto \pi_{\text{ref}}(\tau)\exp(r(\tau)/\beta)$，所以奖励可以通过策略写成 $r(\tau) = \beta \log\frac{\pi^*(\tau)}{\pi_{\text{ref}}(\tau)} + \beta\log Z$。在 Bradley–Terry 模型 $\Pr(\tau^+ \succ \tau^-) = \sigma\big(r(\tau^+) - r(\tau^-)\big)$ 下，配分函数 $Z$ 相互抵消，对观测到的偏好最大化似然就得到 DPO 损失
+
+$$
+\mathcal{L}_{\text{DPO}} = -\log \sigma\Big(\beta\Big[\log\frac{\pi_\theta(\tau^+)}{\pi_{\text{ref}}(\tau^+)} - \log\frac{\pi_\theta(\tau^-)}{\pi_{\text{ref}}(\tau^-)}\Big]\Big).
+$$
+
+对于智能体轨迹，还会发生一次抵消。每个 $\log \pi(\tau)$ 都包含 15.1 节中的环境项，而比值 $\pi_\theta(\tau)/\pi_{\text{ref}}(\tau)$ 把它们约掉了，因为两个策略面对的是同一个环境。因此每个对数比值都是**只在动作 token 上**对 $\log\pi_\theta - \log\pi_{\text{ref}}$ 求和。动作掩码进入 DPO 的理由与它进入 SFT 的理由相同。还有两个推论值得指出。两个回合在相同上下文中共享的 token，例如 issue 和共同的第一次调用，贡献大小相等、方向相反的梯度而相互抵消，所以 DPO 只从两个回合分叉的位置往后学习。另外，这个损失只在数据集中的轨迹上约束策略；推导它所依据的 KL 正则化从未在策略自己的样本上计算过。
+
+`dpo_loss` 接收求和后的序列对数概率，因此与调用者如何掩码、如何求和无关。
+
+```python
+#@save
+def dpo_loss(policy_logp_chosen, policy_logp_rejected, ref_chosen, ref_rejected, beta=0.1):
+    """DPO loss from summed action log-probs, each [B] -> scalar; reference terms are constants."""
+    chosen_ratio = policy_logp_chosen - ref_chosen.detach()          # [B]
+    rejected_ratio = policy_logp_rejected - ref_rejected.detach()    # [B]
+    return -F.logsigmoid(beta * (chosen_ratio - rejected_ratio)).mean()
+```
+
+比值相等时间隔（margin）为 0，损失为 $\log 2$。正间隔降低损失，负间隔提高损失，一个快速检验可以确认这一点。
+
+```python
+zero = torch.zeros(1)
+for c, r in [(0.0, 0.0), (2.0, -2.0), (-2.0, 2.0)]:
+    print(f'chosen ratio {c:+.0f}, rejected ratio {r:+.0f}: loss {dpo_loss(torch.tensor([c]), torch.tensor([r]), zero, zero, beta=0.5).item():.4f}')
+```
+
+Output:
+
+```text
+chosen ratio +0, rejected ratio +0: loss 0.6931
+chosen ratio +2, rejected ratio -2: loss 0.1269
+chosen ratio -2, rejected ratio +2: loss 2.1269
+```
+
+相等的比值给出 $\log 2 = 0.6931$。在 $\beta = 0.5$ 时，$+4$ 的间隔给出 $-\log\sigma(2) = 0.1269$，$-4$ 的间隔给出 $-\log\sigma(-2) = 2.1269$。损失关于零点不对称：排错顺序的代价远大于排对顺序的收益，所以 DPO 会一直推，直到每一对都以一定间隔排好顺序。
+
+![图 15.1：把 SFT、RFT、策略梯度和 DPO 写成轨迹的加权对数似然。每一行注明轨迹来自哪里，以及每条轨迹在梯度中获得的权重。](/tutorial/figures/ch15-weights.svg)
+
+图 15.1 把本章的方法并排放在一起。其中每种方法都在带掩码的动作 token 上计算 $\sum_i w_i \nabla_\theta \log \pi_\theta(\tau_i)$。它们的区别在于 $\tau_i$ 来自哪里（专家、当前策略，或固定的成对数据集），以及 $w_i$：示范为 1，RFT 为 $R_i/\hat p$，策略梯度为 $R_i - \bar R$，DPO 为经 sigmoid 加权的 $\pm\beta$。一旦写下数据来源和权重，本章的大多数设计问题都会变成关于其中某一项的问题。
+
+我们按离线流水线的方式从弱基座构造偏好对：为每个训练任务一次性采样 16 个回合，把每个成功回合与同一任务上随机挑选的一个失败回合配对，并冻结弱基座作为参考策略（reference policy）。`episode_logp` 对一个批次的带掩码对数概率求和。
+
+```python
+def episode_logp(model, batch):
+    return (arl.sequence_log_probs(model, batch['ids']) * batch['action_mask']).sum(-1)   # [B]
+
+_, sample = pass_rate(weak, train, tok, 16, seed=300)
+pair_rng, pairs = random.Random(0), []
+for task in train:
+    episodes = [t for t in sample if t.info['task'] == task.name]
+    wins, losses = [t for t in episodes if t.reward == 1], [t for t in episodes if t.reward == 0]
+    pairs += [(w, pair_rng.choice(losses)) for w in wins]
+chosen_b = arl.collate([w for w, _ in pairs], tok.pad_id)
+rejected_b = arl.collate([l for _, l in pairs], tok.pad_id)
+with torch.no_grad():
+    ref_c, ref_r = episode_logp(weak, chosen_b), episode_logp(weak, rejected_b)
+print('pairs:', len(pairs), '| tasks with a pair:', len({w.info['task'] for w, _ in pairs}))
+```
+
+Output:
+
+```text
+pairs: 55 | tasks with a pair: 14
+```
+
+现在是训练循环。每一步是在全部 55 对上的一次全批次 DPO 更新。每 25 步，我们记录被选与被拒对数概率相对参考策略的平均变化，并让策略在 gym 中运行。
+
+```python
+def train_dpo(nll_weight=0.0, steps=100, beta=0.1, lr=1e-3):
+    policy, log = copy.deepcopy(weak), []
+    opt = torch.optim.AdamW(policy.parameters(), lr=lr)
+    for step in range(1, steps + 1):
+        pc, pr = episode_logp(policy, chosen_b), episode_logp(policy, rejected_b)
+        loss = dpo_loss(pc, pr, ref_c, ref_r, beta) + nll_weight * sft_loss(policy, chosen_b)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        if step % 25 == 0:
+            rate_train, trajs = pass_rate(policy, train, tok, 4)
+            invalid = sum(t.info['n_invalid'] for t in trajs) / len(trajs)
+            log.append(dict(step=step, d_chosen=(pc - ref_c).mean().item(), d_rejected=(pr - ref_r).mean().item(),
+                            train=rate_train, held=pass_rate(policy, heldout, tok, 4)[0], invalid=invalid))
+    return log
+
+dpo_log = train_dpo()
+for row in dpo_log:
+    print(' | '.join(f'{k} {v:.2f}' if isinstance(v, float) else f'{k} {v}' for k, v in row.items()))
+```
+
+Output:
+
+```text
+step 25 | d_chosen -0.42 | d_rejected -15.05 | train 0.20 | held 0.10 | invalid 0.50
+step 50 | d_chosen -0.64 | d_rejected -29.04 | train 0.20 | held 0.07 | invalid 2.26
+step 75 | d_chosen 0.34 | d_rejected -38.68 | train 0.31 | held 0.07 | invalid 2.44
+step 100 | d_chosen 0.74 | d_rejected -44.68 | train 0.41 | held 0.00 | invalid 2.02
+```
+
+按它自己的指标，DPO 成功了：被拒回合的对数概率相对参考策略下降了 45 nats，被选回合先略微下降，最后略高于参考（+0.74）。在 gym 中，情况则不同。训练通过率从 0.14 升到 0.41，但从第 50 步起，策略每个回合发出 2.0 到 2.4 个格式错误的调用，高于原来的 0.06，留出通过率则跌到 0。损失把概率*挤出*了被拒的调用，而 softmax 必须把它放到别处。大部分概率流向了不出现在任何一对中的 token 序列，例如没有终止的调用，因为离线损失中没有任何东西对它们进行评估。此外，这些偏好对来自与 RFT 保留集相同的侥幸猜中，所以被偏好的行为仍然是“这个函数名对应这个操作”。
+
+![图 15.2：在弱基座偏好对上的离线 DPO。左：被选与被拒回合的求和对数概率相对参考策略的变化。右：策略在 gym 中行动时的通过率和每回合格式错误的调用数，分别对应普通 DPO 和在被选回合上加 NLL 项的 DPO。](/tutorial/figures/ch15-dpo.svg)
+
+图 15.2 把两种视角并排放在一起。左图是 DPO 监控面板会显示的内容：被拒对数概率无界下降，而被选对数概率几乎不动。右图是策略拿这个变化做了什么。15.6 节测量了一种常见的缓解方法。
+
+## 15.5 实验：从同一个弱基座出发的四种做法
+
+现在我们比较几种都从弱基座出发、并以相同方式评估的做法：
+
+- **在 oracle 轨迹上做 SFT**（15.2 节）：20 条示范，60 步。
+- **RFT / 专家迭代**（15.3 节）：不用示范，4 轮，每轮 320 个采样回合、15 步。
+- **先 SFT 后 RL**：第 20 步的 oracle-SFT 检查点（训练通过率 0.80），再跑 40 步 RL。
+- **从弱基座直接 RL**：60 步 RL，这个对照显示了冷启动带来了什么。
+
+RL 阶段需要一个策略梯度循环。[第 9 章](/tutorial/zh/chapters/09-grpo-and-variants)构建全书完整的训练器。这里我们只写最少的部分：带**组基线**（group baseline）的 REINFORCE。每一步在 8 个任务上各采样 $G = 8$ 个回合，从每个回合的奖励中减去该任务所在组的平均奖励，并用这个优势（advantage）为每个动作 token 的对数概率加权。[第 6 章](/tutorial/zh/chapters/06-policy-gradient)推导估计量，[第 7 章](/tutorial/zh/chapters/07-advantages-and-credit)推导基线。
+
+```python
+def reinforce_step(model, opt, rng, gen, n_tasks=8, group=8):
+    """One REINFORCE step with a per-task group-mean baseline -> mean batch reward."""
+    batch_tasks = [t for t in rng.sample(train, n_tasks) for _ in range(group)]
+    trajs = arl.rollout_batch(model, [arl.BugFixEnv() for _ in batch_tasks], batch_tasks, tok, generator=gen)
+    batch = arl.collate(trajs, tok.pad_id)
+    rewards = batch['rewards'].view(n_tasks, group)                         # [tasks, G]
+    adv = (rewards - rewards.mean(1, keepdim=True)).view(-1, 1)             # [B, 1]
+    logp = arl.sequence_log_probs(model, batch['ids'])                      # [B, T-1]
+    mask = batch['action_mask']
+    loss = -(adv * logp * mask).sum() / mask.sum()
+    opt.zero_grad()
+    loss.backward()
+    opt.step()
+    return rewards.mean().item()
+
+def train_rl(model, steps, start=0, lr=1e-3, seed=0):
+    opt, rng, gen = torch.optim.AdamW(model.parameters(), lr=lr), random.Random(seed), torch.Generator().manual_seed(seed)
+    history = [(start, *evaluate(model))]
+    for step in range(1, steps + 1):
+        reinforce_step(model, opt, rng, gen)
+        if step % 10 == 0:
+            history.append((start + step, *evaluate(model)))
+    return history
+```
+
+下面的循环运行两种 RL 做法。在共用的梯度步数横轴上，先 SFT 后 RL 的曲线从第 20 步开始，即其 SFT 阶段结束的位置。
+
+```python
+cold_rl = copy.deepcopy(snapshots[20])
+hist_cold_rl = hist_sft[:3] + train_rl(cold_rl, 40, start=20)[1:]
+rl_only = copy.deepcopy(weak)
+hist_rl = train_rl(rl_only, 60)
+recipes = {'SFT (oracle)': hist_sft, 'RFT': hist_rft, 'SFT -> RL': hist_cold_rl, 'RL only': hist_rl}
+for name, hist in recipes.items():
+    print(f'{name:<13}' + ' '.join(f'{s:>3}:{a:.2f}/{b:.2f}' for s, a, b in hist))
+```
+
+Output:
+
+```text
+SFT (oracle)   0:0.16/0.05  10:0.47/0.47  20:0.80/0.85  30:0.91/0.95  40:0.99/0.90  50:0.97/0.90  60:0.99/0.93
+RFT            0:0.16/0.05  15:0.33/0.12  30:0.68/0.23  45:0.75/0.10  60:0.74/0.15
+SFT -> RL      0:0.16/0.05  10:0.47/0.47  20:0.80/0.85  30:0.81/0.85  40:0.90/0.90  50:0.94/0.90  60:0.96/0.95
+RL only        0:0.16/0.05  10:0.21/0.20  20:0.20/0.17  30:0.23/0.17  40:0.19/0.20  50:0.34/0.25  60:0.36/0.30
+```
+
+每个条目是 步数:训练/留出。为了比较成本，我们还统计每种做法消耗了什么：专家示范、采样回合和验证器调用。
+
+```python
+cost = {'SFT (oracle)': (20, 0), 'RFT': (0, 4 * 320), 'SFT -> RL': (20, 40 * 64), 'RL only': (0, 60 * 64)}
+print(f'{"recipe":<13}{"demos":>7}{"sampled":>9}{"train":>7}{"held":>6}')
+for name, hist in recipes.items():
+    print(f'{name:<13}{cost[name][0]:>7}{cost[name][1]:>9}{hist[-1][1]:>7.2f}{hist[-1][2]:>6.2f}')
+```
+
+Output:
+
+```text
+recipe         demos  sampled  train  held
+SFT (oracle)      20        0   0.99  0.93
+RFT                0     1280   0.74  0.15
+SFT -> RL         20     2560   0.96  0.95
+RL only            0     3840   0.36  0.30
+```
+
+![图 15.3：从同一个弱基座出发的四种做法在训练任务（左）和留出变体（右）上的隐藏测试通过率。横轴为梯度步数；RFT 每轮走 15 步 SFT。](/tutorial/figures/ch15-recipes.svg)
+
+图 15.3 和上表支持四条结论，每条都仅限于这个 gym 和这个预算。
+
+1. **有一个完美且覆盖全面的示范者时，SFT 很难被超越。** 二十条 oracle 轨迹加 40 步就在训练集上达到 0.99，在留出集上达到约 0.9。冷启动之后的 RL 最终到达同一位置（0.96/0.95），没有超过它：对于一个行为已经最优、且先读后动的示范者，RL 没有什么可以补充的。这就是智能体流水线只要能做到，就会收集或合成示范的原因。
+2. **从弱基座出发的 RFT 受限于基座。** 它提升很快，在基座能解的 16 个任务处进入平台期，并学到了一条无法迁移的捷径。过滤式克隆无法创造采样器从未产生过的行为。
+3. **冷启动让 RL 奏效。** 从第 20 步检查点出发，40 步 RL 在训练集上达到 0.96，在留出集上达到 0.95；而从弱基座出发的 RL 跑了 60 步，只达到 0.36/0.30。在第 20 步，冷启动的策略已经会读文件，成功率约 80%，所以大多数组同时包含两种结果，优势是有信息量的（15.6 节测得 70%）。弱基座很少读取，RL 必须先靠偶然发现读取这个动作。
+4. **只做 RL 的曲线仍在上升。** 它的曲线在末尾仍在上升，第 9 章展示了用调好的训练器跑更长时间能达到什么。这里的要点是固定预算下的排序，而不是渐近值。
+
+> **证据。** 四条曲线都是单随机种子的 CPU 运行，评估分别用 80 和 40 个回合。低于约 0.1 的差异在噪声范围内。只做 RL 与其他做法之间的排序差距远超噪声。
+
+## 15.6 实践中的设计问题
+
+> **问题：SFT 在 RL 之前降低熵和探索。** *症状：* 在一个较强的 SFT 阶段之后，RL 奖励持平不动，大多数组的奖励方差为零，熵曲线从接近零的位置开始。*原因：* 把 SFT 训练到收敛会把策略推向示范者的确定性选择（15.2 节测得 0.25 → 0.02 nats）。组基线优势为 $R_i - \bar R$，对于回合全部通过或全部失败的组，其中每个成员的优势都为零，所以近乎确定性的策略几乎不产生梯度，在它做错的任务上也一样。*可选方案：* (a) 提前停止 SFT，选一个仍保有熵的检查点，就像第 20 步冷启动那样，代价是起始通过率较低。(b) 在 RL 期间提高 rollout 温度，这会改变行为策略（3.3 节）。(c) 加入熵奖励（第 10 章）。(d) 混入多样化的示范，使 SFT 拟合一个分布而不是一条路径。*默认做法：* 依据探针集上奖励方差非零的 RL 组所占比例来选择 SFT 检查点，而不是依据 SFT 损失。下一个代码块在留出任务上测量这个比例。
+
+```python
+def probe(model, tasks, group=8, seed=5):
+    _, trajs = pass_rate(model, tasks, tok, group, seed=seed)
+    rewards = torch.tensor([t.reward for t in trajs]).view(len(tasks), group)    # [tasks, G]
+    informative = (rewards.std(1) > 0).float().mean().item()
+    return rewards.mean().item(), informative, action_entropy(model, arl.collate(trajs, tok.pad_id))
+
+for label, model in [('weak base', weak), ('SFT step 20', snapshots[20]), ('SFT step 60', sft_model)]:
+    rate, informative, ent = probe(model, heldout)
+    print(f'{label:<12} held-out pass {rate:.2f} | groups with signal {informative:.2f} | action entropy {ent:.3f}')
+```
+
+Output:
+
+```text
+weak base    held-out pass 0.14 | groups with signal 0.60 | action entropy 0.255
+SFT step 20  held-out pass 0.82 | groups with signal 0.70 | action entropy 0.126
+SFT step 60  held-out pass 0.93 | groups with signal 0.10 | action entropy 0.027
+```
+
+第 20 步检查点给 RL 提供的可用信号最多：它 70% 的留出组同时包含通过和失败。到第 60 步只有 10% 是这样，尽管该策略在留出回合上仍有 7% 失败。它剩下的失败大多位于每个样本都以同一种方式失败的组中，而组基线优势在这些组里为零。在示范上训练得更久，把这些错误固化了下来：RL 永远看不到一个可以强化的成功替代方案。
+
+> **问题：示范用与 RL 不同的模板渲染。** *症状：* SFT 损失非常好，而最初的 RL rollout（或第一次评估）远差于 SFT 验证数字所预示的水平。*原因：* 示范流水线渲染回合时使用了与 rollout 流水线不同的模板，所以策略是在它从未训练过的前缀上接受评估（[5.8 节](/tutorial/zh/chapters/05-trajectories-and-templates#5-8-实践中的设计问题)）。*可选方案：* (a) 让所有数据都经由 rollout 自己的 `Episode` 代码路径渲染，这是最便宜的修复。(b) 用 RL 模板重新渲染遗留数据。(c) 断言同一段固定对话在两条流水线下的 token 级别完全相等。*默认做法：* (a) 和 (c)。下一个代码块模拟一个漏掉了 `<obs>` 与 `</obs>` 包装 token 的示范流水线，并在其输出上训练。
+
+```python
+def strip_wrappers(traj):
+    keep = (traj.owner != arl.OWNER['template']) | (torch.arange(len(traj.ids)) == 0)   # keep <bos>
+    owner = traj.owner[keep]
+    return arl.Trajectory(traj.ids[keep], (owner[1:] == arl.OWNER['policy']).float(),
+                          torch.zeros(int(keep.sum()) - 1), traj.reward, traj.info, owner, traj.turn[keep])
+
+mismatched = copy.deepcopy(weak)
+sft_train(mismatched, [strip_wrappers(t) for t in oracle_demos], tok, steps=60)
+print('demo text:', tok.decode(strip_wrappers(oracle_demos[0]).ids[7:16].tolist()))
+with torch.no_grad():
+    print(f'NLL on correctly rendered demos: {sft_loss(mismatched, batch).item():.3f}')
+describe(mismatched, 'mismatched')
+```
+
+Output:
+
+```text
+demo text: <call> read </call> def clamp ( value , lower
+NLL on correctly rendered demos: 0.815
+mismatched   train 0.075 | held-out 0.087 | invalid/ep 0.62 | reads 1.00 | action entropy 0.190
+```
+
+每轮缺两个模板 token 就足够了。在剥离后的渲染上训练的模型在每个回合都读取文件，说明它学会了 oracle 的开局；但在真实的 rollout 格式下，它每个回合发出 0.62 个格式错误的调用，训练任务通过率只有 7.5%，而同样的数据正确渲染时是 0.98（15.2 节）。它在正确渲染的示范上的 NLL 为每个动作 token 0.82 nats，所以一个用 rollout 模板构建的验证集本可以发现这个问题。
+
+> **问题：DPO 的异策略退化。** *症状：* DPO 的训练损失和奖励准确率稳步改善，而策略自己的 rollout 却越来越差：格式错误的输出更多，回合更长或更怪，留出分数下降。*原因：* 损失只在固定的偏好对上计算，而降低 $\log\pi_\theta(\tau^-)$ 可以通过把概率质量移到数据之外的序列上来实现，那里没有任何约束（15.4 节）。策略离生成这些偏好对的策略越远，偏好对对它当前行为的说明就越少。*可选方案：* (a) 在被选回合上加 NLL 项，Iterative RPO 就是这样做的，并报告该项“至关重要”（“crucial”）（[Pang et al., 2024](https://arxiv.org/abs/2404.19733)），它为被选行为提供锚定。(b) 每隔几百步从当前策略重新生成偏好对（迭代式或在线 DPO），这需要付出采样和标注的成本。(c) 使用更大的 $\beta$ 或更少的步数，这会同时限制漂移和学习。*默认做法：* 始终采用 (a)，策略移动较远时再加上 (b)。下一个代码块以 NLL 权重 1 重跑 15.4 节。
+
+```python
+nll_log = train_dpo(nll_weight=1.0)
+for row in [dpo_log[-1], nll_log[-1]]:
+    print(f"step {row['step']}: train {row['train']:.2f} | held {row['held']:.2f} | invalid/ep {row['invalid']:.2f}"
+          f" | d_chosen {row['d_chosen']:+.2f} | d_rejected {row['d_rejected']:+.2f}")
+```
+
+Output:
+
+```text
+step 100: train 0.41 | held 0.00 | invalid/ep 2.02 | d_chosen +0.74 | d_rejected -44.68
+step 100: train 0.69 | held 0.17 | invalid/ep 0.61 | d_chosen +1.89 | d_rejected -45.60
+```
+
+NLL 项使被选回合的对数概率持续上升（+1.89，对比 +0.74），把格式错误的调用减少到三分之一，训练通过率从 0.41 升到 0.69。它没有解决泛化问题（留出 0.17），因为被选回合仍是之前那些侥幸猜中：任何正则项都修复不了数据集。
+
+> **问题：数据混合与去重。** *症状：* 经过几轮 RFT 后，保留集被少数几个任务或完全相同的回合所主导，模型在它们上过拟合，而其他任务退步。*原因：* 不同任务的成功率不同，所以对每个任务采样相同数量的回合，会返回大量容易成功的副本。确定性的策略会返回字面上完全相同的轨迹，这会成倍放大它们在 SFT 损失中的权重。*可选方案：* (a) 按动作序列去重，数学推理上的 RFT 以不同路径的价值为这一做法提供了依据（[Yuan et al., 2023](https://arxiv.org/abs/2308.01825)）。(b) 限制每个任务保留的回合数。(c) 对困难任务采样更多回合。(d) 混入固定比例的示范或早期数据以防遗忘。*默认做法：* (a) 加 (b)，并在每一轮记录保留集中各任务族的占比。下一个代码块测量 15.3 节第 1 轮的保留集。
+
+```python
+kept1 = rounds[1]['kept']
+unique = {(t.info['task'], tuple(t.info['actions'])): t for t in kept1}
+share = lambda ts: {f: round(sum(t.info['family'] == f for t in ts) / len(ts), 2) for f in arl.FAMILIES}
+print(f'kept {len(kept1)} episodes, {len(unique)} distinct action sequences')
+print('family share, raw:    ', share(kept1))
+print('family share, deduped:', share(list(unique.values())))
+```
+
+Output:
+
+```text
+kept 84 episodes, 21 distinct action sequences
+family share, raw:     {'minmax': 0.21, 'range': 0.37, 'compare': 0.35, 'zero': 0.07, 'init': 0.0}
+family share, deduped: {'minmax': 0.43, 'range': 0.24, 'compare': 0.19, 'zero': 0.14, 'init': 0.0}
+```
+
+一轮之后，84 个保留回合只包含 21 个不同的动作序列，所以平均每个序列出现四次。重复并不均匀。`range` 和 `compare` 两个任务族占原始集合的 72%，因为策略在它们上已经几乎是确定性的，一次又一次地返回同一个回合，而 `minmax` 的成功回合更多样。去重颠倒了这个顺序，`minmax` 以 0.43 成为占比最大的任务族。两行都不是“正确的混合”：去重是一种带有自身偏差的重加权决策，而且它无法加入 `init` 任务族，后者在两行中的占比都是 0。去重改变的是权重，而不是覆盖。
+
+> **问题：在被投机利用的“成功”上做 SFT。** *症状：* RFT 保留集每轮都在增大，训练奖励趋近 1，而隐藏测试或人工评估却在下降。*原因：* 过滤器就是奖励，而只检查智能体能看到的东西的奖励会接受漏洞利用（exploit）。使用 [4.5 节](/tutorial/zh/chapters/04-environments-and-tools#4-5-动作语法与环境)的公开测试奖励时，每一个提交了的 `hardcode_tests` 回合都能通过过滤，随后过滤式克隆以 15.3 节中按 $1/p$ 放大的步长忠实地复制它。*可选方案：* (a) 用留出测试或隐藏测试过滤，代价是要编写它们。(b) 为已知的漏洞利用模式加一个检测器。(c) 每轮抽查一部分保留回合。*默认做法：* 永远不要用策略能观测到的信号做过滤，并记录过滤器通过率与一项独立检查之间的差距。下一个代码块以公开测试为过滤器，从弱基座跑三轮 RFT。
+
+```python
+hacker, hack_log = copy.deepcopy(weak), []
+for k in range(3):
+    rate, sample = pass_rate(hacker, train, tok, 16, seed=200 + k, reward='public')
+    kept = [t for t in sample if t.reward == 1.0]
+    hacks = sum(not t.info['hidden_pass'] for t in kept)
+    sft_train(hacker, kept, tok, steps=15, seed=k)
+    _, trajs = pass_rate(hacker, train, tok, 4, reward='public')
+    public = sum(t.reward for t in trajs) / len(trajs)
+    hidden = sum(t.info['hidden_pass'] and t.info['submitted'] for t in trajs) / len(trajs)
+    hack_log.append(dict(round=k + 1, kept=len(kept), hacks=hacks, public=public, hidden=hidden))
+    print(f'round {k}: kept {len(kept)} ({hacks} fail hidden tests) -> public {public:.2f}, hidden {hidden:.2f}')
+```
+
+Output:
+
+```text
+round 0: kept 83 (35 fail hidden tests) -> public 0.61, hidden 0.23
+round 1: kept 188 (111 fail hidden tests) -> public 0.94, hidden 0.34
+round 2: kept 287 (185 fail hidden tests) -> public 0.97, hidden 0.36
+```
+
+在第一轮中，83 个保留回合里有 35 个（42%）是投机回合，因为弱基座从 random 策略的行为中学到了 `hardcode_tests`；到第三轮，这一比例增长到 64%（287 个中的 185 个）。过滤器自身的通过率攀升到 0.97，而隐藏测试通过率停留在 0.35 左右。策略修 bug 的能力并没有变差。它学到的是：漏洞利用是通过过滤器最可靠的方式。
+
+![图 15.4：以公开测试为过滤器的 RFT。柱：每轮的保留回合数，分为真正的修复与未通过隐藏测试的投机回合。线：每轮之后策略的公开测试通过率与隐藏测试通过率。](/tutorial/figures/ch15-hacked-rft.svg)
+
+图 15.4 展示了这一机制：保留集中红色部分的占比每轮都在增长，两条通过率曲线逐渐分开。按奖励过滤得到的数据集，本质上是一个经过奖励优化的策略，它继承了奖励所允许的每一种漏洞利用。
+
+
+## 小结
+
+- 轨迹 SFT 最大化示范动作的对数似然。环境的概率不含参数，所以动作掩码是轨迹对数似然的精确梯度，而不是经验技巧。在 oracle 示范中，只有 19% 的预测 token 是动作。
+- SFT 分别教授格式与技能。在无技能行为上训练的弱基座掌握了格式（每回合 0.06 个格式错误的调用），但技能只在猜测水平（0.14）。二十条 oracle 示范把它带到训练集约 0.99、留出集约 0.9，同时把动作熵从 0.25 压到 0.02 nats（本书测得）。
+- 拒绝采样微调是奖励为 0/1 的策略梯度，步长除以成功率，并且没有负信号。专家迭代是过滤式行为克隆：两轮内从 0.15 升到 0.68，随后停滞在基座能解的 16 个任务之下，并复制了无法迁移的侥幸猜中（留出 0.15）。
+- 面向智能体轨迹的 DPO 使用带掩码的动作对数概率，因为环境在策略/参考比值中被约掉。离线训练时，它把被拒对数概率压低了 45 nats，而格式错误的调用增加了三十多倍。在被选回合上加 NLL 项减轻了损害，但没有修复数据。
+- 从同一个弱基座出发，oracle SFT 达到 0.99/0.93（训练/留出），先 SFT 后 RL 达到 0.96/0.95，RFT 为 0.74/0.15，只做 RL 在 60 步时为 0.36/0.30。冷启动的价值在于有信息量的组：它 70% 的留出组带有信号，而 SFT 训练更久之后只有 10%。
+
+## 练习
+
+1. 证明 token 平均的 0/1 策略梯度损失与保留回合上 token 平均的 SFT 损失，其梯度之比恰好为（保留的动作 token 数）/（全部动作 token 数），并对序列平均的聚合方式验证这一点。哪种聚合方式会使 RFT 的有效步长依赖回合长度？
+2. 改变一个假设：把弱基座的 blind 与 random 行为换成只来自 `random` 策略的行为。基座能解的任务集合会如何变化？专家迭代会收敛到什么？
+3. 为 gym 实现 STaR 的合理化：对一轮中没有任何成功的任务，在编辑轮强制使用正确的操作来 rollout 当前模型，保留成功回合，并把被强制的 token 从损失中掩码掉。`init` 任务族是否变得可学？结果是否仍是过滤式行为克隆？
+4. 给 RFT 加上组基线：同时在失败回合上训练，每组权重为 $-\bar R/(1-\bar R)$。证明这在相差一个比例因子的意义下恢复了带基线的策略梯度，并测量它是否改变了 15.3 节的平台期。
+5. 改用第 20 步的 oracle-SFT 检查点而不是弱基座来构造 DPO 偏好对，训练 100 步，与 15.4 节比较格式错误的调用数和留出通过率。用这些偏好对中被选回合包含的内容来解释差异。
+6. 从第 10 步、第 20 步和第 40 步检查点分别测量先 SFT 后 RL 的做法，并画出最终留出通过率与起始时有信息量的组所占比例的关系。
+7. 设计评审：你的团队有 2,000 条编码智能体的人类示范、一个基于测试的验证器，以及在 RL 之前再做一个阶段的预算。论证应选择在示范上做 SFT、从 SFT 模型出发做 RFT，还是在（示范，模型失败）偏好对上做 DPO，并指出哪个监控面板指标能在一天之内告诉你这个选择错了。

@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 400" width="980" height="400" role="img" aria-label="Standard-deviation normalization and task difficulty (G = 8, binary reward)">
+<style>
+svg{--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--neutral:#f0efec;--panel:#f4f3ef;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--s6:#008300;--s7:#6250d6;--s8:#e34948;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme: dark){svg{--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--neutral:#383835;--panel:#232322;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--s7:#9085e9;--s8:#e66767}}
+.bg{fill:var(--surface)} .t{fill:var(--ink)} .t2{fill:var(--ink2)} .m{fill:var(--muted)}
+.title{font-size:15px;font-weight:600;fill:var(--ink)} .sub{font-size:12px;fill:var(--ink2)}
+.lab{font-size:12px;fill:var(--ink2)} .tick{font-size:11px;fill:var(--muted);font-variant-numeric:tabular-nums}
+.grid{stroke:var(--grid);stroke-width:1} .axis{stroke:var(--axis);stroke-width:1}
+.box{fill:var(--panel);stroke:var(--axis);stroke-width:1} .edge{stroke:var(--ink2);stroke-width:1.5;fill:none}
+.ring{stroke:var(--surface);stroke-width:2} .note{font-size:11px;fill:var(--ink2)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--ink2)"/></marker></defs>
+<rect class="bg" width="980" height="400" rx="8"/>
+<text class="title" x="20" y="30">Standard-deviation normalization and task difficulty (G = 8, binary reward)</text>
+<text class="sub" x="20" y="48">Expected total |advantage| of a group, computed exactly from the binomial distribution.</text>
+<line class="grid" x1="64" x2="430.0" y1="348.0" y2="348.0"/>
+<text class="tick" x="58" y="352.0" text-anchor="end">0</text>
+<line class="grid" x1="64" x2="430.0" y1="277.2" y2="277.2"/>
+<text class="tick" x="58" y="281.2" text-anchor="end">2</text>
+<line class="grid" x1="64" x2="430.0" y1="206.4" y2="206.4"/>
+<text class="tick" x="58" y="210.4" text-anchor="end">4</text>
+<line class="grid" x1="64" x2="430.0" y1="135.6" y2="135.6"/>
+<text class="tick" x="58" y="139.6" text-anchor="end">6</text>
+<line class="axis" x1="64" x2="430.0" y1="348.0" y2="348.0"/>
+<line class="axis" x1="64.0" x2="64.0" y1="348" y2="352"/>
+<text class="tick" x="64.0" y="364" text-anchor="middle">0</text>
+<line class="axis" x1="137.2" x2="137.2" y1="348" y2="352"/>
+<text class="tick" x="137.2" y="364" text-anchor="middle">0.2</text>
+<line class="axis" x1="210.4" x2="210.4" y1="348" y2="352"/>
+<text class="tick" x="210.4" y="364" text-anchor="middle">0.4</text>
+<line class="axis" x1="283.6" x2="283.6" y1="348" y2="352"/>
+<text class="tick" x="283.6" y="364" text-anchor="middle">0.6</text>
+<line class="axis" x1="356.8" x2="356.8" y1="348" y2="352"/>
+<text class="tick" x="356.8" y="364" text-anchor="middle">0.8</text>
+<line class="axis" x1="430.0" x2="430.0" y1="348" y2="352"/>
+<text class="tick" x="430.0" y="364" text-anchor="middle">1</text>
+<text class="lab" x="247.0" y="382" text-anchor="middle">task pass rate p</text>
+<text class="lab" x="20" y="218.0" text-anchor="middle" transform="rotate(-90 20 218.0)">E[ sum_i |A_i| ] per group</text>
+<clipPath id="clip128165518898480"><rect x="64" y="86" width="366.0" height="264"/></clipPath>
+<polyline points="71.3,338.3 78.6,329.0 86.0,320.0 93.3,311.5 100.6,303.4 107.9,295.7 115.2,288.3 122.6,281.4 129.9,274.8 137.2,268.7 144.5,262.9 151.8,257.6 159.2,252.6 166.5,248.1 173.8,243.9 181.1,240.1 188.4,236.8 195.8,233.8 203.1,231.2 210.4,229.0 217.7,227.3 225.0,225.9 232.4,224.9 239.7,224.3 247.0,224.1 254.3,224.3 261.6,224.9 269.0,225.9 276.3,227.3 283.6,229.0 290.9,231.2 298.2,233.8 305.6,236.8 312.9,240.1 320.2,243.9 327.5,248.1 334.8,252.6 342.2,257.6 349.5,262.9 356.8,268.7 364.1,274.8 371.4,281.4 378.8,288.3 386.1,295.7 393.4,303.4 400.7,311.5 408.0,320.0 415.4,329.0 422.7,338.3" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip128165518898480)"/>
+<polyline points="71.3,321.3 78.6,297.0 86.0,275.0 93.3,255.1 100.6,237.0 107.9,220.6 115.2,205.8 122.6,192.4 129.9,180.3 137.2,169.4 144.5,159.6 151.8,150.7 159.2,142.9 166.5,135.8 173.8,129.6 181.1,124.1 188.4,119.3 195.8,115.1 203.1,111.6 210.4,108.7 217.7,106.3 225.0,104.5 232.4,103.2 239.7,102.4 247.0,102.2 254.3,102.4 261.6,103.2 269.0,104.5 276.3,106.3 283.6,108.7 290.9,111.6 298.2,115.1 305.6,119.3 312.9,124.1 320.2,129.6 327.5,135.8 334.8,142.9 342.2,150.7 349.5,159.6 356.8,169.4 364.1,180.3 371.4,192.4 378.8,205.8 386.1,220.6 393.4,237.0 400.7,255.1 408.0,275.0 415.4,297.0 422.7,321.3" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip128165518898480)"/>
+<line class="grid" x1="554.0" x2="920.0" y1="348.0" y2="348.0"/>
+<text class="tick" x="548.0" y="352.0" text-anchor="end">0</text>
+<line class="grid" x1="554.0" x2="920.0" y1="261.3" y2="261.3"/>
+<text class="tick" x="548.0" y="265.3" text-anchor="end">1</text>
+<line class="grid" x1="554.0" x2="920.0" y1="174.7" y2="174.7"/>
+<text class="tick" x="548.0" y="178.7" text-anchor="end">2</text>
+<line class="grid" x1="554.0" x2="920.0" y1="88.0" y2="88.0"/>
+<text class="tick" x="548.0" y="92.0" text-anchor="end">3</text>
+<line class="axis" x1="554.0" x2="920.0" y1="348.0" y2="348.0"/>
+<line class="axis" x1="554.0" x2="554.0" y1="348" y2="352"/>
+<text class="tick" x="554.0" y="364" text-anchor="middle">0</text>
+<line class="axis" x1="627.2" x2="627.2" y1="348" y2="352"/>
+<text class="tick" x="627.2" y="364" text-anchor="middle">0.2</text>
+<line class="axis" x1="700.4" x2="700.4" y1="348" y2="352"/>
+<text class="tick" x="700.4" y="364" text-anchor="middle">0.4</text>
+<line class="axis" x1="773.6" x2="773.6" y1="348" y2="352"/>
+<text class="tick" x="773.6" y="364" text-anchor="middle">0.6</text>
+<line class="axis" x1="846.8" x2="846.8" y1="348" y2="352"/>
+<text class="tick" x="846.8" y="364" text-anchor="middle">0.8</text>
+<line class="axis" x1="920.0" x2="920.0" y1="348" y2="352"/>
+<text class="tick" x="920.0" y="364" text-anchor="middle">1</text>
+<text class="lab" x="737.0" y="382" text-anchor="middle">task pass rate p</text>
+<text class="lab" x="510.0" y="218.0" text-anchor="middle" transform="rotate(-90 510.0 218.0)">ratio: normalized / mean only</text>
+<clipPath id="clip128165539706208"><rect x="554.0" y="86" width="366.0" height="264"/></clipPath>
+<polyline points="561.3,109.6 568.6,115.9 576.0,121.8 583.3,127.2 590.6,132.3 597.9,137.1 605.2,141.5 612.6,145.6 619.9,149.3 627.2,152.8 634.5,156.0 641.8,158.9 649.2,161.6 656.5,164.0 663.8,166.2 671.1,168.1 678.4,169.8 685.8,171.3 693.1,172.6 700.4,173.7 707.7,174.5 715.0,175.2 722.4,175.7 729.7,176.0 737.0,176.1 744.3,176.0 751.6,175.7 759.0,175.2 766.3,174.5 773.6,173.7 780.9,172.6 788.2,171.3 795.6,169.8 802.9,168.1 810.2,166.2 817.5,164.0 824.8,161.6 832.2,158.9 839.5,156.0 846.8,152.8 854.1,149.3 861.4,145.6 868.8,141.5 876.1,137.1 883.4,132.3 890.7,127.2 898.0,121.8 905.4,115.9 912.7,109.6" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip128165539706208)"/>
+<line class="axis" x1="554.0" x2="920.0" y1="174.7" y2="174.7" stroke-dasharray="4 3"/>
+<text class="note" x="916.0" y="169.7" text-anchor="end">2.0 at p = 0.5</text>
+<line x1="64" x2="82" y1="72" y2="72" stroke="var(--s1)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="88" y="76" font-size="12" text-anchor="start">mean only (Dr. GRPO, RLOO-like)</text>
+<line x1="323" x2="341" y1="72" y2="72" stroke="var(--s2)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="347" y="76" font-size="12" text-anchor="start">mean / std (GRPO)</text>
+</svg>

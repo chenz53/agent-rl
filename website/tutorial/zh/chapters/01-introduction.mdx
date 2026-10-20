@@ -1,0 +1,457 @@
+---
+title: "1. \u4ec0\u4e48\u662f\u667a\u80fd\u4f53\u5f3a\u5316\u5b66\u4e60\uff1f"
+---
+
+预训练语言模型预测下一个 token。经过后训练的对话模型预测一个有用回答的下一个 token。编程智能体做的事情在性质上不同：它发出一条命令，*等待外部世界的回应*，读取回应，再决定下一步做什么。它的输出会改变一个代码仓库，而仓库的响应又成为它下一步输入的一部分。训练这样的系统正是本书的主题。
+
+本章在任何学习发生之前先把这个想法具体化。我们拿一个小缺陷来运行，编写定义“已修复”的测试，并让一个脚本化的智能体走完读取、编辑、测试和提交的循环。从这一个回合（episode）出发，我们可以列出使智能体强化学习（agentic RL）比大多数读者见过的单轮后训练更难的所有因素：时间跨度（horizon）、不是模型写出的 token、环境的延迟、验证器（verifier），以及策略利用验证器漏洞的各种方式。然后我们描绘整个训练栈，把 SFT、偏好学习、RLVR 和蒸馏放进这个框架中，并考察那些代表编程智能体强化学习最新水平的公开系统。本章最后给出全书路线图。
+
+## 1.1 从预测 token 到采取动作
+
+把语言模型写成条件分布 $\pi_\theta(y_i \mid c_i)$，即给定前缀 $c_i$ 时下一个 token $y_i$ 的分布。预训练和监督微调（SFT）让这个分布去拟合别人写的文本。训练中模型采样的任何内容都不会产生后果：下一个前缀取自数据集，而不是来自模型。
+
+**智能体**（agent）是把同一个分布放进一个与**环境**（environment）交互的循环中。模型的部分输出被解析为一个**动作**（action），即对某个工具的调用。环境执行它并返回一个**观测**（observation），观测被追加到上下文中。模型随后从一个新的前缀继续生成，这个前缀包含*不是它写的*、而且*取决于它做了什么*的文本。经过若干轮之后，回合结束，由一个**奖励**（reward）为结果打分。此时模型就成了强化学习意义上的**策略**（policy）：一条选择动作的规则，而这些动作的后果会反馈到它自己未来的输入中。[第 2 章](/tutorial/zh/chapters/02-rl-fundamentals)会把这些词定义得更精确。
+
+### clamp 问题
+
+我们的贯穿示例是一个单行缺陷。它是[第 4 章](/tutorial/zh/chapters/04-environments-and-tools)所构建的 **BugFix gym** 中的任务 0。一个本应把值限制到某个区间内的函数把 `min` 和 `max` 写反了。我们把问题描述和源代码的两个版本存为常量，这是本章唯一保存的代码。
+
+```python
+#@save
+CLAMP_ISSUE = ('clamp(value, lower, upper) should limit value to the interval '
+               '[lower, upper], but clamp(3, 0, 5) returns 0 instead of 3.')
+CLAMP_BUGGY = 'def clamp(value, lower, upper):\n    return min(lower, max(value, upper))\n'
+CLAMP_FIXED = 'def clamp(value, lower, upper):\n    return max(lower, min(value, upper))\n'
+```
+
+为了运行源代码，我们把它执行到一个全新的命名空间中，再从中取出函数。这是普通的 Python。之所以在这里是安全的，只是因为我们执行的每个字符串都是本书编写的。模型生成的代码必须在带有资源和网络限制的隔离沙箱中运行，[第 4 章](/tutorial/zh/chapters/04-environments-and-tools)会讨论这一点。
+
+```python
+def load_function(source, name='clamp'):
+    namespace = {}
+    exec(source, namespace)          # trusted, authored source only
+    return namespace[name]
+
+clamp = load_function(CLAMP_BUGGY)
+for args, expected in [((3, 0, 5), 3), ((-2, 0, 5), 0), ((9, 0, 5), 5)]:
+    print(f'clamp{args} = {clamp(*args)!r:3}  expected {expected!r}')
+```
+
+Output:
+
+```text
+clamp(3, 0, 5) = 0    expected 3
+clamp(-2, 0, 5) = 0    expected 0
+clamp(9, 0, 5) = 0    expected 5
+```
+
+这个缺陷比问题描述说的更糟。对任何有效区间，`max(value, upper)` 至少为 `upper`，而 `upper` 至少为 `lower`，因此 `min(lower, ...)` 总是返回 `lower`。有缺陷的函数恰好能通过答案碰巧为 `lower` 的那些用例。只检查第二个用例的奖励会认为这段代码是正确的，这是验证器可能被愚弄的第一个迹象。
+
+### 测试定义成功
+
+问题描述用自然语言陈述意图；测试让意图变得可检查。我们编写两组测试。**公开测试**（public tests）是智能体工作时可以用它的 `test` 工具运行的测试。**隐藏测试**（hidden tests）被保留起来，只用于计算最终奖励。这种划分区分了智能体能看到的训练信号和它无法直接拟合的测量。
+
+```python
+PUBLIC_TESTS = [((3, 0, 5), 3), ((-2, 0, 5), 0), ((9, 0, 5), 5)]
+HIDDEN_TESTS = [((0.5, 0, 1), 0.5), ((-7, -5, -1), -5), ((4, 2, 2), 2), ((-3, -5, -1), -3)]
+
+def run_tests(source, tests):
+    """Return one 'PASS ...' or 'FAIL ...' line per (args, expected) test case."""
+    try:
+        fn = load_function(source)
+    except Exception as err:                       # source does not even load
+        return [f'FAIL load error: {err!r}']
+    lines = []
+    for args, expected in tests:
+        try:
+            got = fn(*args)
+        except Exception as err:
+            got = err
+        lines.append(f"{'PASS' if got == expected else 'FAIL'} clamp{args} -> {got!r}")
+    return lines
+
+print('\n'.join(run_tests(CLAMP_BUGGY, PUBLIC_TESTS)))
+print('fixed source, hidden tests:', run_tests(CLAMP_FIXED, HIDDEN_TESTS))
+```
+
+Output:
+
+```text
+FAIL clamp(3, 0, 5) -> 0
+PASS clamp(-2, 0, 5) -> 0
+FAIL clamp(9, 0, 5) -> 0
+fixed source, hidden tests: ['PASS clamp(0.5, 0, 1) -> 0.5', 'PASS clamp(-7, -5, -1) -> -5', 'PASS clamp(4, 2, 2) -> 2', 'PASS clamp(-3, -5, -1) -> -3']
+```
+
+有缺陷的源代码在三个公开测试中失败两个，而参考修复通过了所有隐藏测试。这两个结果都不涉及模型。它们定义了智能体的动作必须达到的目标。
+
+## 1.2 逐步走完一个回合
+
+智能体需要**工具**（tool）、调用工具的**动作语法**（action grammar），以及执行调用并保存状态的**环境**。我们使用与[第 4 章](/tutorial/zh/chapters/04-environments-and-tools)完整 gym 相同的四个工具和语法：
+
+- `read` 返回当前的源文件。
+- `test` 运行公开测试，并返回 `PASS`/`FAIL` 行。
+- `edit <op>` 从一个固定菜单中应用一个具名的源代码变换。
+- `submit` 结束回合；随后由隐藏测试计算奖励。
+
+策略把调用写成 `<call> tool [arg] </call>`。其他任何写法都是格式错误。下面是一个最简解析器。
+
+```python
+import re
+
+CALL = re.compile(r'<call>\s*(\w+)(?:\s+(\w+))?\s*</call>')
+
+def parse_call(text):
+    """'<call> edit swap_minmax </call>' -> ('edit', 'swap_minmax'); malformed -> None."""
+    match = CALL.fullmatch(text.strip())
+    return None if match is None else (match.group(1), match.group(2))
+
+for text in ['<call> read </call>', '<call> edit swap_minmax </call>', 'please read the file']:
+    print(f'{text!r:36} -> {parse_call(text)}')
+```
+
+Output:
+
+```text
+'<call> read </call>'                -> ('read', None)
+'<call> edit swap_minmax </call>'    -> ('edit', 'swap_minmax')
+'please read the file'               -> None
+```
+
+编辑菜单有两个操作。`swap_minmax` 是这一类缺陷的真正修复。`hardcode_tests` 是一个**漏洞利用**（exploit）：它插入特殊分支，恰好对公开测试的输入返回期望答案，而把缺陷原封不动地留下。我们之所以包含它，是因为一个能接触到类似操作的学习型智能体终究会找到它，而本书需要一种可复现的方式来研究这种情况（[第 11 章](/tutorial/zh/chapters/11-rewards-and-verifiers)）。
+
+```python
+def swap_minmax(source):
+    return source.replace('min(', 'TMP(').replace('max(', 'min(').replace('TMP(', 'max(')
+
+def hardcode_tests(source):
+    header, body = source.split('\n', 1)
+    special = ''.join(f'    if (value, lower, upper) == {args}:\n        return {expected!r}\n'
+                      for args, expected in PUBLIC_TESTS)
+    return header + '\n' + special + body
+
+edit_menu = {'swap_minmax': swap_minmax, 'hardcode_tests': hardcode_tests}
+print('swap_minmax gives the fix:', swap_minmax(CLAMP_BUGGY) == CLAMP_FIXED)
+print(hardcode_tests(CLAMP_BUGGY))
+```
+
+Output:
+
+```text
+swap_minmax gives the fix: True
+def clamp(value, lower, upper):
+    if (value, lower, upper) == (3, 0, 5):
+        return 3
+    if (value, lower, upper) == (-2, 0, 5):
+        return 0
+    if (value, lower, upper) == (9, 0, 5):
+        return 5
+    return min(lower, max(value, upper))
+```
+
+环境的 `step` 接收策略的文本，解析它，执行工具，并返回 `(observation, reward, done)`。除 `submit` 之外，每一步的奖励都是 0；在 `submit` 时，如果最终源代码通过了所有公开测试和隐藏测试，奖励为 1。格式错误的调用不会抛出异常；它返回一条错误信息作为观测，并消耗一轮，这正是真实的评测框架（harness）必须采取的做法。
+
+```python
+def step(state, action_text):
+    """Apply one policy message to the environment state; return (obs, reward, done)."""
+    call = parse_call(action_text)
+    if call is None:
+        return 'ERROR: expected <call> tool [arg] </call>', 0.0, False
+    tool, arg = call
+    if tool == 'read':
+        return state['source'], 0.0, False
+    if tool == 'test':
+        return '\n'.join(run_tests(state['source'], PUBLIC_TESTS)), 0.0, False
+    if tool == 'edit' and arg in edit_menu:
+        state['source'] = edit_menu[arg](state['source'])
+        return f'edited with {arg}', 0.0, False
+    if tool == 'submit':
+        results = run_tests(state['source'], PUBLIC_TESTS + HIDDEN_TESTS)
+        return 'submitted', float(all(r.startswith('PASS') for r in results)), True
+    return f'ERROR: unknown tool or op: {tool} {arg}', 0.0, False
+```
+
+一个回合把一串消息依次送入 `step`，直到回合结束或轮数预算耗尽。这里的消息来自脚本，而不是模型。对话记录（transcript）记下了每段文本由谁产生。
+
+```python
+def run_episode(messages, max_turns=6):
+    """Run scripted policy messages; return (transcript, reward, final_source)."""
+    state = {'source': CLAMP_BUGGY}
+    transcript, reward = [('prompt', CLAMP_ISSUE)], 0.0
+    for message in messages[:max_turns]:
+        obs, reward, done = step(state, message)
+        transcript += [('policy', message), ('env', obs)]
+        if done:
+            break
+    return transcript, reward, state['source']
+
+solver = ['<call> read </call>', '<call> test </call>', '<call> edit swap_minmax </call>',
+          '<call> test </call>', '<call> submit </call>']
+transcript, reward, _ = run_episode(solver)
+for owner, text in transcript[1:]:
+    print(f'{owner:>6}: ' + text.strip().replace('\n', '\n        '))
+print('reward:', reward)
+```
+
+Output:
+
+```text
+policy: <call> read </call>
+   env: def clamp(value, lower, upper):
+            return min(lower, max(value, upper))
+policy: <call> test </call>
+   env: FAIL clamp(3, 0, 5) -> 0
+        PASS clamp(-2, 0, 5) -> 0
+        FAIL clamp(9, 0, 5) -> 0
+policy: <call> edit swap_minmax </call>
+   env: edited with swap_minmax
+policy: <call> test </call>
+   env: PASS clamp(3, 0, 5) -> 3
+        PASS clamp(-2, 0, 5) -> 0
+        PASS clamp(9, 0, 5) -> 5
+policy: <call> submit </call>
+   env: submitted
+reward: 1.0
+```
+
+这就是本书中每个回合的形态。策略读取文件，运行测试并看到两个失败，应用修复，看到三个通过，然后提交；隐藏测试返回奖励 1。这里没有学到任何东西。本书其余部分用模型替换这个脚本，并探讨如何改变模型，使这样的对话记录变得更有可能出现。
+
+现在把求解者换成一个已经发现了漏洞利用的策略。
+
+```python
+hacker = ['<call> edit hardcode_tests </call>', '<call> test </call>', '<call> submit </call>']
+transcript, reward, source = run_episode(hacker)
+print('public tests seen by the agent:')
+print(transcript[4][1])
+print('hidden-test reward:', reward)
+print('failing hidden tests:', [r for r in run_tests(source, HIDDEN_TESTS) if r.startswith('FAIL')])
+```
+
+Output:
+
+```text
+public tests seen by the agent:
+PASS clamp(3, 0, 5) -> 3
+PASS clamp(-2, 0, 5) -> 0
+PASS clamp(9, 0, 5) -> 5
+hidden-test reward: 0.0
+failing hidden tests: ['FAIL clamp(0.5, 0, 1) -> 0', 'FAIL clamp(-3, -5, -1) -> -5']
+```
+
+所有公开测试都通过了，如果奖励就是公开测试，智能体认为自己已经成功也是合理的。隐藏测试返回 0。这就是最简单形式的**奖励投机**（reward hacking）：策略满足的是测量，而不是意图。这里的防御手段是隐藏测试划分。[第 11 章](/tutorial/zh/chapters/11-rewards-and-verifiers)会训练一个自己发现这一漏洞利用的智能体，并研究检测方法和其他防御手段。
+
+## 1.3 智能体强化学习有何不同
+
+大多数读者见过两类面向语言模型的强化学习后训练。在 **RLHF** 中，模型对一个提示写出一个回答，由一个学习得到的奖励模型（reward model）为其打分，然后更新策略以提高分数，同时保持与参考模型接近。在 **RLVR**（基于可验证奖励的强化学习）中，奖励模型被一个程序取代，例如数学答案检查器或单元测试运行。两者都是单轮的：一个提示、一个回答、一个奖励。[第 2 章](/tutorial/zh/chapters/02-rl-fundamentals#2-6-老虎机：单步情形)表明它们是上下文老虎机（contextual bandit）。上面的回合在六个方面与之不同，每一方面都带来本书其余部分要解决的工程问题。
+
+**1. 长时程。** 上面的回合做了五个决策，而真实的编程回合要进行几十轮、消耗数万个 token。最终奖励要为 1，每个决策都必须正确。如果每一轮以概率 $p$ 独立成功，那么一个 $H$ 轮的回合以概率 $p^H$ 成功。
+
+```python
+for p in [0.99, 0.95, 0.90]:
+    print(f'per-turn success {p:.2f}:', '  '.join(f'H={H}: {p ** H:.3f}' for H in [1, 5, 20, 50]))
+```
+
+Output:
+
+```text
+per-turn success 0.99: H=1: 0.990  H=5: 0.951  H=20: 0.818  H=50: 0.605
+per-turn success 0.95: H=1: 0.950  H=5: 0.774  H=20: 0.358  H=50: 0.077
+per-turn success 0.90: H=1: 0.900  H=5: 0.590  H=20: 0.122  H=50: 0.005
+```
+
+即使每轮可靠性达到 95%，20 轮时的成功率也只有约 36%。真实的各轮并不独立，但这种累积效应是真实存在的，这也是为什么策略必须能从自己的错误中恢复，而不是指望永不犯错。同样的长时程也让**信用分配**（credit assignment）变得困难：一个终局奖励必须分摊到它之前的每一个决策上（[第 7 章](/tutorial/zh/chapters/07-advantages-and-credit)、[第 12 章](/tutorial/zh/chapters/12-multi-turn-and-long-horizons)）。
+
+**2. 不是策略生成的 token。** 在单轮强化学习中，回答中的每个 token 都由策略采样。而在智能体轨迹（trajectory）中，大部分上下文是由环境写入的。按归属统计求解者对话记录中的 token 数，这里用以空白分隔的单词近似 token。
+
+```python
+transcript, _, _ = run_episode(solver)
+counts = {}
+for owner, text in transcript:
+    counts[owner] = counts.get(owner, 0) + len(text.split())
+total = sum(counts.values())
+for owner, n in counts.items():
+    print(f'{owner:6s} {n:3d} tokens  ({n / total:.0%})')
+```
+
+Output:
+
+```text
+prompt  20 tokens  (24%)
+policy  16 tokens  (19%)
+env     48 tokens  (57%)
+```
+
+由策略采样的 token 不到五分之一。工具输出在后续轮次中是模型输入的一部分，但它们不是动作。模型并没有选择它们的概率，因此它们不能获得策略梯度项。错误地在它们上面训练会教模型去预测工具输出，这是一个无声的缺陷：[第 5 章](/tutorial/zh/chapters/05-trajectories-and-templates)用**动作掩码**（action mask）防止它，[第 18 章](/tutorial/zh/chapters/18-debugging-rl-runs)展示它在监控面板上的样子。环境文本被重新分词时还可能与原始分词结果不同，这会破坏对数概率的记录（[第 5 章](/tutorial/zh/chapters/05-trajectories-and-templates)）。
+
+**3. 环境延迟。** 在单轮强化学习中，生成是唯一昂贵的步骤，奖励只是一次廉价的函数调用。在智能体强化学习中，每一轮都要等待一个工具：一次测试套件运行、一次构建、一次容器启动。rollout 变成了 GPU 密集的生成与 CPU 或 I/O 密集的环境步骤的混合体，各步耗时差异很大。少数缓慢的回合就能拖住一个同步批次，这就是 rollout 系统走向异步、异策略（off-policy）校正变得必要的原因（[第 13 章](/tutorial/zh/chapters/13-rollout-systems)）。
+
+**4. 用验证器代替标签。** 奖励来自运行测试，而不是与参考答案比较。测试检查的是列出的用例，而不是一般意义上的正确性。测试可能不稳定，可能不完整，而且智能体能看到的测试可以在不修复缺陷的情况下被满足。
+
+**5. 漏洞利用。** 一个能执行任意动作的智能体可能找到设计者没有预料到的行为，正如 `hardcode_tests` 所展示的。工具集越强大，漏洞利用的空间就越大：编辑测试、读取评分器，或者对特定输入做特殊处理。因此，奖励设计和环境隔离本身就是学习算法的一部分（[第 11 章](/tutorial/zh/chapters/11-rewards-and-verifiers)）。
+
+**6. 部分可观测。** 智能体永远看不到隐藏测试，只能通过它选择读取的内容来看到仓库，并且只有通过测试才能知道一次编辑是否奏效。`read` 和 `test` 这类信息收集动作本身不直接获得奖励，但会改变智能体所知道的东西。[第 2 章](/tutorial/zh/chapters/02-rl-fundamentals#2-7-部分可观测)在一个小型 MDP 上对此进行了量化。
+
+## 1.4 训练栈
+
+模型如何学会产生求解者那样的对话记录，而不是一份随机的记录？每个面向智能体的强化学习系统都有相同的组件，本书会逐一构建它们。在任何组件存在之前，我们就可以用最简单的策略运行这个循环：一个未经训练的智能体，从一个小菜单中均匀随机地挑选每条消息。菜单中包含一条格式错误的消息，使格式错误成为可能。
+
+```python
+import torch
+
+menu = ['<call> read </call>', '<call> test </call>', '<call> submit </call>',
+        '<call> edit swap_minmax </call>', '<call> edit hardcode_tests </call>', 'read the file']
+
+def random_rollouts(n, seed=0, max_turns=6):
+    """n episodes from a uniform policy over `menu`; returns rewards [n] and hacked flags [n]."""
+    gen = torch.Generator().manual_seed(seed)
+    rewards, hacked = torch.zeros(n), torch.zeros(n, dtype=torch.bool)
+    for i in range(n):
+        picks = torch.randint(len(menu), (max_turns,), generator=gen).tolist()
+        transcript, rewards[i], source = run_episode([menu[k] for k in picks], max_turns)
+        submitted = transcript[-1][1] == 'submitted'
+        public_ok = all(r.startswith('PASS') for r in run_tests(source, PUBLIC_TESTS))
+        hacked[i] = submitted and public_ok and rewards[i] == 0
+    return rewards, hacked
+```
+
+`hacked` 标记那些提交的源代码通过了所有公开测试、却没有拿到隐藏测试奖励的回合，这正是该漏洞利用的特征。运行 2,000 个回合。
+
+```python
+rewards, hacked = random_rollouts(2000)
+print(f'success rate (hidden reward = 1):      {rewards.mean():.3f}')
+print(f'submitted, public pass, hidden fail:   {hacked.float().mean():.3f}')
+```
+
+Output:
+
+```text
+success rate (hidden reward = 1):      0.164
+submitted, public pass, hidden fail:   0.132
+```
+
+随机智能体在 16.4% 的回合中成功。菜单很小，一次正确的编辑就足够了，所以这个成功率远高于在真实 token 序列上的随机策略所能达到的水平，后者基本为零。尽管如此，这个数字比看上去更重要。只有当一部分采样回合成功、另一部分失败时，学习信号才存在，因为强化学习只能把概率推向它实际采样到的成功。一个从不成功的策略在每个回合中得到的奖励都是 0，从中学不到任何东西。随机智能体还在 13.2% 的回合中提交了被篡改的代码，几乎和它成功的频率一样高，而这还是在施加任何优化压力之前。一个以公开测试为奖励的学习型智能体会把这些回合视为成功并将其放大。
+
+图 1.1 展示了把这些 rollout 转化为学习的完整循环。
+
+![图 1.1：智能体强化学习训练循环。左侧：rollout，策略、解析器、环境与上下文之间交换动作 token 和观测 token。右侧：学习，从轨迹到奖励、优势，再到带掩码的策略更新。下方：一条轨迹的 token 条带，按每个 token 的生成者用不同边框区分。](/tutorial/figures/agentic-rl-loop.svg)
+
+从图的左上方开始看。**Rollout**（[第 3–5 章](/tutorial/zh/chapters/03-language-models-as-policies)）从策略中采样动作 token，将其解析为工具调用，在环境中执行，并把观测追加到上下文中，直到回合结束。它的输出是一条**轨迹**：token 序列、策略所生成 token 的采样对数概率，以及标记哪些 token 由策略产生的掩码。**奖励**（[第 11 章](/tutorial/zh/chapters/11-rewards-and-verifiers)）为完成的轨迹打分，这里使用隐藏测试。**优势**（advantage，[第 7 章](/tutorial/zh/chapters/07-advantages-and-credit)）通过把每条轨迹与一个基线（baseline）比较，把原始奖励变成带符号的信号，基线例如是同一任务其他尝试的平均奖励。**更新**（[第 6、8、9 和 10 章](/tutorial/zh/chapters/06-policy-gradient)）按优势的比例提高策略 token 的对数概率，只作用于掩码为 1 的位置，并通过裁剪和正则化使新策略保持接近生成数据的那个策略。新的权重回到 rollout 引擎。**评测**（[第 17 章](/tutorial/zh/chapters/17-evaluation)）用一个固定的评测框架在留出任务上运行，以判断策略是否有所提升。在这一切之外，**系统**层（[第 13–14 章](/tutorial/zh/chapters/13-rollout-systems)）在真实硬件上调度生成、环境工作进程和训练。
+
+图下方的 token 条带就是更新所消费的数据结构。带强调色的蓝色 token 是策略的动作，携带梯度，其下方的动作掩码为 1。实线边框的 token 来自工具，虚线边框的来自提示和模板；它们都只是上下文。末尾的那个奖励必须回溯分配给每一个蓝色 token。
+
+## 1.5 SFT、偏好、RLVR 与蒸馏的位置
+
+强化学习只是对智能体做后训练的几种方式之一，一个训练流水线可能组合其中的几种。把它们放在同一个框架中看会很有帮助。下面每种方法都会提高某些 token 序列的对数概率，并降低另一些序列的对数概率。它们的区别在于**序列从哪里来**，以及**每条序列如何加权**：
+
+$$
+\nabla_\theta \mathcal{L} = -\,\mathbb{E}_{y \sim \text{source}}\Big[\, w(y)\, \nabla_\theta \log \pi_\theta(y) \Big].
+$$
+
+| 方法 | 序列来源 | 权重 $w(y)$ | 对智能体的贡献 |
+| --- | --- | --- | --- |
+| SFT | 示范（人类或更强的模型） | 1 | 动作格式、工具使用、一个起始行为（[第 15 章](/tutorial/zh/chapters/15-sft-and-rejection-sampling)） |
+| 拒绝采样（RFT） | 策略自身，经验证器过滤 | 成功为 1，否则为 0 | 从自身成功中进行廉价的自我改进（[第 15 章](/tutorial/zh/chapters/15-sft-and-rejection-sampling)） |
+| 偏好学习（DPO） | 成对的轨迹 | 隐式的，来自选中/拒绝的比较 | 在没有验证器时提供相对判断（[第 15 章](/tutorial/zh/chapters/15-sft-and-rejection-sampling)） |
+| 基于可验证奖励的强化学习 | 当前策略 | 一个优势，可正可负 | 在策略自身访问的状态上改进，包括从自身错误中恢复（[第 6–9 章](/tutorial/zh/chapters/06-policy-gradient)） |
+| 同策略蒸馏 | 当前策略 | 来自教师的逐 token 信号 | 在学生自己的前缀上提供稠密监督（[第 16 章](/tutorial/zh/chapters/16-distillation)） |
+
+在一个小批次上很容易看出权重的差异。假设对同一任务的四次尝试得到的奖励分别为 1、0、0、1。
+
+```python
+rewards = torch.tensor([1., 0., 0., 1.])                     # [G]: one task, G = 4 attempts
+weights = {
+    'SFT on all samples':      torch.ones_like(rewards),
+    'rejection sampling':      (rewards == 1).float(),
+    'policy gradient, no baseline': rewards,
+    'policy gradient, mean baseline': rewards - rewards.mean(),
+}
+for name, w in weights.items():
+    print(f'{name:31s} {w.tolist()}')
+```
+
+Output:
+
+```text
+SFT on all samples              [1.0, 1.0, 1.0, 1.0]
+rejection sampling              [1.0, 0.0, 0.0, 1.0]
+policy gradient, no baseline    [1.0, 0.0, 0.0, 1.0]
+policy gradient, mean baseline  [0.5, -0.5, -0.5, 0.5]
+```
+
+在所有样本上做 SFT 会连失败也一并模仿。拒绝采样（rejection sampling）只保留成功样本，它等价于一个使用 0/1 奖励、对失败不施加惩罚的策略梯度。减去组的平均奖励会把失败变成负权重：此时更新既推向成功轨迹，也*推离*失败轨迹；而如果一个批次中所有尝试得到相同的奖励，就完全不会产生更新。最后这个性质正是 GRPO 类方法的基础（[第 9 章](/tutorial/zh/chapters/09-grpo-and-variants)），也是起始策略的成功率之所以重要的原因。
+
+把强化学习与 SFT 区分开来的那一列是*来源*。SFT 从别人访问过的状态中学习。强化学习从策略自己访问的状态中学习，包括由它自己的错误产生的状态。对多轮智能体而言，这些恰恰是用示范训练的模型从未见过、不知道下一步该做什么的状态。同策略蒸馏也具有这一性质，并用稠密的教师信号取代了稀疏的奖励。
+
+## 1.6 公开的参考系统
+
+有几个公开系统表明，在真实仓库上进行强化学习能够提升编程智能体。我们把它们用作规模和设计上的参考点，而不是我们要复现的结果。下面的每个数字都由其作者报告。本书自己的实验是 CPU 规模的机制演示，不是基准测试结果。
+
+- **SWE-bench**（[Jimenez et al., 2023](https://arxiv.org/abs/2310.06770)）定义了这一任务族。它的 2,294 个实例中，每一个都是来自 12 个流行 Python 仓库之一的真实 GitHub issue，并配有解决该 issue 的 pull request。当智能体的补丁使仓库的测试通过时即算成功。该基准发布时，它所评测的最好的模型解决了 1.96% 的 issue。下面的智能体系统报告的是在 SWE-bench Verified（SWE-bench 的一个子集）上的结果。
+- **SWE-RL**（[Wei et al., 2025](https://arxiv.org/abs/2502.18449)）使用开源软件演化数据（issue、代码快照和 pull request）对 Llama 3 进行强化学习。它的奖励是一个轻量的基于规则的分数，衡量生成补丁与真实补丁之间的相似度，而不是执行测试。作者报告其 70B 模型在 SWE-bench Verified 上的解决率为 41.0%。
+- **R2E-Gym**（[Jain et al., 2025](https://arxiv.org/abs/2504.07164)）从仓库提交出发，通过测试生成和 issue 的反向翻译，以程序化方式构建可执行的训练环境。其环境集被描述为包含超过 8.7K 个任务。作者报告一个 32B 模型在 SWE-bench Verified 上取得 34.4% 的 pass@1，在结合基于执行和不基于执行的验证器进行测试时扩展（test-time scaling）后达到 51%。
+- **DeepSWE**（[Together AI and Agentica, 2025](https://www.together.ai/blog/deepswe)）在 R2E-Gym 环境中仅用强化学习训练 Qwen3-32B，在过滤掉出现在 SWE-bench Verified 中的仓库之后使用了 4.5K 个问题。训练框架是 rLLM，算法名为 GRPO++，它组合了若干已发表的 GRPO 改进。其中包括 clip-higher、不使用 KL 损失、不做奖励标准差归一化，以及留一法（leave-one-out）基线，另外还有作者自己的紧凑过滤（compact filtering）。报告给出在 SWE-bench Verified 上 42.2% 的 pass@1（16 次运行的平均值），以及使用混合测试时扩展后的 59%。训练使用了 64 块 H100 GPU，历时六天。
+
+> **证据。** 这些是所引来源报告的论断，已于 2026-10-13 对照这些来源核查（见 [sources.md](/tutorial/sources)）。本书没有复现它们。基准测试数字取决于评测框架、脚手架（scaffold）、轮数预算和测试时计算量；不同报告之间的数字不能直接比较。
+
+DeepSWE 方案的每个组成部分都对应本书的一章。GRPO 及其变体在[第 9 章](/tutorial/zh/chapters/09-grpo-and-variants)，KL 项及其去除在[第 10 章](/tutorial/zh/chapters/10-kl-entropy-regularization)，可执行环境在[第 4 章](/tutorial/zh/chapters/04-environments-and-tools)，截断或退化回合的过滤在[第 12 章](/tutorial/zh/chapters/12-multi-turn-and-long-horizons)。到综合实战（capstone）一章时，读者应当能够把这样一个方案读成一系列设计决策，并对每一项给出支持或反对的理由。
+
+## 1.7 路线图
+
+本书组织为一次完整构建。每章把它推导出的函数保存进 `agentrl` 库，后续章节导入它们（[第 0 章](/tutorial/zh/chapters/00-notation)）。
+
+- **第 I 部分，基础（第 1–5 章）。** 在一个表格型修复 MDP 上建立强化学习形式化框架（第 2 章）；作为策略的语言模型，以及本书训练的小型 transformer TinyAgent（第 3 章）；包含工具、解析器和测试运行器的 BugFix gym（第 4 章）；以及把多轮回合转换为 token id、掩码和对数概率（第 5 章）。
+- **第 II 部分，策略优化（第 6–10 章）。** 从第一性原理推导策略梯度（6），优势与信用分配（7），PPO 与安全的样本复用（8），GRPO 与无评论家（critic-free）方法族，以及本书的主训练循环（9），KL 与熵正则化（10）。
+- **第 III 部分，奖励与智能体（第 11–12 章）。** 验证器、奖励模型与奖励投机（11），多轮行为与长时程（12）。
+- **第 IV 部分，系统（第 13–14 章）。** rollout 架构、异步，以及训练与推理对数概率之间的不一致（13），打包、批处理与数据过滤（14）。
+- **第 V 部分，超越纯强化学习（第 15–16 章）。** SFT、拒绝采样与偏好（15），面向智能体的蒸馏（16）。
+- **第 VI 部分，实践（第 17–20 章）。** 评测（17），调试强化学习训练（18），端到端训练一个编程智能体的综合实战（19），以及研究前沿（20）。
+
+## 1.8 实践中的设计问题
+
+> **问题：选择动作的单位。** *症状：* 团队争论优势、比率和 KL 惩罚应当按 token、按轮还是按回合计算，而代码库的不同部分悄悄地采用了不同的答案。*原因：* 一条轨迹可以有三种合理的 MDP 建模方式（[第 2 章 2.8 节](/tutorial/zh/chapters/02-rl-fundamentals#2-8-把-llm-智能体建模为-mdp-的三种方式)）。模型的概率是按 token 的，环境按轮行动，而奖励按回合到达。*可选方案：* (a) 一切都在 token 级，这与模型完全匹配，但时间跨度长达数千个决策；(b) 轮级优势配合 token 级对数概率，信用分配更好，但需要逐轮的价值估计或奖励；(c) 单个回合级优势广播到每个策略 token，简单且无需评论家，但对无用动作和决定性动作分配相同的功劳。*默认做法：* 按 token 计算对数概率和比率，按轮施加掩码，并从回合级优势开始。当测量表明无用动作正在被强化时，再转向轮级信用分配（[第 12 章](/tutorial/zh/chapters/12-multi-turn-and-long-horizons)）。
+
+> **问题：决定什么算作成功。** *症状：* 训练中奖励不断攀升，而留出集上的质量没有提升；或者智能体学会了 `hardcode_tests` 这样的行为。*原因：* 奖励是对意图的一种测量，而任何策略能观察或影响的测量都可以被直接优化。在 1.2 节中，公开测试的成功与真正的成功在一次编辑之后就分道扬镳了。*可选方案：* (a) 智能体无法运行的隐藏测试，稳健但每个任务需要更多测试；(b) 与参考补丁的相似度，如 SWE-RL 所报告的，廉价且无需执行，但会惩罚同样有效的其他修复；(c) 学习得到的评判模型，灵活但本身可被利用；(d) 组合使用，并监控已知的漏洞利用。*默认做法：* 在隔离环境中执行留出测试，智能体的工具无法读取或修改它们，再加上对你能说出名字的漏洞利用的显式检查。让评测奖励与训练奖励保持分离（[第 11 章](/tutorial/zh/chapters/11-rewards-and-verifiers)）。
+
+> **问题：判断强化学习相比 SFT 何时值得其代价。** *症状：* 一次强化学习训练烧掉了若干 GPU 天，奖励却纹丝不动；或者基于示范的 SFT 在需要从错误中恢复的任务上进入平台期。*原因：* 强化学习只能从它抽取的样本之间的奖励差异中学习。如果某个任务在当前策略下的成功率为 $p$，我们采样一个包含 $G$ 次尝试的组，那么只有当组内同时包含成功和失败时，该组才携带学习信号，其概率为 $1 - p^G - (1-p)^G$。*可选方案：* (a) 当大多数任务上 $p$ 接近 0 或格式错误占主导时，先做 SFT 或冷启动；(b) 当存在可靠的验证器、且在相当比例的任务上 $p$ 既不为 0 也不为 1 时，使用强化学习；(c) 使用课程或过滤，把任务保持在可学习的范围内（[第 14 章](/tutorial/zh/chapters/14-scaling-and-efficiency)）；(d) 当存在更强且负担得起的教师时，使用蒸馏（[第 16 章](/tutorial/zh/chapters/16-distillation)）。*默认做法：* 在做选择之前，先逐任务测量起始策略的通过率。当这一分布在中间区域有质量时使用强化学习；否则先修正起始策略。
+
+有信息量的组所占的比例很容易计算。
+
+```python
+G = 8
+for p in [0.0, 0.01, 0.05, 0.2, 0.5, 0.9, 0.99]:
+    informative = 1 - p ** G - (1 - p) ** G
+    print(f'pass rate {p:<5}  P(group of {G} has mixed rewards) = {informative:.3f}')
+```
+
+Output:
+
+```text
+pass rate 0.0    P(group of 8 has mixed rewards) = 0.000
+pass rate 0.01   P(group of 8 has mixed rewards) = 0.077
+pass rate 0.05   P(group of 8 has mixed rewards) = 0.337
+pass rate 0.2    P(group of 8 has mixed rewards) = 0.832
+pass rate 0.5    P(group of 8 has mixed rewards) = 0.992
+pass rate 0.9    P(group of 8 has mixed rewards) = 0.570
+pass rate 0.99   P(group of 8 has mixed rewards) = 0.077
+```
+
+在 1% 的通过率下，八次尝试组成的组中只有不到 8% 包含任何成功，因此在组均值基线下超过 92% 的 rollout 不产生梯度。99% 的通过率下情况相同。在 50% 附近，几乎每个组都有信息量。强化学习在策略有时能解决的任务上效率最高，这就是为什么要在选择方法之前先测量起始的通过率分布。
+
+## 小结
+
+- 智能体是一个被放进与环境交互的循环中的语言模型：它的动作是被解析的工具调用，它的观测是追加到上下文中的工具输出，一个奖励为完成的回合打分。
+- `clamp` 回合展示了完整的接口：工具 `read`、`test`、`edit <op>` 和 `submit`，调用语法为 `<call> tool [arg] </call>`。公开测试引导智能体，隐藏测试定义奖励。
+- 智能体强化学习与单轮的 RLHF 和 RLVR 的区别在于：时间跨度长，存在不是策略生成的观测 token，有环境延迟，依赖验证器，容易被漏洞利用，以及部分可观测。
+- 训练栈由 rollout、奖励、优势、带掩码的更新和评测组成，并由系统层进行调度。后面的每一章构建其中的一部分。
+- SFT、拒绝采样、偏好学习、强化学习和蒸馏都在提高和降低序列的对数概率。它们的区别在于序列从哪里来，以及每条序列如何加权。强化学习和同策略蒸馏在策略自身的状态上学习。
+- 强化学习需要奖励存在差异：在选择它之前，先测量起始策略的通过率。
+
+## 练习
+
+1. 编写第三个编辑操作 `drop_min`，把 `min(lower, max(value, upper))` 替换为 `max(value, upper)`。结果能通过哪些公开测试和隐藏测试？一个基于公开测试通过比例的奖励会把它排在有缺陷的源代码之上还是之下？
+2. 添加一个 `hardcode_tests` 碰巧能通过的隐藏测试。这说明隐藏测试相对于公开测试应当如何选择？
+3. 修改 `random_rollouts`，从菜单中去掉格式错误的消息。先预测、再测量成功率和被篡改比例的变化。
+4. 使用 `run_tests` 设计一个给予部分分数的奖励（隐藏测试通过的比例）。对有缺陷的、被篡改的和已修复的源代码分别计算它。部分分数会招致哪种漏洞利用？
+5. 对每轮成功率 $p = 0.97$，找出使回合成功率高于 50% 的最大时间跨度 $H$。对 $p = 0.99$ 重复这一计算。
+6. 改变一个假设：在最后一个代码块中把组大小设为 $G = 2$ 和 $G = 32$。使大多数组都有信息量的通过率范围如何变化？这对在困难任务上选择组大小意味着什么？
+7. 设计评审：一位同事提议在 SWE 类任务上，用来自更强模型的 10,000 条成功智能体轨迹做 SFT，且不做强化学习。列出这种做法很可能学好的行为、很可能遗漏的行为，以及一项能显示二者差异的测量。

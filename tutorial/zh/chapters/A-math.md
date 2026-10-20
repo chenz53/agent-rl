@@ -1,0 +1,333 @@
+# A. 数学工具
+
+本附录汇集了强化学习各章反复用到的概率工具。每一节先给出简短推导，再用 torch 做数值检验，让每个恒等式都是你亲眼看到成立的，而不是凭信任接受的。正文各章在需要某个结果时会链接到这里。这里的内容并不专属于语言模型，但每个例子都是因为它会在某个语言模型场景中再次出现才被选中的。
+
+本附录只保存了一个函数 `mc_mean_and_stderr`，全书凡是报告带误差棒的蒙特卡洛估计，都会用到它。
+
+## A.1 蒙特卡洛估计与误差棒
+
+强化学习中几乎每个量都是无法精确计算的期望：目标 $J(\theta)$、梯度、通过率（pass rate）。我们通过采样来估计它。给定随机变量 $X$ 的独立同分布样本 $x_1, \dots, x_n$，其均值为 $\mu$、方差为 $\sigma^2$，样本均值 $\bar X = \frac{1}{n}\sum_i x_i$ 是无偏（unbiased）的，即 $\mathbb{E}[\bar X] = \mu$，其方差（variance）为
+
+$$
+\mathrm{Var}(\bar X) = \frac{1}{n^2} \sum_{i=1}^n \mathrm{Var}(x_i) = \frac{\sigma^2}{n}.
+$$
+
+**标准误**（standard error）$\sigma/\sqrt{n}$ 是估计值的标准差。实际中 $\sigma$ 未知，用样本标准差 $s$ 代替。由中心极限定理，$\bar X \pm 1.96\, s/\sqrt{n}$ 是一个近似的 95% 置信区间（confidence interval）。误差按 $1/\sqrt{n}$ 收缩：样本数增加到四倍，误差减半。
+
+```python
+#@save
+import torch
+
+
+def mc_mean_and_stderr(samples):
+    """Mean and standard error of i.i.d. samples along the last axis: [..., n] -> ([...], [...])."""
+    n = samples.shape[-1]
+    return samples.mean(-1), samples.std(-1) / n ** 0.5
+```
+
+下面检验覆盖率的说法。用 $p = 0.3$ 的伯努利变量代表二值奖励（reward）。我们独立进行 10,000 次实验，每次 $n = 200$ 个样本，统计区间包含真实均值的频率。
+
+```python
+torch.manual_seed(0)
+p, n, experiments = 0.3, 200, 10_000
+rewards = (torch.rand(experiments, n) < p).float()          # [experiments, n]
+mean, stderr = mc_mean_and_stderr(rewards)                  # [experiments] each
+covered = ((mean - 1.96 * stderr <= p) & (p <= mean + 1.96 * stderr)).float().mean()
+print(f'theoretical stderr = {(p * (1 - p) / n) ** 0.5:.4f}')
+print(f'average estimated stderr = {stderr.mean():.4f}')
+print(f'95% interval coverage = {covered:.3f}')
+```
+
+Output:
+
+```text
+theoretical stderr = 0.0324
+average estimated stderr = 0.0324
+95% interval coverage = 0.946
+```
+
+估计的标准误与理论值 $\sqrt{p(1-p)/n}$ 一致，名义 95% 区间在接近 95% 的实验中覆盖了真实均值。当 $n$ 较小或 $p$ 接近 0 或 1 时，这一近似会变差，而这恰恰是困难任务通过率所处的区间。[第 17 章](17-evaluation.md)在这些情形下使用自助法（bootstrap）和精确区间。
+
+## A.2 和的方差
+
+一条轨迹（trajectory）的回报（return）是奖励之和，一个策略梯度（policy gradient）估计是逐 token 项之和。和的方差为
+
+$$
+\mathrm{Var}\Big(\sum_{i=1}^n X_i\Big) = \sum_{i} \mathrm{Var}(X_i) + 2\sum_{i<j} \mathrm{Cov}(X_i, X_j).
+$$
+
+对独立的项，协方差为零，方差随 $n$ 线性增长；对正相关的项，方差增长得更快。若各项方差均为 $\sigma^2$、两两相关系数为 $\rho$，则 $n$ 项*均值*的方差为
+
+$$
+\mathrm{Var}(\bar X) = \frac{\sigma^2}{n}\big(1 + (n-1)\rho\big),
+$$
+
+当 $\rho > 0$ 时，它不会随 $n \to \infty$ 趋于零。具有共同成因的样本，例如同一提示的 $G$ 个补全，或一条轨迹中的许多 token，所携带的信息比其数量所暗示的要少。**有效样本量**（effective sample size）为 $n_{\text{eff}} = n / (1 + (n-1)\rho)$。
+
+我们给组内每个成员一个共享分量加一个独立分量来生成相关样本，并把实测的组均值方差与公式对比。
+
+```python
+torch.manual_seed(0)
+n, trials = 16, 200_000
+for rho in [0.0, 0.2, 0.5]:
+    shared = torch.randn(trials, 1)                              # [trials, 1]
+    own = torch.randn(trials, n)                                  # [trials, n]
+    x = rho ** 0.5 * shared + (1 - rho) ** 0.5 * own              # unit variance, corr rho
+    measured = x.mean(-1).var().item()
+    predicted = (1 + (n - 1) * rho) / n
+    print(f'rho={rho:<4} Var(mean of {n}) measured={measured:.4f} '
+          f'predicted={predicted:.4f}  n_eff={n / (1 + (n - 1) * rho):.2f}')
+```
+
+Output:
+
+```text
+rho=0.0  Var(mean of 16) measured=0.0626 predicted=0.0625  n_eff=16.00
+rho=0.2  Var(mean of 16) measured=0.2505 predicted=0.2500  n_eff=4.00
+rho=0.5  Var(mean of 16) measured=0.5315 predicted=0.5312  n_eff=1.88
+```
+
+在 $\rho = 0.5$ 时，十六个相关样本的价值还不如两个独立样本。这就是为什么本书在*独立*单元（如任务或随机种子）上而不是在 token 上报告误差棒。
+
+## A.3 控制变量
+
+假设我们要估计 $\mathbb{E}[f(X)]$，并知道另一个函数 $g(X)$，其均值 $\mathbb{E}[g]$ 精确已知。那么对任意常数 $c$，
+
+$$
+\hat\mu_c = f(X) - c\,\big(g(X) - \mathbb{E}[g]\big)
+$$
+
+仍然无偏，其方差为 $\mathrm{Var}(f) - 2c\,\mathrm{Cov}(f,g) + c^2\,\mathrm{Var}(g)$。对 $c$ 求最小值得到
+
+$$
+c^* = \frac{\mathrm{Cov}(f, g)}{\mathrm{Var}(g)}, \qquad \mathrm{Var}(\hat\mu_{c^*}) = \mathrm{Var}(f)\,\big(1 - \mathrm{corr}(f,g)^2\big).
+$$
+
+$g$ 与 $f$ 的相关性越强，消去的方差越多，而 $g$ 的均值并不需要接近 $f$ 的均值。策略梯度中的**基线**（baseline）就是一种控制变量（control variate）：[第 6 章](06-policy-gradient.md)减去 $b \cdot \nabla\log\pi$，由 A.5 节可知其期望恰好为零。这里用 $X \sim \mathcal{N}(0, 1)$、$f(X) = e^X$、$g(X) = X$ 检验该公式，其中 $\mathbb{E}[e^X] = e^{1/2}$。
+
+```python
+torch.manual_seed(0)
+x = torch.randn(1_000_000, dtype=torch.float64)
+f, g = x.exp(), x                                               # E[g] = 0 exactly
+c_star = torch.cov(torch.stack([f, g]))[0, 1] / g.var()
+for name, c in [('no control variate', 0.0), ('c = c*', c_star.item())]:
+    est = f - c * (g - 0.0)
+    print(f'{name:18s} mean={est.mean():.4f}  per-sample variance={est.var():.4f}')
+print(f'true mean = {torch.tensor(0.5, dtype=torch.float64).exp():.4f}, c* = {c_star:.4f}')
+```
+
+Output:
+
+```text
+no control variate mean=1.6468  per-sample variance=4.6666
+c = c*             mean=1.6474  per-sample variance=1.9541
+true mean = 1.6487, c* = 1.6488
+```
+
+两个估计量都与真实均值 $e^{1/2} \approx 1.6487$ 一致。控制变量把单样本方差降低了约 60%，也就是比例 $\mathrm{corr}(e^X, X)^2$。这里的最优系数等于 $\mathbb{E}[e^X] = e^{1/2}$，因为 $\mathrm{Cov}(e^X, X) = \mathbb{E}[X e^X] = e^{1/2}$。
+
+## A.4 重要性采样
+
+我们常常需要某个分布 $p$ 下的期望，手头却只有来自另一个分布 $q$ 的样本。在强化学习中，$p$ 是当前策略（policy），$q$ 是生成数据的旧策略或推理引擎（inference engine）。若在 $p(x) f(x) \ne 0$ 处都有 $q(x) > 0$，则
+
+$$
+\mathbb{E}_{x \sim p}[f(x)] = \sum_x p(x) f(x) = \sum_x q(x) \frac{p(x)}{q(x)} f(x) = \mathbb{E}_{x \sim q}\big[w(x) f(x)\big], \qquad w(x) = \frac{p(x)}{q(x)}.
+$$
+
+重要性加权估计量是无偏的，但其方差并非没有代价：
+
+$$
+\mathrm{Var}_q(w f) = \mathbb{E}_p\big[w(x) f(x)^2\big] - \big(\mathbb{E}_p[f]\big)^2,
+$$
+
+期望中的因子 $w$ 使得在 $p$ 比 $q$ 分配多得多质量的地方方差很大。一个有用的诊断量是权重的**有效样本量** $n_{\text{eff}} = (\sum_i w_i)^2 / \sum_i w_i^2$：所有权重相等时它等于 $n$，某个权重占主导时它趋近 1。
+
+在一个类别分布上检验无偏性，分别使用接近 $p$ 和远离 $p$ 的 $q$。
+
+```python
+torch.manual_seed(0)
+p = torch.tensor([0.1, 0.2, 0.3, 0.4])                          # target, [K]
+f = torch.tensor([1.0, 2.0, 3.0, 4.0])                          # function values, [K]
+for name, q in [('q near p', torch.tensor([0.15, 0.2, 0.3, 0.35])),
+                ('q far from p', torch.tensor([0.7, 0.2, 0.08, 0.02]))]:
+    x = torch.multinomial(q, 100_000, replacement=True)         # samples from q, [n]
+    w = p[x] / q[x]                                               # importance weights, [n]
+    est, se = mc_mean_and_stderr(w * f[x])
+    ess = (w.sum() ** 2 / (w ** 2).sum()) / x.numel()
+    print(f'{name:13s} estimate={est:.4f} +/- {se:.4f}   ESS fraction={ess:.3f}')
+print(f'exact E_p[f] = {(p * f).sum():.4f}')
+```
+
+Output:
+
+```text
+q near p      estimate=3.0004 +/- 0.0043   ESS fraction=0.977
+q far from p  estimate=2.9571 +/- 0.0356   ESS fraction=0.108
+exact E_p[f] = 3.0000
+```
+
+两个估计值都与精确值 3.0 相符，但远离的提议分布的标准误大了好几倍，有效样本量只是名义样本量的一小部分。少数权重很大的稀有样本承载了估计的大部分。
+
+### 比率的乘积
+
+对一条 $T$ 步的轨迹，重要性权重是逐步比率的乘积，$w(\tau) = \prod_t \pi_\theta(a_t\mid s_t)/\pi_{\text{old}}(a_t\mid s_t)$。即使每个因子均值为 1、离散程度很小，乘积的方差也随 $T$ 指数增长。将每个 token 的对数比率建模为均值 $-\sigma^2/2$ 的独立高斯变量，这样每个比率的均值恰好为 1。
+
+```python
+torch.manual_seed(0)
+sigma, n = 0.1, 100_000
+for T in [1, 10, 100, 1000]:
+    log_ratio = sigma * torch.randn(n, T) - sigma ** 2 / 2       # [n, T], E[exp] = 1
+    w = log_ratio.sum(-1).exp()                                  # trajectory weight, [n]
+    print(f'T={T:<5} mean(w)={w.mean():.3f}  std(w)={w.std():.3f}  '
+          f'max(w)={w.max():.1f}  ESS fraction={(w.sum() ** 2 / (w ** 2).sum() / n):.4f}')
+```
+
+Output:
+
+```text
+T=1     mean(w)=1.000  std(w)=0.100  max(w)=1.6  ESS fraction=0.9900
+T=10    mean(w)=0.999  std(w)=0.324  max(w)=3.7  ESS fraction=0.9048
+T=100   mean(w)=1.002  std(w)=1.321  max(w)=38.2  ESS fraction=0.3654
+T=1000  mean(w)=0.813  std(w)=18.737  max(w)=2858.7  ESS fraction=0.0019
+```
+
+在原理上，权重在每个长度下都是无偏的；但在 $T = 1000$ 时，样本均值已经出错，因为能把均值拉回来的那几个巨大权重过于稀有，没有被采到，有效样本量随之坍缩。精确方差为 $e^{T\sigma^2} - 1$。这就是为什么 PPO 及其后继方法使用带裁剪（clipping）的*逐 token* 比率而不是轨迹比率；[第 8 章](08-ppo.md)会精确说明这一近似。
+
+## A.5 对数导数技巧
+
+期望对采样分布参数的梯度为
+
+$$
+\nabla_\theta \mathbb{E}_{x \sim p_\theta}[f(x)] = \sum_x \nabla_\theta p_\theta(x)\, f(x) = \sum_x p_\theta(x)\, \nabla_\theta \log p_\theta(x)\, f(x) = \mathbb{E}_{x \sim p_\theta}\big[f(x)\, \nabla_\theta \log p_\theta(x)\big],
+$$
+
+这里用到了 $\nabla p = p\, \nabla \log p$。右侧可以在不对 $f$ 求导的情况下用样本估计，而 $f$ 可能是一套测试。这就是**得分函数**（score-function）估计量，也称 **REINFORCE** 估计量，$\nabla_\theta \log p_\theta(x)$ 称为**得分**（score）。令 $f \equiv 1$，得到使基线合法的恒等式：
+
+$$
+\mathbb{E}_{x \sim p_\theta}\big[\nabla_\theta \log p_\theta(x)\big] = \nabla_\theta \sum_x p_\theta(x) = \nabla_\theta 1 = 0.
+$$
+
+在五个结果上的 softmax 分布中检验这两点。自动求导给出 $\sum_x p_\theta(x) f(x)$ 的精确梯度；得分函数估计量则在样本上对 $f(x)\nabla\log p_\theta(x)$ 取平均。
+
+```python
+torch.manual_seed(0)
+logits = torch.tensor([0.5, -0.2, 0.1, 0.0, 0.3], requires_grad=True)   # theta, [K]
+f = torch.tensor([1.0, 0.0, 0.0, 1.0, 0.0])                            # e.g. pass/fail, [K]
+exact = torch.autograd.grad((torch.softmax(logits, -1) * f).sum(), logits)[0]
+
+n = 200_000
+x = torch.multinomial(torch.softmax(logits, -1).detach(), n, replacement=True)   # [n]
+score = torch.nn.functional.one_hot(x, 5) - torch.softmax(logits, -1).detach()   # d log p / d logits, [n, K]
+estimate = (f[x, None] * score).mean(0)
+print('exact gradient   :', [round(v, 4) for v in exact.tolist()])
+print('score estimate   :', [round(v, 4) for v in estimate.tolist()])
+print('mean score (~0)  :', [round(v, 4) for v in score.mean(0).tolist()])
+```
+
+Output:
+
+```text
+exact gradient   : [0.1539, -0.0618, -0.0835, 0.0933, -0.1019]
+score estimate   : [0.1538, -0.0617, -0.0833, 0.0929, -0.1017]
+mean score (~0)  : [-0.0003, -0.0001, 0.0007, -0.0005, 0.0002]
+```
+
+对 softmax 而言，关于 logits 的得分是 $\mathbf{e}_x - p_\theta$，即采样结果的 one-hot 向量减去概率向量。估计值与自动求导结果在小数点后约三位一致，平均得分在蒙特卡洛噪声范围内为零。[第 6 章](06-policy-gradient.md)将这一恒等式应用于整条轨迹，环境的转移概率因为不依赖于 $\theta$ 而从得分中消去。
+
+## A.6 KL 散度
+
+从 $q$ 到 $p$ 的 **Kullback–Leibler 散度**（KL 散度）为
+
+$$
+\mathrm{KL}(p \,\Vert\, q) = \mathbb{E}_{x \sim p}\Big[\log \frac{p(x)}{q(x)}\Big].
+$$
+
+全书用到它的三条性质。
+
+**非负性。** 对凹函数 $\log$ 应用 Jensen 不等式，$-\mathrm{KL}(p\Vert q) = \mathbb{E}_p[\log(q/p)] \le \log \mathbb{E}_p[q/p] = \log 1 = 0$，等号仅在 $p = q$ 时成立。
+
+**非对称性。** 一般而言 $\mathrm{KL}(p\Vert q) \ne \mathrm{KL}(q\Vert p)$。*前向 KL*（forward KL）$\mathrm{KL}(p_{\text{data}} \Vert \pi_\theta)$ 是最大似然所最小化的量，它惩罚 $\pi_\theta$ 遗漏数据中的模式。*反向 KL*（reverse KL）$\mathrm{KL}(\pi_\theta \Vert \pi_{\text{ref}})$ 是常用的强化学习正则项，它用策略的样本来估计，惩罚策略把质量放在参考策略（reference policy）几乎不放质量的地方。[第 10 章](10-kl-entropy-regularization.md)和[第 16 章](16-distillation.md)讨论其后果。
+
+**链式法则。** 对自回归生成的序列，$p(y) = \prod_i p(y_i \mid y_{<i})$，因此对数比率是 token 上的和，并且
+
+$$
+\mathrm{KL}(p \,\Vert\, q) = \sum_i \mathbb{E}_{y_{<i} \sim p}\Big[\mathrm{KL}\big(p(\cdot \mid y_{<i}) \,\Vert\, q(\cdot \mid y_{<i})\big)\Big].
+$$
+
+序列 KL 是沿从 $p$ 采样的前缀，对逐 token KL 求和的期望。这正是逐 token KL 惩罚的依据。下面在一个词表（vocabulary）大小为三的两 token 序列模型上精确检验这一点。
+
+```python
+torch.manual_seed(0)
+K = 3
+p1, q1 = torch.softmax(torch.randn(K), -1), torch.softmax(torch.randn(K), -1)        # first token, [K]
+p2, q2 = torch.softmax(torch.randn(K, K), -1), torch.softmax(torch.randn(K, K), -1)  # second | first, [K, K]
+p_joint, q_joint = p1[:, None] * p2, q1[:, None] * q2                                 # [K, K]
+
+def kl(p, q):
+    return (p * (p.log() - q.log())).sum(-1)
+
+sequence_kl = kl(p_joint.flatten(), q_joint.flatten())
+per_token = kl(p1, q1) + (p1 * kl(p2, q2)).sum()             # first token + E_{y1~p}[KL of second]
+print(f'KL over sequences = {sequence_kl:.6f}')
+print(f'sum of per-token  = {per_token:.6f}')
+print(f'reverse direction = {kl(q_joint.flatten(), p_joint.flatten()):.6f}')
+```
+
+Output:
+
+```text
+KL over sequences = 0.436340
+sum of per-token  = 0.436340
+reverse direction = 0.517034
+```
+
+两种前向计算在所有打印位上都一致，而反向 KL 不同，这说明了非对称性。
+
+## A.7 从样本估计 KL
+
+训练时我们无法对所有序列求和，因此用策略与参考策略 $p$ 之间对数比率在样本 $x \sim q$（策略）上的值来估计 KL。记 $r = p(x)/q(x)$，John Schulman 的笔记 [*Approximating KL Divergence*](http://joschu.net/blog/kl-approx.html)（2020）中针对 $\mathrm{KL}(q \Vert p)$ 的三个估计量（estimator）为
+
+$$
+k_1 = -\log r, \qquad k_2 = \tfrac{1}{2}(\log r)^2, \qquad k_3 = (r - 1) - \log r.
+$$
+
+$k_1$ 是无偏的，因为它的期望就是定义本身，但它在许多样本上为负，方差也高。$k_3$ 同样无偏，因为 $\mathbb{E}_q[r - 1] = 0$，所以它是 $k_1$ 加上 A.3 节意义下的一个控制变量。由于 $\log r \le r - 1$，它总是非负。$k_2$ 有偏（bias），但在 $p$ 与 $q$ 接近时方差很低。下面做数值检验。
+
+```python
+torch.manual_seed(0)
+q = torch.softmax(torch.randn(50), -1)                       # policy, [K]
+for scale in [0.1, 1.0]:
+    p = torch.softmax(q.log() + scale * torch.randn(50), -1)  # reference, [K]
+    true_kl = (q * (q.log() - p.log())).sum()
+    x = torch.multinomial(q, 200_000, replacement=True)
+    log_r = p.log()[x] - q.log()[x]                            # [n]
+    ks = {'k1': -log_r, 'k2': 0.5 * log_r ** 2, 'k3': log_r.exp() - 1 - log_r}
+    row = '  '.join(f'{k}: mean={v.mean():.4f} std={v.std():.4f}' for k, v in ks.items())
+    print(f'true KL={true_kl:.4f} | {row}')
+```
+
+Output:
+
+```text
+true KL=0.0040 | k1: mean=0.0040 std=0.0900  k2: mean=0.0041 std=0.0053  k3: mean=0.0040 std=0.0050
+true KL=0.5571 | k1: mean=0.5581 std=1.0667  k2: mean=0.7247 std=0.6300  k3: mean=0.5583 std=0.4170
+```
+
+当两个分布接近时（第一行），三个估计量的均值都接近真实 KL，并且 $k_2$ 和 $k_3$ 的标准差远小于 $k_1$。当两者相距较远时，$k_2$ 的偏差显现出来，而 $k_1$ 和 $k_3$ 仍然无偏。该用哪个估计量，以及每个估计量放进损失而不是奖励时会产生什么梯度，留给[第 10 章](10-kl-entropy-regularization.md)讨论。
+
+## 小结
+
+- 对独立样本，蒙特卡洛均值的标准误为 $\sigma/\sqrt{n}$；`mc_mean_and_stderr` 计算它，而相关样本的有效样本量更小。
+- 均值已知的控制变量保持估计量无偏，并消去其方差中 $\mathrm{corr}^2$ 的比例。策略梯度的基线就是控制变量。
+- 重要性采样是无偏的，但其方差随分布间失配程度增大，并随比率乘积的长度指数增长。
+- 对数导数技巧把期望的梯度变为 $f \nabla\log p$ 的期望；得分的均值为零。
+- KL 非负且非对称，序列 KL 是逐 token KL 之和的期望。在样本估计量中，$k_1$ 和 $k_3$ 无偏，且 $k_3$ 永不为负。
+
+## 练习
+
+1. 证明重要性采样估计量的方差在 $q(x) \propto p(x)\,|f(x)|$ 时最小。为什么实践中无法使用这一选择？
+2. 在 A.4 节中，把比率乘积实验中的 $\sigma$ 改为 0.03。在什么 $T$ 时有效样本量降到 10% 以下？与预测值 $1/(e^{T\sigma^2})$ 比较。
+3. 证明对每个样本都有 $k_3 \ge 0$，且 $\mathbb{E}_q[k_3] = \mathrm{KL}(q\Vert p)$。
+4. 用均值为 1 的 $g(X) = X^2$ 重做控制变量实验。计算 $c^*$ 和方差降低量。为什么它比 $g(X) = X$ 时小？
+5. 改变 A.1 节的一个假设：把 200 个样本取为 25 组、每组 8 个，同组共享一个从 $[0, 0.6]$ 均匀抽取的成功概率。朴素的标准误还能给出 95% 覆盖率吗？用 A.2 节解释结果。
+6. 设计评审：一位同事用 4,000 条 rollout（500 个任务、每个任务 8 个样本）为通过率计算 95% 区间，并把这 4,000 条都当作独立样本。问题出在哪里？区间应当在什么单元上计算？

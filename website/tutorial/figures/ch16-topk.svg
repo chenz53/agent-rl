@@ -1,0 +1,95 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 360" width="1000" height="360" role="img" aria-label="Top-k teacher distributions on student prefixes">
+<style>
+svg{--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--neutral:#f0efec;--panel:#f4f3ef;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--s6:#008300;--s7:#6250d6;--s8:#e34948;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme: dark){svg{--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--neutral:#383835;--panel:#232322;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--s7:#9085e9;--s8:#e66767}}
+.bg{fill:var(--surface)} .t{fill:var(--ink)} .t2{fill:var(--ink2)} .m{fill:var(--muted)}
+.title{font-size:15px;font-weight:600;fill:var(--ink)} .sub{font-size:12px;fill:var(--ink2)}
+.lab{font-size:12px;fill:var(--ink2)} .tick{font-size:11px;fill:var(--muted);font-variant-numeric:tabular-nums}
+.grid{stroke:var(--grid);stroke-width:1} .axis{stroke:var(--axis);stroke-width:1}
+.box{fill:var(--panel);stroke:var(--axis);stroke-width:1} .edge{stroke:var(--ink2);stroke-width:1.5;fill:none}
+.ring{stroke:var(--surface);stroke-width:2} .note{font-size:11px;fill:var(--ink2)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--ink2)"/></marker></defs>
+<rect class="bg" width="1000" height="360" rx="8"/>
+<text class="title" x="20" y="30">Top-k teacher distributions on student prefixes</text>
+<text class="sub" x="20" y="48">Renormalized top-k drops the student mass outside the teacher top-k; a tail bucket keeps it.</text>
+<text class="lab" x="64" y="96" font-weight="600">loss value</text>
+<line class="grid" x1="64" x2="440.0" y1="308.0" y2="308.0"/>
+<text class="tick" x="58" y="312.0" text-anchor="end">0</text>
+<line class="grid" x1="64" x2="440.0" y1="259.9" y2="259.9"/>
+<text class="tick" x="58" y="263.9" text-anchor="end">0.25</text>
+<line class="grid" x1="64" x2="440.0" y1="211.8" y2="211.8"/>
+<text class="tick" x="58" y="215.8" text-anchor="end">0.5</text>
+<line class="grid" x1="64" x2="440.0" y1="163.7" y2="163.7"/>
+<text class="tick" x="58" y="167.7" text-anchor="end">0.75</text>
+<line class="grid" x1="64" x2="440.0" y1="115.6" y2="115.6"/>
+<text class="tick" x="58" y="119.6" text-anchor="end">1</text>
+<line class="axis" x1="64" x2="440.0" y1="308.0" y2="308.0"/>
+<line class="axis" x1="64.0" x2="64.0" y1="308" y2="312"/>
+<text class="tick" x="64.0" y="324" text-anchor="middle">1</text>
+<line class="axis" x1="214.4" x2="214.4" y1="308" y2="312"/>
+<text class="tick" x="214.4" y="324" text-anchor="middle">10</text>
+<line class="axis" x1="364.8" x2="364.8" y1="308" y2="312"/>
+<text class="tick" x="364.8" y="324" text-anchor="middle">100</text>
+<text class="lab" x="252.0" y="342" text-anchor="middle">k (log scale)</text>
+<text class="lab" x="20" y="207.0" text-anchor="middle" transform="rotate(-90 20 207.0)">loss / full-vocabulary loss</text>
+<clipPath id="clip135115356204032"><rect x="64" y="104" width="376.0" height="206"/></clipPath>
+<polyline points="64.0,308.0 109.3,147.8 154.6,124.3 199.8,119.6 290.4,117.0 440.0,115.6" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip135115356204032)"/>
+<circle class="ring" cx="64.0" cy="308.0" r="4" fill="var(--s8)"><title>renormalized top-k: x=1, y=0</title></circle>
+<circle class="ring" cx="109.3" cy="147.8" r="4" fill="var(--s8)"><title>renormalized top-k: x=2, y=0.833</title></circle>
+<circle class="ring" cx="154.6" cy="124.3" r="4" fill="var(--s8)"><title>renormalized top-k: x=4, y=0.955</title></circle>
+<circle class="ring" cx="199.8" cy="119.6" r="4" fill="var(--s8)"><title>renormalized top-k: x=8, y=0.979</title></circle>
+<circle class="ring" cx="290.4" cy="117.0" r="4" fill="var(--s8)"><title>renormalized top-k: x=32, y=0.993</title></circle>
+<circle class="ring" cx="440.0" cy="115.6" r="4" fill="var(--s8)"><title>renormalized top-k: x=316, y=1</title></circle>
+<polyline points="64.0,144.5 109.3,127.2 154.6,118.9 199.8,116.5 290.4,115.8 440.0,115.6" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip135115356204032)"/>
+<circle class="ring" cx="64.0" cy="144.5" r="4" fill="var(--s1)"><title>top-k + tail bucket: x=1, y=0.85</title></circle>
+<circle class="ring" cx="109.3" cy="127.2" r="4" fill="var(--s1)"><title>top-k + tail bucket: x=2, y=0.94</title></circle>
+<circle class="ring" cx="154.6" cy="118.9" r="4" fill="var(--s1)"><title>top-k + tail bucket: x=4, y=0.983</title></circle>
+<circle class="ring" cx="199.8" cy="116.5" r="4" fill="var(--s1)"><title>top-k + tail bucket: x=8, y=0.995</title></circle>
+<circle class="ring" cx="290.4" cy="115.8" r="4" fill="var(--s1)"><title>top-k + tail bucket: x=32, y=0.999</title></circle>
+<circle class="ring" cx="440.0" cy="115.6" r="4" fill="var(--s1)"><title>top-k + tail bucket: x=316, y=1</title></circle>
+<text class="lab" x="564.0" y="96" font-weight="600">gradient direction</text>
+<line class="grid" x1="564.0" x2="940.0" y1="308.0" y2="308.0"/>
+<text class="tick" x="558.0" y="312.0" text-anchor="end">0</text>
+<line class="grid" x1="564.0" x2="940.0" y1="259.9" y2="259.9"/>
+<text class="tick" x="558.0" y="263.9" text-anchor="end">0.25</text>
+<line class="grid" x1="564.0" x2="940.0" y1="211.8" y2="211.8"/>
+<text class="tick" x="558.0" y="215.8" text-anchor="end">0.5</text>
+<line class="grid" x1="564.0" x2="940.0" y1="163.7" y2="163.7"/>
+<text class="tick" x="558.0" y="167.7" text-anchor="end">0.75</text>
+<line class="grid" x1="564.0" x2="940.0" y1="115.6" y2="115.6"/>
+<text class="tick" x="558.0" y="119.6" text-anchor="end">1</text>
+<line class="axis" x1="564.0" x2="940.0" y1="308.0" y2="308.0"/>
+<line class="axis" x1="564.0" x2="564.0" y1="308" y2="312"/>
+<text class="tick" x="564.0" y="324" text-anchor="middle">1</text>
+<line class="axis" x1="714.4" x2="714.4" y1="308" y2="312"/>
+<text class="tick" x="714.4" y="324" text-anchor="middle">10</text>
+<line class="axis" x1="864.8" x2="864.8" y1="308" y2="312"/>
+<text class="tick" x="864.8" y="324" text-anchor="middle">100</text>
+<text class="lab" x="752.0" y="342" text-anchor="middle">k (log scale)</text>
+<text class="lab" x="520.0" y="207.0" text-anchor="middle" transform="rotate(-90 520.0 207.0)">cosine with full gradient</text>
+<clipPath id="clip135106146246512"><rect x="564.0" y="104" width="376.0" height="206"/></clipPath>
+<polyline points="564.0,308.0 609.3,165.8 654.6,124.7 699.8,117.8 790.4,115.8 940.0,115.6" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip135106146246512)"/>
+<circle class="ring" cx="564.0" cy="308.0" r="4" fill="var(--s8)"><title>renormalized top-k: x=1, y=0</title></circle>
+<circle class="ring" cx="609.3" cy="165.8" r="4" fill="var(--s8)"><title>renormalized top-k: x=2, y=0.739</title></circle>
+<circle class="ring" cx="654.6" cy="124.7" r="4" fill="var(--s8)"><title>renormalized top-k: x=4, y=0.953</title></circle>
+<circle class="ring" cx="699.8" cy="117.8" r="4" fill="var(--s8)"><title>renormalized top-k: x=8, y=0.989</title></circle>
+<circle class="ring" cx="790.4" cy="115.8" r="4" fill="var(--s8)"><title>renormalized top-k: x=32, y=0.999</title></circle>
+<circle class="ring" cx="940.0" cy="115.6" r="4" fill="var(--s8)"><title>renormalized top-k: x=316, y=1</title></circle>
+<polyline points="564.0,133.6 609.3,119.6 654.6,116.6 699.8,115.8 790.4,115.6 940.0,115.6" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip135106146246512)"/>
+<circle class="ring" cx="564.0" cy="133.6" r="4" fill="var(--s1)"><title>top-k + tail bucket: x=1, y=0.906</title></circle>
+<circle class="ring" cx="609.3" cy="119.6" r="4" fill="var(--s1)"><title>top-k + tail bucket: x=2, y=0.979</title></circle>
+<circle class="ring" cx="654.6" cy="116.6" r="4" fill="var(--s1)"><title>top-k + tail bucket: x=4, y=0.995</title></circle>
+<circle class="ring" cx="699.8" cy="115.8" r="4" fill="var(--s1)"><title>top-k + tail bucket: x=8, y=0.999</title></circle>
+<circle class="ring" cx="790.4" cy="115.6" r="4" fill="var(--s1)"><title>top-k + tail bucket: x=32, y=1</title></circle>
+<circle class="ring" cx="940.0" cy="115.6" r="4" fill="var(--s1)"><title>top-k + tail bucket: x=316, y=1</title></circle>
+<line x1="64" x2="82" y1="72" y2="72" stroke="var(--s8)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="88" y="76" font-size="12" text-anchor="start">renormalized top-k</text>
+<line x1="232" x2="250" y1="72" y2="72" stroke="var(--s1)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="256" y="76" font-size="12" text-anchor="start">top-k + tail bucket</text>
+<line x1="564.0" x2="582.0" y1="72" y2="72" stroke="var(--s8)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="588.0" y="76" font-size="12" text-anchor="start">renormalized top-k</text>
+<line x1="732.0" x2="750.0" y1="72" y2="72" stroke="var(--s1)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="756.0" y="76" font-size="12" text-anchor="start">top-k + tail bucket</text>
+</svg>

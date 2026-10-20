@@ -1,63 +1,178 @@
 {
   "$schema": "https://mintlify.com/docs.json",
   "theme": "mint",
-  "name": "nanoAstra \u00b7 Hands-on Post-training",
+  "name": "Agentic RL",
   "colors": {
-    "primary": "#0D9488",
-    "light": "#14B8A6",
-    "dark": "#0F766E"
+    "primary": "#2a78d6",
+    "light": "#3987e5",
+    "dark": "#256abf"
   },
   "navigation": {
-    "groups": [
+    "languages": [
       {
-        "group": "Start here",
-        "pages": [
-          "index",
-          "tutorial/README"
+        "language": "en",
+        "groups": [
+          {
+            "group": "Start here",
+            "pages": [
+              "index"
+            ]
+          },
+          {
+            "group": "Front matter",
+            "pages": [
+              "tutorial/chapters/00-notation"
+            ]
+          },
+          {
+            "group": "Part I \u00b7 Foundations",
+            "pages": [
+              "tutorial/chapters/01-introduction",
+              "tutorial/chapters/02-rl-fundamentals",
+              "tutorial/chapters/03-language-models-as-policies",
+              "tutorial/chapters/04-environments-and-tools",
+              "tutorial/chapters/05-trajectories-and-templates"
+            ]
+          },
+          {
+            "group": "Part II \u00b7 Policy optimization",
+            "pages": [
+              "tutorial/chapters/06-policy-gradient",
+              "tutorial/chapters/07-advantages-and-credit",
+              "tutorial/chapters/08-ppo",
+              "tutorial/chapters/09-grpo-and-variants",
+              "tutorial/chapters/10-kl-entropy-regularization"
+            ]
+          },
+          {
+            "group": "Part III \u00b7 Rewards and agents",
+            "pages": [
+              "tutorial/chapters/11-rewards-and-verifiers",
+              "tutorial/chapters/12-multi-turn-and-long-horizons"
+            ]
+          },
+          {
+            "group": "Part IV \u00b7 Systems",
+            "pages": [
+              "tutorial/chapters/13-rollout-systems",
+              "tutorial/chapters/14-scaling-and-efficiency"
+            ]
+          },
+          {
+            "group": "Part V \u00b7 Beyond pure RL",
+            "pages": [
+              "tutorial/chapters/15-sft-and-rejection-sampling",
+              "tutorial/chapters/16-distillation"
+            ]
+          },
+          {
+            "group": "Part VI \u00b7 Practice",
+            "pages": [
+              "tutorial/chapters/17-evaluation",
+              "tutorial/chapters/18-debugging-rl-runs",
+              "tutorial/chapters/19-capstone",
+              "tutorial/chapters/20-frontier"
+            ]
+          },
+          {
+            "group": "Appendices",
+            "pages": [
+              "tutorial/chapters/A-math",
+              "tutorial/chapters/B-design-review"
+            ]
+          },
+          {
+            "group": "Reference",
+            "pages": [
+              "tutorial/library",
+              "tutorial/labs/README",
+              "tutorial/sources",
+              "tutorial/editorial-guide"
+            ]
+          }
         ]
       },
       {
-        "group": "Coding task and agent interaction",
-        "pages": [
-          "tutorial/chapters/01-coding-task",
-          "tutorial/chapters/02-coding-environment",
-          "tutorial/chapters/03-trajectories-and-masks",
-          "tutorial/chapters/04-token-probabilities"
-        ]
-      },
-      {
-        "group": "From feedback to policy updates",
-        "pages": [
-          "tutorial/chapters/05-rewards-and-advantages",
-          "tutorial/chapters/06-policy-gradients",
-          "tutorial/chapters/07-values-and-returns",
-          "tutorial/chapters/08-ppo-and-grpo"
-        ]
-      },
-      {
-        "group": "Other post-training signals",
-        "pages": [
-          "tutorial/chapters/09-sft-and-preferences",
-          "tutorial/chapters/10-on-policy-distillation",
-          "tutorial/chapters/11-kl-and-entropy"
-        ]
-      },
-      {
-        "group": "Systems, evaluation, and experiments",
-        "pages": [
-          "tutorial/chapters/12-rollout-systems",
-          "tutorial/chapters/13-evaluation-and-design",
-          "tutorial/chapters/14-research-frontier",
-          "tutorial/chapters/15-coding-capstone"
-        ]
-      },
-      {
-        "group": "Evidence and reproducibility",
-        "pages": [
-          "tutorial/sources",
-          "tutorial/editorial-guide",
-          "experiments/009-coding-tutorial",
-          "about"
+        "language": "cn",
+        "groups": [
+          {
+            "group": "\u5f00\u59cb",
+            "pages": [
+              "tutorial/zh/README"
+            ]
+          },
+          {
+            "group": "\u524d\u8a00",
+            "pages": [
+              "tutorial/zh/chapters/00-notation"
+            ]
+          },
+          {
+            "group": "\u7b2c\u4e00\u90e8\u5206 \u00b7 \u57fa\u7840",
+            "pages": [
+              "tutorial/zh/chapters/01-introduction",
+              "tutorial/zh/chapters/02-rl-fundamentals",
+              "tutorial/zh/chapters/03-language-models-as-policies",
+              "tutorial/zh/chapters/04-environments-and-tools",
+              "tutorial/zh/chapters/05-trajectories-and-templates"
+            ]
+          },
+          {
+            "group": "\u7b2c\u4e8c\u90e8\u5206 \u00b7 \u7b56\u7565\u4f18\u5316",
+            "pages": [
+              "tutorial/zh/chapters/06-policy-gradient",
+              "tutorial/zh/chapters/07-advantages-and-credit",
+              "tutorial/zh/chapters/08-ppo",
+              "tutorial/zh/chapters/09-grpo-and-variants",
+              "tutorial/zh/chapters/10-kl-entropy-regularization"
+            ]
+          },
+          {
+            "group": "\u7b2c\u4e09\u90e8\u5206 \u00b7 \u5956\u52b1\u4e0e\u667a\u80fd\u4f53",
+            "pages": [
+              "tutorial/zh/chapters/11-rewards-and-verifiers",
+              "tutorial/zh/chapters/12-multi-turn-and-long-horizons"
+            ]
+          },
+          {
+            "group": "\u7b2c\u56db\u90e8\u5206 \u00b7 \u7cfb\u7edf",
+            "pages": [
+              "tutorial/zh/chapters/13-rollout-systems",
+              "tutorial/zh/chapters/14-scaling-and-efficiency"
+            ]
+          },
+          {
+            "group": "\u7b2c\u4e94\u90e8\u5206 \u00b7 \u8d85\u8d8a\u7eaf\u5f3a\u5316\u5b66\u4e60",
+            "pages": [
+              "tutorial/zh/chapters/15-sft-and-rejection-sampling",
+              "tutorial/zh/chapters/16-distillation"
+            ]
+          },
+          {
+            "group": "\u7b2c\u516d\u90e8\u5206 \u00b7 \u5b9e\u8df5",
+            "pages": [
+              "tutorial/zh/chapters/17-evaluation",
+              "tutorial/zh/chapters/18-debugging-rl-runs",
+              "tutorial/zh/chapters/19-capstone",
+              "tutorial/zh/chapters/20-frontier"
+            ]
+          },
+          {
+            "group": "\u9644\u5f55",
+            "pages": [
+              "tutorial/zh/chapters/A-math",
+              "tutorial/zh/chapters/B-design-review"
+            ]
+          },
+          {
+            "group": "\u53c2\u8003",
+            "pages": [
+              "tutorial/zh/glossary",
+              "tutorial/zh/labs/README",
+              "tutorial/library",
+              "tutorial/sources"
+            ]
+          }
         ]
       }
     ]

@@ -1,0 +1,765 @@
+# 6. Policy Gradients
+
+[Chapter 2](02-rl-fundamentals.md#25-optimal-policies-and-why-we-will-not-compute-them) climbed the objective $J(\theta)$ of the repair MDP by differentiating through an exact model of the environment. [Chapter 5](05-trajectories-and-templates.md) ended with the opposite situation: TinyAgent acts in a real environment whose transition probabilities nobody can write down, and the only feedback is a number at the end of each episode, produced by running hidden tests. Neither the tests nor the sampler are differentiable. This chapter derives the estimator that makes learning possible anyway, the **score-function** or **REINFORCE** estimator, and implements it on token sequences.
+
+The derivation is short, and every line has an engineering consequence. Environment dynamics drop out of the gradient, which is why RL needs no model of the repository. Tool tokens drop out too, which is where the action mask of Chapter 5 comes from. The loss we backpropagate is a *surrogate* whose gradient is the estimator and whose value means nothing. Baselines leave the estimator unbiased and can reduce its variance. The way per-token terms are summed into one scalar silently decides how much each trajectory counts. Before any of that can be tried on the gym, we also need a policy that succeeds at least sometimes. We build one, the book's **base agent**, and then run the first RL training of TinyAgent.
+
+The saved code of this chapter calls earlier chapters through `arl.`, so the imports are part of a saved block.
+
+```python
+#@save
+import copy
+import torch
+import agentrl as arl
+```
+
+```python
+import torch.nn.functional as F
+```
+
+## 6.1 The score-function estimator
+
+The objective is the expected return of trajectories sampled from the policy,
+
+$$
+J(\theta) = \mathbb{E}_{\tau \sim p_\theta}\big[R(\tau)\big] = \sum_\tau p_\theta(\tau)\, R(\tau).
+$$
+
+The return $R(\tau)$ is computed by the environment, here by tests, and has no derivative with respect to $\theta$. The dependence on $\theta$ sits entirely in the distribution $p_\theta$. Differentiate under the sum and use $\nabla p = p\, \nabla \log p$ ([Appendix A.5](A-math.md#a5-the-log-derivative-trick)):
+
+$$
+\nabla_\theta J(\theta) = \sum_\tau \nabla_\theta p_\theta(\tau)\, R(\tau) = \mathbb{E}_{\tau \sim p_\theta}\big[R(\tau)\, \nabla_\theta \log p_\theta(\tau)\big].
+$$
+
+The expectation on the right can be estimated from samples. What remains is the score of a whole trajectory, $\nabla_\theta \log p_\theta(\tau)$. [Section 2.2](02-rl-fundamentals.md#22-policies-trajectories-and-returns) factored the trajectory probability into what the agent controls and what it does not:
+
+$$
+\log p_\theta(\tau) = \log \rho_0(s_0) + \sum_{t=0}^{T-1} \log \pi_\theta(a_t \mid s_t) + \sum_{t=0}^{T-1} \log P(s_{t+1} \mid s_t, a_t).
+$$
+
+The initial distribution $\rho_0$ and the transitions $P$ do not depend on $\theta$, so their gradients are zero, and
+
+$$
+\nabla_\theta J(\theta) = \mathbb{E}_{\tau \sim p_\theta}\Big[R(\tau) \sum_{t=0}^{T-1} \nabla_\theta \log \pi_\theta(a_t \mid s_t)\Big].
+$$
+
+This is Equation (6.1), the REINFORCE estimator for trajectories (Williams, 1992). Three assumptions went into it, and each one is a place where real systems break it. The return must not depend on $\theta$ directly, which fails if a learned reward model shares weights with the policy. The trajectories must be sampled from $\pi_\theta$ itself, which fails as soon as data is reused after an update or the inference engine computes slightly different probabilities ([Chapter 8](08-ppo.md), [Chapter 13](13-rollout-systems.md)). And the sum over trajectories must be finite or well behaved, which a turn budget guarantees.
+
+The estimator needs $P$ only to *sample*. It never evaluates $P$, and it never differentiates through it. We check that on the repair MDP of Chapter 2, where the exact gradient is available. The sampler below runs many episodes in parallel and records, for each episode, how often each state-action pair was visited and the total return.
+
+```python
+def sample_repair(P, R, policy, n, generator, max_steps=50):
+    """Run n repair-MDP episodes in parallel -> visit counts [n, S, A] and returns [n]."""
+    S, A = R.shape
+    state = torch.zeros(n, dtype=torch.long)                       # every episode starts 'unread'
+    visits = torch.zeros(n, S, A, dtype=P.dtype)
+    returns = torch.zeros(n, dtype=P.dtype)
+    alive = torch.ones(n, dtype=torch.bool)
+    for _ in range(max_steps):
+        action = torch.multinomial(policy[state], 1, generator=generator).squeeze(-1)   # [n]
+        visits[torch.arange(n), state, action] += alive.to(P.dtype)
+        returns += alive * R[state, action]
+        probs = P[state, action].clone()                           # [n, S]
+        probs[~alive, -1] = 1.0                                    # finished episodes stay in 'done'
+        state = torch.multinomial(probs, 1, generator=generator).squeeze(-1)
+        alive &= state != S - 1
+    return visits, returns
+```
+
+The policy is a softmax over a table of logits $\theta$ of shape `[S, A]`, initialized at random so that it is neither uniform nor deterministic. Chapter 2's `policy_evaluation` gives $J(\theta)$ exactly, and autograd gives the exact gradient. The Monte Carlo side computes $\sum_t \log \pi_\theta(a_t \mid s_t)$ for every episode as `visits * log_softmax(theta)`, multiplies by the return, averages, and differentiates.
+
+```python
+P, R = arl.make_repair_mdp()
+torch.manual_seed(0)
+theta = (0.5 * torch.randn(7, 4, dtype=torch.float64)).requires_grad_()   # policy logits [S, A]
+J = arl.policy_evaluation(P, R, torch.softmax(theta, -1), gamma=1.0)[0]
+exact = torch.autograd.grad(J, theta)[0]                                   # [S, A]
+
+n = 20_000
+gen = torch.Generator().manual_seed(0)
+visits, returns = sample_repair(P, R, torch.softmax(theta, -1).detach(), n, gen)
+log_pi = torch.log_softmax(theta, -1)                                      # [S, A]
+surrogate = (returns[:, None, None] * visits * log_pi).sum() / n          # mean of R(tau) * log p(tau)
+estimate = torch.autograd.grad(surrogate, theta)[0]
+cos = F.cosine_similarity(estimate.flatten(), exact.flatten(), dim=0)
+print(f'J exact {J.item():.4f} | mean return {returns.mean().item():.4f}')
+print(f'relative error {((estimate - exact).norm() / exact.norm()).item():.3f} | cosine {cos.item():.4f}')
+```
+
+Output:
+
+```text
+J exact 0.1323 | mean return 0.1264
+relative error 0.068 | cosine 0.9988
+```
+
+The policy passes in about 13% of episodes ($J = 0.132$). The estimate has a cosine similarity of 0.999 with the exact gradient, and its relative error of 6.8% is the Monte Carlo noise of 20,000 episodes. Look at what the code differentiated: `returns`, `visits`, and `log_pi`. Only the last depends on $\theta$, and $P$ appears nowhere in the differentiated expression. A coding environment is in the same position as $P$: we can run it, but not differentiate it.
+
+### The surrogate loss
+
+The expression we differentiated, $\frac{1}{N}\sum_n R(\tau_n)\, \log p_\theta(\tau_n)$ with the returns held fixed, is a **surrogate objective**. Its gradient at the current parameters equals the estimator of Equation (6.1). Its *value* is not $J$, and it does not estimate anything useful. The returns enter as constants, so shifting every return by the same amount changes the surrogate's value arbitrarily, while its expected gradient stays $\nabla J$, because $\mathbb{E}[\nabla \log p_\theta(\tau)] = 0$.
+
+```python
+for shift in [0.0, -J.item(), 5.0]:
+    surrogate = ((returns + shift)[:, None, None] * visits * torch.log_softmax(theta, -1)).sum() / n
+    grad = torch.autograd.grad(surrogate, theta)[0]
+    cos = F.cosine_similarity(grad.flatten(), exact.flatten(), dim=0).item()
+    print(f'return shift {shift:+.3f}: surrogate value {surrogate.item():9.4f} | cosine to exact {cos:.4f}')
+```
+
+Output:
+
+```text
+return shift +0.000: surrogate value   -0.8342 | cosine to exact 0.9988
+return shift -0.132: surrogate value   -0.4056 | cosine to exact 0.9992
+return shift +5.000: surrogate value  -17.0281 | cosine to exact 0.7833
+```
+
+The three surrogates have values of $-0.83$, $-0.41$, and $-17.0$, and gradients that all estimate the same vector. None of the values is related to $J = 0.132$. The shift by $-J$ moves the gradient estimate slightly *closer* to the exact one (cosine 0.9992 against 0.9988), and the shift by $+5$ moves it much further away (0.78). Shifting the return is a baseline, and Section 6.4 explains why one shift helps and the other hurts. The practical rule follows immediately: never read a policy-gradient loss curve as a measure of progress. Log the reward, the pass rate, and the gradient norm instead.
+
+## 6.2 A base policy to learn from
+
+Equation (6.1) weights each trajectory's score by its return. If every sampled trajectory has the same return, the estimator is that constant times $\sum_n \nabla\log p_\theta(\tau_n)$, a quantity with expectation zero, and with a baseline it is exactly zero. Chapter 5 measured an untrained TinyAgent: 384 malformed calls out of 384 and a reward of 0 in every episode. RL cannot start from there.
+
+Large models never start from there either. A pretrained model already writes fluent text, and an instruction-tuned one already emits well-formed tool calls most of the time. RL then improves *which* calls it makes. We give TinyAgent the same starting point with **behavior cloning**: supervised training on demonstrations, with the cross-entropy loss restricted to the policy tokens. The demonstrations come from Chapter 4's `random` and `blind` scripted policies on the training tasks. They are well formed and unskilled: `random` chooses uniformly among the nine valid calls, and `blind` guesses a repair op without reading the code. A model that imitates them learns the call format and the rhythm of an episode, but not how to choose the right op. We call the result the **base agent**. It is the book's analogue of a pretrained base model, and every later chapter starts RL from it. [Chapter 15](15-sft-and-rejection-sampling.md) studies supervised warm starts properly, including what they do to exploration.
+
+The behavior-cloning loss is a mean over policy tokens, which we need often enough to save as a function.
+
+```python
+#@save
+def masked_mean(x, mask, dim=None):
+    """Mean of x where mask is 1: x, mask [B, T] -> scalar (dim=None) or reduced over dim."""
+    if dim is None:
+        return (x * mask).sum() / mask.sum().clamp(min=1e-8)
+    return (x * mask).sum(dim) / mask.sum(dim).clamp(min=1e-8)
+```
+
+`make_base_agent` collects `episodes_per_task` demonstrations per training task from each scripted policy, encodes them with `scripted_rollout` (Section 5.6), and runs `steps` Adam updates on random minibatches. Everything is seeded, so the same call returns the same weights.
+
+```python
+#@save
+def make_base_agent(tok, seed=0, kinds=('random', 'blind'), episodes_per_task=8, steps=200,
+                    batch_size=32, lr=3e-3):
+    """TinyAgent behavior-cloned on well-formed but unskilled scripted play on the train tasks."""
+    torch.manual_seed(seed)
+    gen = torch.Generator().manual_seed(seed)
+    demos = []
+    for k, kind in enumerate(kinds):
+        policy = arl.scripted_policy(kind, seed=seed + k)
+        demos += [arl.scripted_rollout(policy, arl.BugFixEnv(), task, tok)
+                  for task in arl.make_tasks('train') for _ in range(episodes_per_task)]
+    data = arl.collate(demos, tok.pad_id)                              # ids [N, T], action_mask [N, T-1]
+    model = arl.TinyAgent(tok.vocab_size)
+    opt = torch.optim.Adam(model.parameters(), lr=lr)
+    for _ in range(steps):
+        idx = torch.randint(len(demos), (batch_size,), generator=gen)
+        logp = arl.sequence_log_probs(model, data['ids'][idx])         # [b, T-1]
+        loss = -masked_mean(logp, data['action_mask'][idx])            # cross-entropy on policy tokens
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    return model
+```
+
+To measure a policy we need summary statistics of its rollouts. `rollout_stats` reports the mean reward, the pass rate (submitted, and every hidden test passes), the fraction of calls that were well formed and valid, the submit rate, and the mean number of turns and policy tokens per episode. Later chapters log the same numbers.
+
+```python
+#@save
+def rollout_stats(trajs):
+    """Summary of a list of Trajectory -> dict of reward, pass_rate, valid_calls, submit_rate, turns, action_tokens."""
+    n, turns = len(trajs), sum(t.info['n_turns'] for t in trajs)
+    return dict(reward=sum(t.reward for t in trajs) / n,
+                pass_rate=sum(bool(t.info['submitted'] and t.info['hidden_pass']) for t in trajs) / n,
+                valid_calls=1 - sum(t.info['n_invalid'] for t in trajs) / turns,
+                submit_rate=sum(bool(t.info['submitted']) for t in trajs) / n,
+                turns=turns / n,
+                action_tokens=sum(float(t.action_mask.sum()) for t in trajs) / n)
+```
+
+```python
+def sample(model, tasks, n_per_task, seed):
+    """n_per_task episodes of each task, sampled at temperature 1 in lockstep."""
+    batch_tasks = [t for t in tasks for _ in range(n_per_task)]
+    envs = [arl.BugFixEnv() for _ in batch_tasks]
+    return arl.rollout_batch(model, envs, batch_tasks, tok, generator=torch.Generator().manual_seed(seed))
+
+def show(name, stats):
+    print(f'{name:<22}' + ' '.join(f'{k} {v:.3f}' for k, v in stats.items()))
+
+def short(action):
+    """'<call> edit fix_init </call>' -> 'fix_init'; '<call> read </call>' -> 'read'."""
+    call = arl.parse_call(action)
+    return (call[1] or call[0]) if call else 'malformed'
+```
+
+We build the tokenizer exactly as Chapter 5 did, then the base agent, and compare it with an untrained TinyAgent on both splits, 16 episodes per task.
+
+```python
+tok = arl.build_tokenizer(arl.make_tasks('all'))
+train_tasks, heldout_tasks = arl.make_tasks('train'), arl.make_tasks('heldout')
+base = make_base_agent(tok)
+torch.manual_seed(0)
+show('untrained, train', rollout_stats(sample(arl.TinyAgent(tok.vocab_size), train_tasks, 16, seed=0)))
+base_train = rollout_stats(sample(base, train_tasks, 16, seed=0))
+show('base agent, train', base_train)
+show('base agent, held-out', rollout_stats(sample(base, heldout_tasks, 16, seed=0)))
+```
+
+Output:
+
+```text
+untrained, train      reward 0.000 pass_rate 0.000 valid_calls 0.000 submit_rate 0.000 turns 6.000 action_tokens 35.681
+base agent, train     reward 0.119 pass_rate 0.119 valid_calls 0.979 submit_rate 0.781 turns 3.134 action_tokens 11.312
+base agent, held-out  reward 0.138 pass_rate 0.138 valid_calls 0.988 submit_rate 0.825 turns 3.013 action_tokens 10.706
+```
+
+The untrained model never passes, none of its calls are valid, and it always exhausts the six-turn budget. The base agent's calls are valid in about 98% of turns, it submits in about four episodes of five, and it passes in 12% of training episodes and 14% of held-out ones. That is where its demonstrations put it: between `random` (0.10 on the training split in Section 4.6) and `blind` (0.21), far below the oracle's 1.00. Its held-out numbers match its training numbers within sampling noise, because nothing it imitated depended on which function it was fixing. Other samples in this chapter put its pass rate between 0.12 and 0.19; with a few hundred episodes, that spread is the sampling error. On the check host, `make_base_agent` took about five seconds when this chapter was written. Timings are not checked by the build.
+
+A sampled episode shows the behavior that RL has to work with.
+
+```python
+for traj in sample(base, train_tasks[:1], 3, seed=1):
+    print(f'reward {traj.reward:.0f} | stop {traj.info["stop"]:<9} | ' + ' -> '.join(map(short, traj.info['actions'])))
+```
+
+Output:
+
+```text
+reward 0 | stop submit    | submit
+reward 0 | stop submit    | add_zero_guard -> submit
+reward 0 | stop budget    | add_zero_guard -> test -> swap_minmax -> fix_range_end -> test -> fix_range_end
+```
+
+Each episode is a sequence of valid calls with no strategy behind it. On `clamp`, one episode submits the unchanged file, one guesses `add_zero_guard` and submits, and one wanders through edits and tests until the budget runs out. When the base agent does read, which it does in a minority of episodes, its next op is unrelated to what it read. Successes are lucky guesses. Every success, however, is a trajectory whose return differs from the others, so the policy gradient is no longer zero.
+
+## 6.3 The estimator on tokens
+
+At the token level of [Section 2.8](02-rl-fundamentals.md#28-three-ways-to-cast-an-llm-agent-as-an-mdp), a trajectory is one token sequence $y_1, \dots, y_T$ with prefixes $c_i = y_{<i}$. Every token is drawn either by the policy or by the environment and template. Write $m_i = 1$ when token $i$ was sampled from the policy, which is exactly the action mask of [Section 5.6](05-trajectories-and-templates.md#56-trajectories-and-masks). Then
+
+$$
+\log p_\theta(\tau) = \sum_i m_i \log \pi_\theta(y_i \mid c_i) + \sum_i (1 - m_i) \log P_{\text{env}}(y_i \mid c_i),
+$$
+
+where $P_{\text{env}}$ includes the prompt, the template, and every tool response. The second sum does not depend on $\theta$, so
+
+$$
+\nabla_\theta J(\theta) = \mathbb{E}_\tau\Big[R(\tau) \sum_i m_i\, \nabla_\theta \log \pi_\theta(y_i \mid c_i)\Big].
+$$
+
+This is Equation (6.2). Tool tokens carry no direct gradient: the model is never pushed to predict them. They do carry an **indirect** gradient, because every later policy token is conditioned on them through attention, so the gradient flows through their hidden representations into the shared weights. The corresponding loss for a batch of $B$ trajectories is
+
+$$
+\mathcal{L}(\theta) = -\frac{1}{B} \sum_{n=1}^{B} R_n \sum_i m_{n,i} \log \pi_\theta(y_{n,i} \mid c_{n,i}),
+$$
+
+with $R_n$ treated as a constant. We check both claims on a batch of 64 base-agent episodes. A hook on the token embedding keeps the gradient with respect to each position's input representation, and `retain_grad` keeps the gradient with respect to the logits.
+
+```python
+trajs = sample(base, train_tasks, 4, seed=2)
+batch = arl.collate(trajs, tok.pad_id)
+embedded = {}
+def keep_embedding(module, inputs, output):
+    output.retain_grad()
+    embedded['h'] = output                                                   # [B, T, D]
+hook = base.tok_emb.register_forward_hook(keep_embedding)
+logits = base(batch['ids'])                                                  # [B, T, V]
+logits.retain_grad()
+hook.remove()
+logp = arl.selected_log_probs(logits[:, :-1], batch['ids'][:, 1:])          # [B, T-1]
+loss = -(batch['rewards'][:, None] * logp * batch['action_mask']).sum() / len(trajs)
+loss.backward()
+direct = logits.grad[:, :-1].abs().sum(-1) > 0                               # [B, T-1] positions with a logit gradient
+print('positions with a direct (logit) gradient:', int(direct.sum()), '| policy tokens of successful episodes:',
+      int((batch['action_mask'] * batch['rewards'][:, None]).sum()))
+print('direct gradient outside the action mask:', int((direct & (batch['action_mask'] == 0)).sum()))
+base.zero_grad()
+```
+
+Output:
+
+```text
+positions with a direct (logit) gradient: 70 | policy tokens of successful episodes: 70
+direct gradient outside the action mask: 0
+```
+
+Exactly 70 positions receive a gradient on their logits, and they are exactly the policy tokens of the successful episodes. Failed episodes have $R = 0$ and contribute nothing at all, and no prompt, template, or tool position receives a direct gradient. The indirect gradient is visible on the input side: the embedding gradient at tool positions is not zero.
+
+```python
+owner = arl.pad_rows([t.owner for t in trajs], batch['ids'].shape[1], -1)       # [B, T]
+emb_grad = embedded['h'].grad.norm(dim=-1)                                   # [B, T]
+for name, code in [('prompt', 1), ('policy', 2), ('tool', 3)]:
+    rows = owner == code
+    print(f'{name:<7} positions: {int(rows.sum()):5d} | mean |d loss / d embedding| = {emb_grad[rows].mean():.2e}')
+```
+
+Output:
+
+```text
+prompt  positions:   480 | mean |d loss / d embedding| = 1.87e-04
+policy  positions:   954 | mean |d loss / d embedding| = 1.49e-04
+tool    positions:  1149 | mean |d loss / d embedding| = 3.18e-05
+```
+
+Prompt and tool positions receive gradient through the representations they feed to later policy tokens. At tool positions it is about a fifth of the size it has at policy positions, but it is not zero. That is how the policy learns to *use* an observation, for example to choose an op after reading the file, without ever being trained to *produce* the observation. The mask removes the direct term, and attention keeps the indirect one.
+
+## 6.4 Baselines
+
+The shift experiment of Section 6.1 suggested that subtracting something from the return can reduce the noise of the estimator without biasing it. The general statement is the following. Let $b(s_t)$ be any function of the state at time $t$, or of anything that is fixed before $a_t$ is sampled. Then
+
+$$
+\mathbb{E}_{a_t \sim \pi_\theta(\cdot \mid s_t)}\big[b(s_t)\, \nabla_\theta \log \pi_\theta(a_t \mid s_t)\big] = b(s_t) \sum_a \pi_\theta(a \mid s_t)\, \frac{\nabla_\theta \pi_\theta(a \mid s_t)}{\pi_\theta(a \mid s_t)} = b(s_t)\, \nabla_\theta \sum_a \pi_\theta(a \mid s_t) = b(s_t)\, \nabla_\theta 1 = 0.
+$$
+
+Taking the outer expectation over $s_t$ (the tower property) gives $\mathbb{E}_\tau[b(s_t) \nabla \log \pi_\theta(a_t \mid s_t)] = 0$ for every $t$. Therefore
+
+$$
+\nabla_\theta J(\theta) = \mathbb{E}_\tau\Big[\sum_t \big(R(\tau) - b(s_t)\big)\, \nabla_\theta \log \pi_\theta(a_t \mid s_t)\Big]
+$$
+
+for any such $b$. This is Equation (6.3). The proof uses only that $b$ is fixed when $a_t$ is drawn. A baseline may depend on the task, the prompt, and earlier tokens. It may not depend on $a_t$, on anything sampled after $a_t$, or on the trajectory's own return. A baseline computed from the batch mean *including* the trajectory's own reward violates the last condition slightly, and [Chapter 7](07-advantages-and-credit.md) quantifies the consequence.
+
+The baseline cannot change the mean, so it can only change the variance. For a constant baseline $b$ and per-trajectory score $g = \nabla \log p_\theta(\tau)$, the total variance $\mathbb{E}\lVert (R - b) g\rVert^2 - \lVert \nabla J \rVert^2$ is a quadratic in $b$, minimized at
+
+$$
+b^* = \frac{\mathbb{E}\big[R\, \lVert g \rVert^2\big]}{\mathbb{E}\big[\lVert g \rVert^2\big]}.
+$$
+
+This is a weighted mean reward, with weights proportional to the squared score norm. In practice the plain mean reward is close to it, and $V(s_0)$, the expected return from the task's initial state, is the natural state-dependent choice ([Appendix A.3](A-math.md#a3-control-variates) treats baselines as control variates).
+
+We first confirm unbiasedness where the exact gradient is known. We sample 400 independent batches of 64 repair-MDP episodes and average the estimator over the batches for four baselines: none, the exact $J$, the batch's own mean return, and a deliberately bad constant 1.
+
+```python
+batches, size = 400, 64
+visits, returns = sample_repair(P, R, torch.softmax(theta, -1).detach(), batches * size,
+                                torch.Generator().manual_seed(1))
+score = (visits - visits.sum(-1, keepdim=True) * torch.softmax(theta, -1).detach())   # d log p(tau) / d theta [N, S, A]
+score, returns = score.view(batches, size, 7, 4), returns.view(batches, size)
+for name, b in [('none', 0.0), ('exact J', J.item()), ('batch mean', returns.mean(1, keepdim=True)),
+                ('constant 1', 1.0)]:
+    per_batch = ((returns - b)[..., None, None] * score).mean(1)                       # [batches, S, A]
+    error = ((per_batch.mean(0) - exact).norm() / exact.norm()).item()
+    noise = ((per_batch.var(0).sum() / batches).sqrt() / exact.norm()).item()         # Monte Carlo scale
+    print(f'{name:<11} relative error of the mean {error:.3f} (noise level {noise:.3f})',
+          f'| per-batch variance {per_batch.var(0).sum():.4f}')
+```
+
+Output:
+
+```text
+none        relative error of the mean 0.033 (noise level 0.034) | per-batch variance 0.0071
+exact J     relative error of the mean 0.028 (noise level 0.030) | per-batch variance 0.0057
+batch mean  relative error of the mean 0.038 (noise level 0.030) | per-batch variance 0.0056
+constant 1  relative error of the mean 0.080 (noise level 0.056) | per-batch variance 0.0191
+```
+
+For a softmax table the score has a closed form: each visit to $(s, a)$ adds $\mathbf{e}_a - \pi_\theta(\cdot \mid s)$ to row $s$, which is what the first lines compute. The noise level is the standard error of the 400-batch average relative to the size of the gradient. For every baseline, the average agrees with the exact gradient to within about one noise level (1.4 for the constant 1), which is what an unbiased estimator must do. The variances differ: subtracting the exact $J$ cuts the per-batch variance by 20% (0.0071 to 0.0057), and subtracting 1 multiplies it by 2.7. The batch mean is an exception to unbiasedness in principle: it includes each trajectory's own return, which shrinks the expected gradient by the factor $1 - 1/64$, an error of 1.6% that is well below the noise level here.
+
+Now the same measurement on the real system. For 240 base-agent episodes (12 per training task) we compute each episode's score $\nabla_\theta \sum_i m_i \log \pi_\theta(y_i \mid c_i)$ over all of TinyAgent's parameters, one backward pass per episode.
+
+```python
+def episode_gradient(model, traj, weights):
+    """Flattened gradient of sum_i weights_i * log pi(y_i | c_i) for one trajectory -> [n_params]."""
+    logp = arl.sequence_log_probs(model, traj.ids[None])[0]                  # [T-1]
+    grads = torch.autograd.grad((weights * logp).sum(), list(model.parameters()))
+    return torch.cat([g.flatten() for g in grads])
+
+def total_variance(per_episode):
+    """Trace of the covariance of per-episode gradient estimates [N, n_params]."""
+    return per_episode.var(0).sum().item()
+
+probe = sample(base, train_tasks, 12, seed=3)
+scores = torch.stack([episode_gradient(base, t, t.action_mask) for t in probe])   # [N, n_params]
+rewards = torch.tensor([t.reward for t in probe])                                  # [N]
+print('scores:', tuple(scores.shape), '| mean reward:', round(rewards.mean().item(), 3))
+```
+
+Output:
+
+```text
+scores: (240, 157244) | mean reward: 0.188
+```
+
+The scores form a 240 by 157,244 matrix, one row per episode, and this probe sample happens to have a mean reward of 0.188. Multiplying each row by $R_n - b$ gives that episode's contribution to the estimator, and the trace of its covariance is the quantity a baseline should minimize. We evaluate several baselines. The per-task baseline uses the mean reward of each task measured on a **separate** batch of episodes, so it is fixed before the probe episodes are drawn, as the proof requires.
+
+```python
+squared_norms = scores.pow(2).sum(-1)
+b_star = ((rewards * squared_norms).sum() / squared_norms.sum()).item()
+other = sample(base, train_tasks, 12, seed=4)
+task_mean = {t.name: sum(o.reward for o in other if o.info['task'] == t.name) / 12 for t in train_tasks}
+per_task = torch.tensor([task_mean[t.info['task']] for t in probe])
+for name, b in [('none', 0.0), ('mean reward', rewards.mean().item()), ('b* (optimal constant)', b_star),
+                ('per-task mean', per_task), ('constant 0.5', 0.5), ('constant 1.0', 1.0)]:
+    shown = f'{b:.3f}' if isinstance(b, float) else 'varies'
+    print(f'{name:<22} b = {shown:<7} total variance {total_variance((rewards - b)[:, None] * scores):8.1f}')
+```
+
+Output:
+
+```text
+none                   b = 0.000   total variance     44.7
+mean reward            b = 0.188   total variance     40.9
+b* (optimal constant)  b = 0.123   total variance     39.3
+per-task mean          b = varies  total variance     40.8
+constant 0.5           b = 0.500   total variance     91.9
+constant 1.0           b = 1.000   total variance    322.9
+```
+
+![Figure 6.1: Total variance of the REINFORCE estimator for the base agent on the BugFix training tasks, as a function of a constant baseline b, with the named baselines marked. 240 episodes; gradients over all TinyAgent parameters.](../figures/ch06-baseline-variance.svg)
+
+Figure 6.1 draws the full curve. The optimal constant $b^* = 0.123$ gives a total variance of 39.3, and the mean reward 40.9. Because the mean reward is small, no baseline at all is only 14% worse (44.7). The parabola rises steeply on the right: a baseline of 1 multiplies the variance by more than seven, because every failure, which is most episodes, now contributes a full-sized score with weight $-1$. The per-task baseline (40.8) does no better than the global mean, even though it is the better baseline in principle. Each task's mean is estimated from only 12 independent episodes, so the noise of that estimate is added to every advantage, and at a pass rate below 0.2 it cancels the gain from tracking each task's difficulty. [Chapter 7](07-advantages-and-credit.md) returns to exactly this trade-off with group baselines.
+
+## 6.5 Causality and reward-to-go
+
+The baseline argument has a second consequence. Suppose rewards arrive during the episode, $R(\tau) = \sum_{t'} r_{t'}$. For $t' < t$, the reward $r_{t'}$ is fixed before $a_t$ is sampled, so it can play the role of a baseline for $a_t$, and $\mathbb{E}[r_{t'} \nabla \log \pi_\theta(a_t \mid s_t)] = 0$. Removing those terms gives
+
+$$
+\nabla_\theta J(\theta) = \mathbb{E}_\tau\Big[\sum_t \nabla_\theta \log \pi_\theta(a_t \mid s_t) \sum_{t' \ge t} r_{t'}\Big],
+$$
+
+Equation (6.4). The inner sum is the **reward-to-go** $G_t$. Causality says an action is credited only with rewards that come after it. At the token level, $t$ runs over token positions and $G_i = \sum_{j \ge i} r_j$.
+
+For an outcome-only reward placed on the last policy token, $G_i = R(\tau)$ at every policy token, and causality changes nothing. It matters when the reward has intermediate terms: a cost per turn, a format penalty on a malformed call, or a per-turn shaping reward ([Chapter 11](11-rewards-and-verifiers.md), [Chapter 12](12-multi-turn-and-long-horizons.md)). We add a cost of 0.1 per call to the probe episodes. The cost is placed on the last token of each call and the hidden-test reward on the last token of the final call.
+
+```python
+def step_cost_rewards(traj, cost=0.1):
+    """Per-position rewards [T-1]: -cost at the last token of every call, plus the outcome at the final one."""
+    m = traj.action_mask
+    call_end = m * (1 - torch.cat([m[1:], torch.zeros(1)]))                # 1 at the last token of each call
+    rewards = -cost * call_end
+    rewards[call_end.nonzero().max()] += traj.reward
+    return rewards
+
+traj = next(t for t in probe if t.reward > 0 and t.info['n_turns'] >= 3)
+r = step_cost_rewards(traj)                                                # [T-1]
+to_go = r.flip(-1).cumsum(-1).flip(-1) * traj.action_mask                 # G_i = sum_{j >= i} r_j
+m = traj.action_mask
+starts = (m * (1 - torch.cat([torch.zeros(1), m[:-1]]))).nonzero().flatten()   # first token of each call
+print(f'return of the episode: {r.sum().item():+.2f} (the weight of every token without causality)')
+for action, j in zip(traj.info['actions'], starts.tolist()):
+    print(f'  {short(action):<15} reward-to-go at its first token {to_go[j].item():+.2f}')
+```
+
+Output:
+
+```text
+return of the episode: +0.60 (the weight of every token without causality)
+  add_zero_guard  reward-to-go at its first token +0.60
+  swap_minmax     reward-to-go at its first token +0.70
+  fix_range_end   reward-to-go at its first token +0.80
+  submit          reward-to-go at its first token +0.90
+```
+
+With the total return, every token of the episode gets the same weight. With reward-to-go, an early call is charged for its own cost and every later one, and the last call only for its own. We measure the variance of the two estimators over the 240 probe episodes. The total-return estimator reuses the scores; reward-to-go needs one more backward pass per episode, because its weights differ from token to token.
+
+```python
+total = torch.stack([step_cost_rewards(t).sum() for t in probe])           # [N]
+var_total = total_variance(total[:, None] * scores)
+to_go_grads = torch.stack([episode_gradient(base, t, step_cost_rewards(t).flip(-1).cumsum(-1).flip(-1)
+                                            * t.action_mask) for t in probe])
+var_to_go = total_variance(to_go_grads)
+print(f'total return: variance {var_total:.1f} | reward-to-go: variance {var_to_go:.1f}',
+      f'| reduction {1 - var_to_go / var_total:.0%}')
+```
+
+Output:
+
+```text
+total return: variance 104.9 | reward-to-go: variance 60.2 | reduction 43%
+```
+
+Removing the past costs from each token's weight reduces the variance, by an amount that grows with the number and size of the intermediate rewards. [Chapter 7](07-advantages-and-credit.md) saves a general `returns_to_go` with discounting that skips tool tokens, and replaces the remaining reward-to-go by an estimate of the advantage.
+
+## 6.6 Loss aggregation
+
+Equation (6.2) is a sum over tokens and an average over trajectories. Implementations rarely compute exactly that. They compute a per-token term $\ell_{n,i} = -\hat A_{n,i} \log \pi_\theta(y_{n,i} \mid c_{n,i})$ on a padded `[B, T]` tensor and reduce it to a scalar, and the reduction they choose sets a weight $w_{n,i}$ on every token: $\nabla \mathcal{L} = \sum_{n,i} w_{n,i}\, \nabla \ell_{n,i}$. Let $L_n = \sum_i m_{n,i}$ be the number of policy tokens of trajectory $n$. The four reductions in common use are
+
+| mode | loss | weight $w_{n,i}$ of a policy token | total weight of trajectory $n$ |
+| --- | --- | --- | --- |
+| `token_mean` | $\sum_{n,i} m\ell / \sum_{n} L_n$ | $1 / \sum_k L_k$ | $L_n / \sum_k L_k$ |
+| `seq_mean_token_sum` | $\frac{1}{B}\sum_n \sum_i m\ell$ | $1 / B$ | $L_n / B$ |
+| `seq_mean_token_mean` | $\frac{1}{B}\sum_n \frac{1}{L_n}\sum_i m\ell$ | $1 / (B L_n)$ | $1 / B$ |
+| `constant` | $\sum_{n,i} m\ell / C$ | $1 / C$ | $L_n / C$ |
+
+Only `seq_mean_token_sum` is Equation (6.2) as derived. The others rescale it, and two of them rescale it by something that depends on the batch. `token_mean` divides by the number of policy tokens in the batch, so the effective learning rate shrinks when the batch's trajectories get longer. `seq_mean_token_mean` gives every trajectory the same total weight regardless of its length, so a token of a long trajectory counts less than a token of a short one. `constant` divides by a fixed number $C$, for example the batch size times the maximum number of policy tokens, which keeps the per-token weight fixed across batches. Which public recipes use which mode, and the Dr. GRPO critique of per-sequence normalization (Liu et al., 2025), are the subject of [Chapter 9](09-grpo-and-variants.md). Here we build the reductions and measure what they do.
+
+```python
+#@save
+def aggregate_loss(per_token, mask, mode='token_mean', norm_const=None):
+    """Reduce per-token terms [B, T] under mask [B, T] to a scalar; mode sets each token's weight."""
+    if mode == 'token_mean':                  # each policy token in the batch weighs 1 / sum(mask)
+        return masked_mean(per_token, mask)
+    if mode == 'seq_mean_token_sum':          # sum within a trajectory, mean over trajectories
+        return (per_token * mask).sum(-1).mean()
+    if mode == 'seq_mean_token_mean':         # mean within a trajectory, then mean over trajectories
+        return masked_mean(per_token, mask, dim=-1).mean()
+    if mode == 'constant':                    # sum over the batch divided by a fixed constant
+        if norm_const is None:
+            raise ValueError("mode='constant' needs norm_const, e.g. batch_size * max_policy_tokens")
+        return (per_token * mask).sum() / norm_const
+    raise ValueError(f'unknown aggregation mode {mode!r}')
+
+
+def reinforce_loss(logp, advantages, mask, mode='token_mean', norm_const=None):
+    """Surrogate -A * log pi on policy tokens: logp, mask [B, T]; advantages [B] or [B, T], detached."""
+    if advantages.dim() == 1:
+        advantages = advantages[:, None]      # one advantage per trajectory -> [B, 1], broadcast over T
+    return aggregate_loss(-advantages.detach() * logp, mask, mode, norm_const)
+```
+
+`reinforce_loss` detaches the advantages. They are constants in the derivation, and Section 6.8 shows the bias that appears when they are not. The weights in the table are the gradient of the loss with respect to each per-token term, so autograd can read them off. Three trajectories with 4, 8, and 24 policy tokens:
+
+```python
+lengths = torch.tensor([4, 8, 24])
+mask = (torch.arange(24)[None] < lengths[:, None]).float()                   # [3, 24]
+per_token = torch.zeros(3, 24, requires_grad=True)
+for mode in ['token_mean', 'seq_mean_token_sum', 'seq_mean_token_mean', 'constant']:
+    loss = aggregate_loss(per_token, mask, mode, norm_const=3 * 24)
+    weight = torch.autograd.grad(loss, per_token)[0]                         # dL / d(per-token term)
+    print(f'{mode:<20} per-token weight', [f'{w:.4f}' for w in weight[:, 0].tolist()],
+          '| trajectory total', [f'{w:.3f}' for w in weight.sum(-1).tolist()])
+```
+
+Output:
+
+```text
+token_mean           per-token weight ['0.0278', '0.0278', '0.0278'] | trajectory total ['0.111', '0.222', '0.667']
+seq_mean_token_sum   per-token weight ['0.3333', '0.3333', '0.3333'] | trajectory total ['1.333', '2.667', '8.000']
+seq_mean_token_mean  per-token weight ['0.0833', '0.0417', '0.0139'] | trajectory total ['0.333', '0.333', '0.333']
+constant             per-token weight ['0.0139', '0.0139', '0.0139'] | trajectory total ['0.056', '0.111', '0.333']
+```
+
+The output is the table with numbers in it. Under `token_mean`, `seq_mean_token_sum`, and `constant`, the per-token weight is the same for all three trajectories, so the 24-token trajectory has six times the total weight of the 4-token one. The three modes differ only by an overall scale, and only `token_mean`'s scale depends on the batch (here $1/36$). Under `seq_mean_token_mean`, each trajectory has total weight $1/3$, and a token of the short trajectory weighs six times as much as a token of the long one.
+
+Lengths are not random in an agent task. In the probe batch of the base agent, successful episodes are shorter than failures, because a lucky guess ends with an early submit while failures wander. With an advantage of $R - \bar R$, successes push up and failures push down, and the aggregation decides how hard.
+
+```python
+probe_batch = arl.collate(probe, tok.pad_id)
+mask, adv = probe_batch['action_mask'], probe_batch['rewards'] - probe_batch['rewards'].mean()
+length = mask.sum(-1)
+success = probe_batch['rewards'] > 0
+long = ~success & (length > length[~success].median())                      # the longer half of failures
+short_fail = ~success & ~long
+print(f'policy tokens: successes {length[success].mean():.1f} | short failures {length[short_fail].mean():.1f}',
+      f'| long failures {length[long].mean():.1f}')
+logp = torch.zeros_like(mask, requires_grad=True)
+for mode in ['token_mean', 'seq_mean_token_sum', 'seq_mean_token_mean']:
+    weight = torch.autograd.grad(reinforce_loss(logp, adv, mask, mode), logp)[0]   # = -A * w per token [B, T-1]
+    push_up, push_down = -weight[success].sum().item(), weight[~success].sum().item()
+    per_token = weight.sum(-1) / length                                      # push on each token of a trajectory
+    print(f'{mode:<20} push up {push_up:.3f} | push down {push_down:.3f} | per-token push, long / short failures',
+          f'{per_token[long].mean() / per_token[short_fail].mean():.2f}')
+```
+
+Output:
+
+```text
+policy tokens: successes 9.4 | short failures 6.4 | long failures 19.6
+token_mean           push up 0.132 | push down 0.157 | per-token push, long / short failures 1.00
+seq_mean_token_sum   push up 1.435 | push down 1.712 | per-token push, long / short failures 1.00
+seq_mean_token_mean  push up 0.152 | push down 0.152 | per-token push, long / short failures 0.33
+```
+
+The advantages are centered, $\sum_n \hat A_n = 0$, but the pushes are not balanced under the two length-proportional modes. Their total push is proportional to $\sum_n \hat A_n L_n$, and since failures are longer than successes on average, the push down exceeds the push up by 19% (0.157 against 0.132). Every token is pushed equally hard, so a long failure (19.6 tokens on average) receives the same push per token as a short one (6.4 tokens). `seq_mean_token_mean` balances the totals exactly, because each trajectory's total weight is $1/B$ and the advantages sum to zero. Per token, however, each long failure is pushed down only a third as hard as each short failure. If a policy can make a failing episode longer, for instance by adding calls before giving up, `seq_mean_token_mean` reduces the per-token penalty on every one of those calls. That is the mechanism behind the length growth that Dr. GRPO attributes to per-sequence normalization ([Chapter 9](09-grpo-and-variants.md)).
+
+![Figure 6.2: Left: share of the batch's total weight carried by each trajectory of the base agent's probe batch, against its number of policy tokens. Right: weight of one token of a 10-token trajectory in a batch of 64, as the other 63 trajectories get longer, relative to a batch in which all have 10 tokens.](../figures/ch06-aggregation.svg)
+
+Figure 6.2 separates the two effects. On the left, a trajectory's *own* length: the three length-proportional modes lie on one line through the origin, while `seq_mean_token_mean` is flat, so the shortest and the longest trajectories in the batch count the same. On the right, the length of *the rest of the batch*: only `token_mean` changes a trajectory's per-token weight when other trajectories get longer, falling to a quarter when their mean length grows from 10 to 40. As episodes lengthen during training, `token_mean` therefore lowers the effective learning rate of every token, and the other three modes do not. The book uses `token_mean` as the default, because it is what most public recipes use and because the batch-dependent scale is easy to monitor. [Appendix B, Problem 1](B-design-review.md#problem-1-choose-a-loss-aggregation-for-variable-length-tool-trajectories) argues the choice at length.
+
+## 6.7 Training TinyAgent with REINFORCE
+
+Everything is now in place for the first RL run. One update samples a batch of episodes from the current policy, computes advantages, and takes one gradient step on the surrogate. `policy_gradient_step` performs the update on a collated batch. It clips the global gradient norm, a standard safeguard whose value we also log, and it returns the loss and the gradient norm before clipping. Chapters 8 and 9 replace the loss but keep this shape.
+
+```python
+#@save
+def policy_gradient_step(model, optimizer, batch, advantages, mode='token_mean', norm_const=None,
+                         max_grad_norm=1.0):
+    """One REINFORCE update on a collated batch; advantages [B] or [B, T-1] -> dict(loss, grad_norm)."""
+    logp = arl.sequence_log_probs(model, batch['ids'])                     # [B, T-1], with grad
+    loss = reinforce_loss(logp, advantages, batch['action_mask'], mode, norm_const)
+    optimizer.zero_grad()
+    loss.backward()
+    grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), max_grad_norm)
+    optimizer.step()
+    return dict(loss=loss.item(), grad_norm=float(grad_norm))
+```
+
+The training loop samples 64 episodes per step from random training tasks. The advantage is the reward minus a baseline $b$ that is an exponential moving average of past batch means, initialized at the base agent's training pass rate measured in Section 6.2. The baseline is computed before the batch is seen, so it satisfies the condition of Equation (6.3). Every ten steps we measure the held-out pass rate with 8 episodes per held-out task. The model is a copy of the base agent, which stays untouched for later comparisons.
+
+```python
+policy = copy.deepcopy(base)
+opt = torch.optim.Adam(policy.parameters(), lr=2e-3)
+gen = torch.Generator().manual_seed(0)
+baseline, history, evals = base_train['pass_rate'], [], []
+for step in range(80):
+    if step % 10 == 0:
+        evals.append((step, rollout_stats(sample(policy, heldout_tasks, 8, seed=100 + step))['pass_rate']))
+    tasks = [train_tasks[i] for i in torch.randint(len(train_tasks), (64,), generator=gen).tolist()]
+    trajs = arl.rollout_batch(policy, [arl.BugFixEnv() for _ in tasks], tasks, tok, generator=gen)
+    batch = arl.collate(trajs, tok.pad_id)
+    stats = policy_gradient_step(policy, opt, batch, batch['rewards'] - baseline)   # advantage [B]
+    baseline = 0.9 * baseline + 0.1 * batch['rewards'].mean().item()
+    history.append(dict(step=step, reward=batch['rewards'].mean().item(), **stats))
+    if step % 10 == 0:
+        print(f'step {step:2d} | batch reward {history[-1]["reward"]:.3f} | held-out pass {evals[-1][1]:.3f}',
+              f'| loss {stats["loss"]:+.4f} | grad norm {stats["grad_norm"]:.2f}')
+evals.append((80, rollout_stats(sample(policy, heldout_tasks, 8, seed=180))['pass_rate']))
+print(f'step 80 | held-out pass {evals[-1][1]:.3f}')
+```
+
+Output:
+
+```text
+step  0 | batch reward 0.156 | held-out pass 0.263 | loss +0.0067 | grad norm 0.10
+step 10 | batch reward 0.328 | held-out pass 0.200 | loss +0.0325 | grad norm 0.10
+step 20 | batch reward 0.469 | held-out pass 0.375 | loss +0.0194 | grad norm 0.08
+step 30 | batch reward 0.531 | held-out pass 0.375 | loss -0.0815 | grad norm 0.13
+step 40 | batch reward 0.719 | held-out pass 0.525 | loss -0.0045 | grad norm 0.07
+step 50 | batch reward 0.781 | held-out pass 0.537 | loss +0.0173 | grad norm 0.07
+step 60 | batch reward 0.828 | held-out pass 0.475 | loss +0.0092 | grad norm 0.09
+step 70 | batch reward 0.844 | held-out pass 0.537 | loss -0.0123 | grad norm 0.06
+step 80 | held-out pass 0.450
+```
+
+![Figure 6.3: The first REINFORCE run. Mean reward of each training batch of 64 episodes (thin line) and the held-out pass rate every ten steps (markers), with the base agent's level and the blind guesser's 0.21 for reference.](../figures/ch06-reinforce-curve.svg)
+
+The batch reward climbs from 0.16 to 0.84 by step 70, and Figure 6.3 shows the whole curve. The loss column illustrates Section 6.1: it takes both signs, stays within a few hundredths of zero, and says nothing about progress, while the reward column does. The gradient norm stays between 0.06 and 0.13, well below the clipping threshold of 1, so clipping never acts in this run. The held-out pass rate is measured on only 80 episodes per point, so it moves by several points from one evaluation to the next. The run took about seven seconds on the check host. Before reading anything into the held-out column, we measure both splits with 16 episodes per task and look at what the policy actually does.
+
+```python
+for name, tasks in [('train', train_tasks), ('held-out', heldout_tasks)]:
+    show(f'base, {name}', rollout_stats(sample(base, tasks, 16, seed=7)))
+    show(f'REINFORCE, {name}', rollout_stats(sample(policy, tasks, 16, seed=7)))
+```
+
+Output:
+
+```text
+base, train           reward 0.144 pass_rate 0.144 valid_calls 0.973 submit_rate 0.750 turns 3.369 action_tokens 12.109
+REINFORCE, train      reward 0.775 pass_rate 0.775 valid_calls 0.951 submit_rate 0.975 turns 3.416 action_tokens 12.934
+base, held-out        reward 0.125 pass_rate 0.125 valid_calls 0.981 submit_rate 0.800 turns 2.931 action_tokens 10.506
+REINFORCE, held-out   reward 0.456 pass_rate 0.456 valid_calls 0.974 submit_rate 0.944 turns 4.481 action_tokens 17.144
+```
+
+```python
+from collections import Counter
+for name, tasks in [('train', train_tasks), ('held-out', heldout_tasks)]:
+    trajs = sample(policy, tasks, 16, seed=8)
+    reads = sum('<call> read </call>' in t.info['actions'] for t in trajs) / len(trajs)
+    edits = sum(len(t.info['ops']) for t in trajs) / len(trajs)
+    fix_op = {t.name: t.fix_op for t in tasks}
+    first_right = sum(bool(t.info['ops']) and t.info['ops'][0] == fix_op[t.info['task']] for t in trajs) / len(trajs)
+    print(f'{name}: read {reads:.2f} | edits per episode {edits:.2f} | first edit is the right op {first_right:.2f}')
+    for calls, count in Counter(' -> '.join(map(short, t.info['actions'])) for t in trajs).most_common(3):
+        print(f'   {count:3d} x {calls}')
+```
+
+Output:
+
+```text
+train: read 0.00 | edits per episode 2.18 | first edit is the right op 0.50
+    49 x swap_minmax -> submit
+    45 x fix_comparison -> add_zero_guard -> fix_comparison -> submit
+    44 x fix_init -> fix_comparison -> submit
+held-out: read 0.00 | edits per episode 3.48 | first edit is the right op 0.23
+    16 x swap_minmax -> swap_minmax -> swap_minmax -> swap_minmax -> swap_minmax -> submit
+    13 x swap_minmax -> swap_minmax -> fix_comparison -> swap_minmax -> swap_minmax -> submit
+    13 x fix_comparison -> submit
+```
+
+The training pass rate rose from 0.14 to 0.78 and the held-out pass rate from 0.13 to 0.46. The behavior statistics explain both numbers. The policy never reads and never tests before editing, so the only task-specific information it has when it chooses its first edit is the function name in the issue. Its first edit is the right op in 50% of training episodes and 23% of held-out ones, against 20% for a uniform guess among the five repair ops. On the training tasks it has partly memorized which op goes with which function name. On held-out tasks the function names are words it never saw in training, and its first choice is a guess.
+
+The rest of the gain comes from a second strategy: applying several ops before submitting, 2.2 per episode on training tasks and 3.5 on held-out ones. A wrong op often leaves the source unchanged (`no change`) or changes it harmlessly, so a sequence such as `fix_comparison -> add_zero_guard -> fix_comparison` repairs both the `compare` and the `zero` families. The most frequent held-out episode applies `swap_minmax` five times, which leaves `min` and `max` swapped by parity. Stacking is a legitimate repair under this reward, but it is a strategy no engineer would accept, and it transfers to held-out tasks only because the edit menu is small. Reading, the behavior that would transfer cleanly, never appears. The base agent reads in only a minority of episodes and then picks an op unrelated to what it read, so reading is not correlated with reward in its own samples, and REINFORCE can only reinforce what it samples.
+
+> **Evidence.** Measured here, on one seed of a 158k-parameter model with 20 training tasks. The run demonstrates the mechanics of the estimator. It is not a claim about which strategies large models learn. The qualitative lesson is a general property of the estimator rather than of this model: RL amplifies behavior that is already rewarded in the policy's own samples, and memorizing training tasks or exploiting a small action menu are cheap ways to be rewarded. [Chapter 4](04-environments-and-tools.md#46-scripted-baselines) set a held-out bar of 0.2 for "learned more than the format", and this run shows that clearing it does not by itself prove the agent learned to read. Chapters [7](07-advantages-and-credit.md), [9](09-grpo-and-variants.md), and [12](12-multi-turn-and-long-horizons.md) return to this run's two failure modes, credit for useless steps and the absence of information gathering.
+
+## 6.8 Design problems in practice
+
+> **Problem: high variance on sparse binary rewards.** *Symptom:* the per-step reward curve is noisy, different seeds learn at very different speeds, and progress on hard tasks stalls while easy tasks saturate. *Cause:* with binary rewards and a low pass rate, most episodes contribute a score with a small negative weight and a few contribute large positive ones. The estimator's variance is large relative to its mean (Figure 6.1), and a task whose sampled episodes all fail contributes nothing. *Options:* (a) more episodes per step, which costs rollout compute linearly for a $1/\sqrt{B}$ reduction in noise. (b) Better baselines, especially per-task ones from groups of samples ([Chapter 7](07-advantages-and-credit.md)). (c) Denser rewards, which risk being gamed ([Chapter 11](11-rewards-and-verifiers.md)). (d) A curriculum that keeps tasks near a 50% pass rate ([Chapter 14](14-scaling-and-efficiency.md)). *Default:* measure the gradient noise directly before tuning anything else. The block below splits the 240 probe episodes into disjoint batches and computes the cosine similarity between gradient estimates from independent batches of the same size.
+
+```python
+centered = (rewards - rewards.mean())[:, None] * scores                     # [N, n_params]
+gen = torch.Generator().manual_seed(0)
+for size in [8, 32, 120]:
+    cos = []
+    for _ in range(20):                                                      # 20 random disjoint pairs
+        order = torch.randperm(len(centered), generator=gen)
+        first, second = centered[order[:size]].mean(0), centered[order[size:2 * size]].mean(0)
+        cos.append(F.cosine_similarity(first, second, dim=0).item())
+    print(f'batches of {size:3d} episodes: mean cosine between independent estimates {sum(cos) / len(cos):.3f}')
+```
+
+Output:
+
+```text
+batches of   8 episodes: mean cosine between independent estimates -0.092
+batches of  32 episodes: mean cosine between independent estimates 0.165
+batches of 120 episodes: mean cosine between independent estimates 0.418
+```
+
+Two gradient estimates from independent batches of 8 episodes are uncorrelated (the mean cosine of $-0.09$ is zero within the noise of 20 pairs), batches of 32 agree weakly (0.17), and even batches of 120 agree only partly (0.42). A 64-episode batch, like the one in Section 6.7, is mostly noise in any single step. Learning works anyway because the noise averages out across steps and the signal does not. That is also why the learning rate and the batch size trade off against each other.
+
+> **Problem: length bias introduced by aggregation.** *Symptom:* mean episode length grows over training without a matching rise in reward, often concentrated in failing episodes. *Cause:* `seq_mean_token_mean` divides each trajectory's push by its own length (Section 6.6), so a longer failure is penalized less per token. `token_mean` couples the step size to the batch's total length. *Options:* (a) `seq_mean_token_sum` or `constant`, which keep per-token weights fixed and need a learning rate retuned for the larger gradient. (b) `token_mean`, which is widely used, with the batch's policy-token count logged. (c) Explicit length costs, which change the task. *Default:* `token_mean`, while logging the mean length of successes and failures separately. If failures lengthen, switch to `constant`.
+
+> **Problem: detaching the wrong tensor.** *Symptom:* training runs and the loss decreases, but learning is slower or drifts in odd directions, and the gradient differs from a reference implementation. *Cause:* a quantity that should be a constant in the surrogate, such as a baseline or advantage computed from the model's own outputs, was left attached to the graph. Its gradient is then added to the estimator, and nothing in the derivation justifies that term. *Options:* (a) detach advantages inside the loss function, as `reinforce_loss` does. (b) Compute advantages under `torch.no_grad()`. *Default:* both, plus a unit test that compares the gradient to a reference on a fixed batch. The block below reproduces the bias on a five-call bandit with a baseline read off the policy's own probabilities.
+
+```python
+logits = torch.tensor([0.5, -0.2, 0.1, 0.0, 0.3], requires_grad=True)       # a 5-action policy
+reward_of = torch.tensor([1.0, 0.0, 0.0, 1.0, 0.0])                          # pass / fail per action
+probs = torch.softmax(logits, -1)
+exact = torch.autograd.grad((probs * reward_of).sum(), logits, retain_graph=True)[0]
+actions = torch.multinomial(probs.detach(), 200_000, replacement=True, generator=torch.Generator().manual_seed(0))
+logp = torch.log_softmax(logits, -1)[actions]                                # [N]
+baseline = probs[0]                                                          # a function of theta
+for name, b in [('detached', baseline.detach()), ('attached', baseline)]:
+    loss = -((reward_of[actions] - b) * logp).mean()
+    estimate = -torch.autograd.grad(loss, logits, retain_graph=True)[0]
+    print(f'{name:<9} relative error to exact gradient {((estimate - exact).norm() / exact.norm()).item():.3f}')
+```
+
+Output:
+
+```text
+detached  relative error to exact gradient 0.001
+attached  relative error to exact gradient 1.538
+```
+
+With the baseline detached, the estimate matches the exact gradient up to sampling noise. Attached, the gradient picks up the extra term $-\nabla b \cdot \overline{\log \pi}$, whose expectation is $H(\pi)\, \nabla b$, and the error is of the same order as the gradient itself. The same bug appears when a value head shares the trunk with the policy and its prediction enters the policy loss without `detach()` ([Chapter 7](07-advantages-and-credit.md)).
+
+> **Problem: the zero-advantage batch.** *Symptom:* the policy keeps changing, and sometimes degrades, during steps in which every episode had the same reward and the logged loss and gradient were exactly zero. *Cause:* with all rewards equal and a mean baseline, every advantage is zero, so the gradient is zero. Adam still moves the parameters, by its first-moment estimate from earlier steps. Weight decay moves them too. A zero-advantage step is not a no-op. With `token_mean`, zero-advantage trajectories also dilute every other trajectory's weight by adding tokens to the normalizer. *Options:* (a) skip the optimizer step when the batch has no signal. (b) Filter zero-advantage groups before forming the batch and resample, which is dynamic sampling ([Chapter 9](09-grpo-and-variants.md)). (c) Accept the drift. *Default:* (b) when groups are used, otherwise (a). The block below takes one ordinary step and then one step on an all-zero advantage.
+
+```python
+model = copy.deepcopy(base)
+opt = torch.optim.Adam(model.parameters(), lr=2e-3)
+batch = probe_batch
+policy_gradient_step(model, opt, batch, batch['rewards'] - batch['rewards'].mean())
+before = torch.cat([p.detach().flatten() for p in model.parameters()])
+stats = policy_gradient_step(model, opt, batch, torch.zeros(len(batch['rewards'])))
+after = torch.cat([p.detach().flatten() for p in model.parameters()])
+print(f'zero-advantage step: loss {stats["loss"]:.1f} | grad norm {stats["grad_norm"]:.1f}',
+      f'| parameter change {(after - before).norm():.4f}')
+```
+
+Output:
+
+```text
+zero-advantage step: loss 0.0 | grad norm 0.0 | parameter change 0.4903
+```
+
+The loss and the gradient norm are exactly zero, and the parameters still move by a nonzero amount, the momentum of the previous step.
+
+## Summary
+
+- The REINFORCE estimator $\mathbb{E}[R(\tau) \sum_t \nabla \log \pi_\theta(a_t \mid s_t)]$ needs the environment only to sample. Its dynamics drop out of the score, and at the token level so do all prompt, template, and tool tokens, which is the action mask. Tool tokens still affect the gradient through attention.
+- The surrogate loss has the estimator as its gradient and no meaningful value. Log rewards and pass rates, not the loss.
+- Any baseline fixed before the action is sampled leaves the estimator unbiased. On the base agent, the mean reward is close to the optimal constant, a baseline of 1 inflates the variance more than sevenfold, and a per-task baseline estimated from 12 episodes is no better than the global mean. Reward-to-go removes past rewards from each token's weight, which cut the variance by 43% under a per-call cost.
+- The loss aggregation sets every token's weight. Three common modes weight trajectories in proportion to their length, `seq_mean_token_mean` weights them equally, and `token_mean` couples the step size to the batch's length.
+- The base agent, TinyAgent behavior-cloned on `random` and `blind` play, writes valid calls 98% of the time and passes 12% to 19% of episodes. Eighty REINFORCE steps raise its pass rate from 0.14 to 0.78 on training tasks and from 0.13 to 0.46 on held-out tasks, by partly memorizing function names and by stacking edits, never by reading.
+
+## Exercises
+
+1. Repeat the unbiasedness check of Section 6.4 with a state-dependent baseline $b(s) = V^\pi(s)$ from `policy_evaluation`, applied at every step. How much does the per-batch variance fall compared with the exact constant $J$? Then use $b(s_t, a_t) = Q^\pi(s_t, a_t)$ and show that the mean is now wrong. Which line of the proof fails?
+2. Prove that the optimal constant baseline is $b^* = \mathbb{E}[R \lVert g\rVert^2] / \mathbb{E}[\lVert g\rVert^2]$, and explain why it differs from the mean reward. For which kinds of episodes is $\lVert g \rVert^2$ large in TinyAgent?
+3. Change an assumption: train with REINFORCE using `seq_mean_token_mean` and then `seq_mean_token_sum` (retune the learning rate for the second, and say why it needs retuning). Log the mean number of policy tokens in failing episodes. Does the length of failures behave as Section 6.6 predicts?
+4. Build the base agent from `blind` play only, and from `random` play only. Measure the pass rate, the read rate, and then the result of 80 REINFORCE steps. Which starting distribution leads to more held-out improvement, and why?
+5. Make reading useful to REINFORCE: give the base agent demonstrations from an oracle that is wrong 50% of the time (it reads, then picks the right op with probability 0.5). Does REINFORCE now learn to read? Measure the held-out pass rate.
+6. The token-level estimator treats each token as an action. Derive the turn-level estimator in which an action is a whole call. Show that its score is the sum of the token scores of the call, so the two estimators are identical. Where do the two castings stop being equivalent?
+7. Design review: a colleague proposes to stabilize training by normalizing the surrogate loss by its running mean absolute value, "so that the loss stays around 1". What does this do to the gradient? Under what condition is it equivalent to a learning-rate schedule, and when does it change the direction of the update?

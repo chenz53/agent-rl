@@ -1,27 +1,66 @@
 ---
-title: "Hands-on Post-training for Coding Agents"
-description: "Start with a coding issue. Build the environment, derive the learning rule, and test every step in PyTorch."
+title: "Agentic RL: From Policy Gradients to Coding Agents"
 ---
 
-<CardGroup cols={2}>
-  <Card title="Start with the bug" icon="code" href="/tutorial/chapters/01-coding-task">
-    Use DeepSWE as context, then reproduce and verify one concrete clamp repair.
-  </Card>
-  <Card title="Build the coding environment" icon="terminal" href="/tutorial/chapters/02-coding-environment">
-    Construct tools, validation, repository state, tests, and submission from scratch.
-  </Card>
-  <Card title="Follow the learning sequence" icon="book-open" href="/tutorial/README">
-    Task → environment → trajectory → probability → feedback → update.
-  </Card>
-  <Card title="Inspect on-policy distillation" icon="arrows-rotate" href="/tutorial/chapters/10-on-policy-distillation">
-    Derive teacher guidance at student coding prefixes and verify its gradients.
-  </Card>
-</CardGroup>
+*[中文版](/tutorial/zh/README) is available: the prose is translated; code, outputs, and figures are identical.*
 
-## Every mechanism has a coding question behind it
+This book teaches reinforcement learning for language-model agents. That means models that call tools, read observations, act over many turns, and are trained against verifiers. It starts from the definition of a policy gradient and ends with a complete, tested training stack for a small coding agent. Along the way it covers the design decisions that post-training teams make every day: how to aggregate a loss over variable-length tool trajectories, when a critic is worth its cost, how to keep the inference engine and the trainer consistent, how to detect a reward hack before it reaches an evaluation, and how to read a training dashboard that is going wrong.
 
-Why must the agent execute a test rather than claim it passed? Which generated tokens are actions? Why gather a selected log-probability? How does a verifier score become a gradient? Each chapter answers the question left by the previous chapter, using the same coding repair and visible function definitions.
+## How the book works
 
-The revised edition contains **15 chapters and 22 executed Python blocks**. Code has captured outputs; formulas use separate display-math delimiters; flow and sequence diagrams explain interaction and training. DeepSWE supplies a public infrastructure reference, while the experiments remain intentionally small enough to inspect.
+The book builds **one system**, one chapter at a time:
 
-Begin with [the coding task](/tutorial/chapters/01-coding-task), then follow [the reading order](/tutorial/README). The final lab trains a small patch-selection policy against executable tests. A full model-backed DeepSWE reproduction is outside the experiments completed here.
+- **The BugFix gym** (Chapter 4) is a family of small Python repair tasks. The agent fixes them with the tools `read`, `test`, `edit`, and `submit`. Tests execute real code, a hidden test set guards against overfitting, and an exploit operation lets reward hacking happen for real.
+- **TinyAgent** (Chapter 3) is a small transformer policy that is trained with RL on a CPU in about a minute. It shows the phenomena that large runs show: format learning, entropy collapse, length effects, credit assignment across turns, and reward hacking.
+- **The real-model thread** uses the actual Qwen3-0.6B tokenizer and model wherever model-specific behavior matters, such as chat templates, tool-call tokens, retokenization drift, and the log-probability mismatch between the inference engine and the trainer.
+
+Each mechanism is first derived, then implemented from scratch in a short code block, then run. Its printed output appears directly below the code. In the style of [D2L](https://github.com/d2l-ai/d2l-zh), a function built in one chapter is marked `#@save` and collected into the `agentrl` package, so later chapters call `arl.ppo_policy_loss(...)` instead of repeating it. By the capstone, the reader has written every piece of the stack.
+
+Every chapter ends with **Design problems in practice**. This section takes problems engineers actually hit, and for each one it gives the symptom, the cause, the options, and a recommended default. Every chapter then gives a summary and exercises. [Appendix B](/tutorial/chapters/B-design-review) collects open-ended design-review problems, with model answers.
+
+## Contents
+
+| Part | Chapter | The question it answers |
+| --- | --- | --- |
+| | [0. Notation and how to use this book](/tutorial/chapters/00-notation) | How do I read and run this book? |
+| **I. Foundations** | [1. What is agentic RL?](/tutorial/chapters/01-introduction) | What changes when a model acts in an environment? |
+| | [2. Reinforcement learning fundamentals](/tutorial/chapters/02-rl-fundamentals) | What are policies, returns, and values, and how is an LLM agent an MDP? |
+| | [3. Language models as policies](/tutorial/chapters/03-language-models-as-policies) | What exactly is the probability of an action? |
+| | [4. Environments and tools: the BugFix gym](/tutorial/chapters/04-environments-and-tools) | What does the agent act on, and what counts as success? |
+| | [5. Trajectories, templates, and masks](/tutorial/chapters/05-trajectories-and-templates) | How does a multi-turn episode become training tensors? |
+| **II. Policy optimization** | [6. Policy gradients](/tutorial/chapters/06-policy-gradient) | How does a reward become a gradient? |
+| | [7. Advantages and credit assignment](/tutorial/chapters/07-advantages-and-credit) | Which actions deserve the credit? |
+| | [8. PPO: reusing samples safely](/tutorial/chapters/08-ppo) | How can expensive rollouts be reused for several updates? |
+| | [9. GRPO and the critic-free family](/tutorial/chapters/09-grpo-and-variants) | What do GRPO, Dr. GRPO, DAPO, RLOO, and GSPO each change? |
+| | [10. KL, entropy, and regularization](/tutorial/chapters/10-kl-entropy-regularization) | How do we keep the policy from drifting or collapsing? |
+| **III. Rewards and agents** | [11. Rewards, verifiers, and reward hacking](/tutorial/chapters/11-rewards-and-verifiers) | What should be rewarded, and how will the agent cheat? |
+| | [12. Multi-turn agents and long horizons](/tutorial/chapters/12-multi-turn-and-long-horizons) | What breaks when episodes get long? |
+| **IV. Systems** | [13. Rollout systems and off-policy correction](/tutorial/chapters/13-rollout-systems) | How do inference engines, trainers, and environments fit together? |
+| | [14. Scaling and efficiency](/tutorial/chapters/14-scaling-and-efficiency) | Where do the tokens, memory, and GPU-hours go? |
+| **V. Beyond pure RL** | [15. SFT, rejection sampling, and preferences](/tutorial/chapters/15-sft-and-rejection-sampling) | When are demonstrations or comparisons the better signal? |
+| | [16. Distillation for agents](/tutorial/chapters/16-distillation) | How can a teacher score the student's own trajectories? |
+| **VI. Practice** | [17. Evaluation](/tutorial/chapters/17-evaluation) | Did the agent actually improve? |
+| | [18. Debugging RL runs](/tutorial/chapters/18-debugging-rl-runs) | What do common failures look like on a dashboard? |
+| | [19. Capstone: train a coding agent end to end](/tutorial/chapters/19-capstone) | Can we assemble and evaluate the whole stack? |
+| | [20. Research frontier and open problems](/tutorial/chapters/20-frontier) | What is unsettled, and how would we test it? |
+| **Appendices** | [A. Mathematical tools](/tutorial/chapters/A-math) | Which identities and estimators do the chapters rely on? |
+| | [B. Design review problems](/tutorial/chapters/B-design-review) | Can I reason through a real post-training design question? |
+
+## Running the code
+
+Every Python block runs. The checker executes the chapters in order, rebuilds `agentrl` from the `#@save` blocks of earlier chapters, and compares each block's stdout with the recorded output:
+
+```sh
+scripts/remote_check.sh <workdir> [chapter-prefix ...]   # runs on the GPU host; CPU is enough
+python3 scripts/build_library.py                         # regenerate agentrl/ from the chapters
+scripts/remote_figures.sh <workdir> [chNN ...]           # regenerate data figures
+python3 scripts/build_tutorial_site.py                   # regenerate the Mintlify edition in website/
+```
+
+[The real-model lab](/tutorial/labs/README) trains Qwen3-0.6B on the BugFix gym on one H200, and Chapter 19 reports its measured results.
+
+[The editorial guide](/tutorial/editorial-guide) defines the book's conventions, and [the source ledger](/tutorial/sources) records every external source with the date it was inspected and what was checked.
+
+## What the experiments do and do not show
+
+TinyAgent experiments are real and run on a CPU, but they are small. They demonstrate mechanisms and make failure modes reproducible. They are not benchmark results. Results reported by papers are labeled as reported, with dates. Recommendations are labeled as the book's recommendations. The environment executes only trusted code written for the book; Chapter 4 explains the isolation that real model-generated code requires.

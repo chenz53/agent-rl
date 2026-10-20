@@ -1,0 +1,590 @@
+# 8. PPO: Reusing Samples Safely
+
+Every update in [Chapter 6](06-policy-gradient.md) and [Chapter 7](07-advantages-and-credit.md) used each episode once. The policy sampled 64 episodes, took one gradient step, and threw the episodes away. For TinyAgent that costs a fifth of a second. For a coding agent on a real repository, one episode can take minutes of container time and tens of thousands of generated tokens, and the gradient step that consumes it takes a small fraction of that. A trainer that could take several steps per batch would get more learning out of each rollout.
+
+The obstacle is the derivation itself. Equation (6.1) is an expectation under the *current* policy. After the first step on a batch, the batch was sampled by a policy that no longer exists, and the estimator is no longer the gradient of anything we want. This chapter builds the correction. Importance sampling fixes the expectation exactly and fails numerically, in a way we measure. The per-token ratio is a tractable approximation whose error we state. **Proximal Policy Optimization** (PPO; Schulman et al., 2017) clips that ratio so that the optimizer has no incentive to move far from the sampling policy. We then add the clipped value loss, minibatches, and epochs, train TinyAgent with PPO and a critic, and read the diagnostics that tell an engineer whether reuse is safe. Two functions are saved: the clipped policy loss and the clipped value loss. [Chapter 9](09-grpo-and-variants.md) builds the book's main training loop on them.
+
+```python
+#@save
+import torch
+import agentrl as arl
+```
+
+The setup is the one Chapters 6 and 7 used: the word-level tokenizer, the two task splits, the base agent, and a helper that samples a fixed number of episodes per task in lockstep.
+
+```python
+import copy
+tok = arl.build_tokenizer(arl.make_tasks('all'))
+train_tasks, heldout_tasks = arl.make_tasks('train'), arl.make_tasks('heldout')
+base = arl.make_base_agent(tok)
+
+def sample(model, tasks, n_per_task, seed):
+    """n_per_task episodes of each task, sampled in lockstep at temperature 1."""
+    batch_tasks = [t for t in tasks for _ in range(n_per_task)]
+    return arl.rollout_batch(model, [arl.BugFixEnv() for _ in batch_tasks], batch_tasks, tok,
+                             generator=torch.Generator().manual_seed(seed))
+```
+
+## 8.1 Off-policy reuse and importance sampling
+
+Let $\pi_{\text{old}}$ be the policy that sampled a batch and $\pi_\theta$ the policy after some updates. The objective is an expectation under $\pi_\theta$, and the data come from $\pi_{\text{old}}$. **Importance sampling** rewrites one expectation as the other ([Appendix A.1](A-math.md)):
+
+$$
+J(\theta) = \mathbb{E}_{\tau \sim p_\theta}\big[R(\tau)\big] = \mathbb{E}_{\tau \sim p_{\text{old}}}\Big[\frac{p_\theta(\tau)}{p_{\text{old}}(\tau)}\, R(\tau)\Big].
+$$
+
+The trajectory weight $w(\tau) = p_\theta(\tau)/p_{\text{old}}(\tau)$ looks as if it needs the environment's transition probabilities. It does not. Both trajectory probabilities factor as in Equation (6.2) into policy tokens and everything else, and the "everything else" (prompt, template, tool outputs) has the same probability under both policies because the environment did not change. It cancels:
+
+$$
+w(\tau) = \prod_{i:\, m_i = 1} \frac{\pi_\theta(y_i \mid c_i)}{\pi_{\text{old}}(y_i \mid c_i)} = \prod_{i:\, m_i = 1} \rho_i, \qquad \log w(\tau) = \sum_{i:\, m_i = 1} \big(\log \pi_\theta(y_i \mid c_i) - \log \pi_{\text{old}}(y_i \mid c_i)\big).
+$$
+
+This is Equation (8.1), the exact trajectory ratio, and $\rho_i$ is the **per-token ratio**. Differentiating $\mathbb{E}_{\text{old}}[w R]$ gives $\mathbb{E}_{\text{old}}[w R\, \nabla \log p_\theta(\tau)]$, which at $\theta = \theta_{\text{old}}$ is REINFORCE again. So the exact correction exists and is unbiased. The question is its variance.
+
+We measure it. The base agent samples 320 episodes, the "old" batch. A copy of the base agent then takes $k$ REINFORCE steps on *fresh* batches, which moves it the way training would. For each $k$ we compute $\log w$ for every old episode, the **effective sample size** $\mathrm{ESS} = (\sum_n w_n)^2 / \sum_n w_n^2$ (the number of equally weighted samples the weighted batch is worth), the IS estimate of the new policy's pass rate, and the pass rate measured on fresh samples.
+
+```python
+old_batch = arl.collate(sample(base, train_tasks, 16, seed=0), tok.pad_id)   # 320 episodes from pi_old
+mask = old_batch['action_mask']                                              # [B, T-1]
+with torch.no_grad():
+    old_logp = arl.sequence_log_probs(base, old_batch['ids'])                # [B, T-1]
+
+def reinforce_steps(model, optimizer, k, gen):
+    """k REINFORCE updates of model in place, each on 64 fresh episodes of random train tasks."""
+    for _ in range(k):
+        tasks = [train_tasks[i] for i in torch.randint(len(train_tasks), (64,), generator=gen).tolist()]
+        trajs = arl.rollout_batch(model, [arl.BugFixEnv() for _ in tasks], tasks, tok, generator=gen)
+        batch = arl.collate(trajs, tok.pad_id)
+        arl.policy_gradient_step(model, optimizer, batch, batch['rewards'] - batch['rewards'].mean())
+```
+
+```python
+moved, gen = copy.deepcopy(base), torch.Generator().manual_seed(1)
+opt = torch.optim.Adam(moved.parameters(), lr=2e-3)
+log_weights, done = {}, 0
+print(' k | sd log w | max w  | ESS / N | IS estimate | fresh samples')
+for k in [0, 1, 3, 10, 30]:
+    reinforce_steps(moved, opt, k - done, gen)
+    done = k
+    with torch.no_grad():
+        log_w = ((arl.sequence_log_probs(moved, old_batch['ids']) - old_logp) * mask).sum(-1)   # [B], Eq. (8.1)
+    w, log_weights[k] = log_w.exp(), log_w
+    ess = (w.sum() ** 2 / (w ** 2).sum()).item() / len(w)
+    fresh = arl.rollout_stats(sample(moved, train_tasks, 16, seed=9))['pass_rate']
+    print(f'{k:2d} | {log_w.std():8.2f} | {w.max():6.1f} | {ess:7.3f} | {(w * old_batch["rewards"]).mean():11.3f} |'
+          f' {fresh:.3f}')
+```
+
+Output:
+
+```text
+ k | sd log w | max w  | ESS / N | IS estimate | fresh samples
+ 0 |     0.00 |    1.0 |   1.000 |       0.119 | 0.159
+ 1 |     0.80 |    3.5 |   0.776 |       0.144 | 0.197
+ 3 |     2.12 |   20.9 |   0.343 |       0.178 | 0.263
+10 |     3.46 |    5.7 |   0.302 |       0.256 | 0.469
+30 |    17.05 |   18.8 |   0.101 |       0.431 | 0.700
+```
+
+At $k = 0$ the weights are exactly 1, and the IS estimate is the old batch's pass rate, 0.119 (the fresh sample of the same policy gives 0.159; both are 320-episode estimates). One update spreads the log-weights with a standard deviation of 0.8, and the batch is worth 78% of its size. After three updates it is worth a third, and after 30 a tenth. The IS estimate is unbiased in expectation, yet it falls further below the truth as the policy moves: 0.256 against 0.469 after 10 updates, 0.431 against 0.700 after 30. Unbiasedness is a statement about the average over infinitely many batches. In one batch, the episodes that the new policy likes most are exactly the ones the old policy rarely sampled, so they are missing, and the estimate is low with high probability. The standard deviation of $\log w$ grows from 0.8 to 17 because it is a sum over every policy token of the episode. The next block checks that directly.
+
+```python
+lengths = mask.sum(-1)                                                       # policy tokens per episode
+for lo, hi in [(0, 8), (8, 16), (16, 64)]:
+    rows = (lengths >= lo) & (lengths < hi)
+    print(f'{lo:2d}-{hi:<2d} policy tokens: {int(rows.sum()):3d} episodes | sd log w after 3 updates'
+          f' {log_weights[3][rows].std():.2f} | after 10: {log_weights[10][rows].std():.2f}')
+```
+
+Output:
+
+```text
+ 0-8  policy tokens: 198 episodes | sd log w after 3 updates 0.50 | after 10: 1.42
+ 8-16 policy tokens:  35 episodes | sd log w after 3 updates 1.53 | after 10: 2.50
+16-64 policy tokens:  87 episodes | sd log w after 3 updates 2.29 | after 10: 3.46
+```
+
+The spread of the log-weight grows with the number of policy tokens: after ten updates its standard deviation is 1.42 for episodes with fewer than 8 policy tokens and 3.46 for episodes with 16 or more. If each token contributes a roughly independent log-ratio of standard deviation $\sigma$, the sum over $L$ tokens has standard deviation $\sigma\sqrt{L}$, and the weight $e^{\log w}$ is log-normal with a variance that grows like $e^{\sigma^2 L}$. A BugFix episode has about 12 policy tokens. A SWE-agent episode has thousands. Exact trajectory importance weights are unusable at that length after any meaningful update, which is the general result: the variance of a product of ratios is exponential in the horizon.
+
+![Figure 8.1: Left: effective sample size of 320 base-agent episodes reweighted to a policy that has taken k REINFORCE updates. Right: the log-weight of each episode after 10 updates against its number of policy tokens.](../figures/ch08-is-weights.svg)
+
+In Figure 8.1, look at the right panel's spread rather than its center. Short episodes keep log-weights near 0, and long ones scatter down to $-20$, a weight of $e^{-20}$: the longest episodes are the ones the moved policy would almost never produce again, and the few long episodes it now prefers are absent from the batch altogether.
+
+### The per-token approximation
+
+PPO does not use $w(\tau)$. It uses each token's own ratio $\rho_i$, which involves one token's probabilities and stays near 1 when the policy changes little. The justification is the **performance-difference identity** (Kakade and Langford, 2002), here at the token level:
+
+$$
+J(\theta) - J(\theta_{\text{old}}) = \mathbb{E}_{\tau \sim p_\theta}\Big[\sum_{i:\, m_i = 1} A^{\text{old}}(c_i, y_i)\Big] = \sum_i \mathbb{E}_{c_i \sim d_\theta}\, \mathbb{E}_{y_i \sim \pi_{\text{old}}(\cdot \mid c_i)}\big[\rho_i\, A^{\text{old}}(c_i, y_i)\big].
+$$
+
+The inner expectation reweights the *action* at each prefix, which one ratio $\rho_i$ does exactly. The outer expectation is over the prefixes $d_\theta$ that the *new* policy visits, and that is the part that needed the product of all earlier ratios. The **surrogate** replaces $d_\theta$ by $d_{\text{old}}$, the prefixes in the batch:
+
+$$
+L_{\text{old}}(\theta) = \mathbb{E}_{\tau \sim p_{\text{old}}}\Big[\sum_{i:\, m_i = 1} \rho_i\, \hat A_i\Big].
+$$
+
+This is Equation (8.2). It is an approximation, and the book states it as such everywhere it appears: per-token ratios correct for the change in each action's probability and ignore the change in which prefixes are visited. $L_{\text{old}}$ agrees with $J(\theta) - J(\theta_{\text{old}})$ (up to a constant) to first order in $\theta - \theta_{\text{old}}$, so it has the same gradient at $\theta_{\text{old}}$, and its error grows with the distance between the two policies. Schulman et al. (2015) bound that error by a multiple of the maximum KL divergence between the policies, which is where the trust region of Section 8.3 comes from. We check the approximation on the same old batch: the surrogate estimate of the improvement, $\frac{1}{N}\sum_n \sum_i m_i(\rho_{n,i} - 1)(R_n - \bar R)$, against the improvement measured on fresh samples.
+
+```python
+moved, gen = copy.deepcopy(base), torch.Generator().manual_seed(1)
+opt = torch.optim.Adam(moved.parameters(), lr=2e-3)
+advantage = (old_batch['rewards'] - old_batch['rewards'].mean())[:, None]     # [B, 1], outcome advantage
+done, j_old = 0, arl.rollout_stats(sample(base, train_tasks, 16, seed=9))['pass_rate']
+for k in [1, 3, 10]:
+    reinforce_steps(moved, opt, k - done, gen)
+    done = k
+    with torch.no_grad():
+        rho = (arl.sequence_log_probs(moved, old_batch['ids']) - old_logp).exp()   # [B, T-1]
+    surrogate = (((rho - 1) * advantage * mask).sum(-1)).mean().item()
+    fresh = arl.rollout_stats(sample(moved, train_tasks, 16, seed=9))['pass_rate'] - j_old
+    print(f'k = {k:2d}: surrogate improvement {surrogate:+.3f} | measured improvement {fresh:+.3f}')
+```
+
+Output:
+
+```text
+k =  1: surrogate improvement +0.037 | measured improvement +0.038
+k =  3: surrogate improvement +0.108 | measured improvement +0.103
+k = 10: surrogate improvement +0.258 | measured improvement +0.309
+```
+
+For one and three updates the surrogate predicts the improvement to within half a point. After ten it misses a sixth of it, 0.258 against 0.309. The missing part is the prefix shift: the moved policy reaches states, such as a correct edit followed by a submit, that the old batch visits too rarely for any reweighting of single tokens to account for. The surrogate is a good model of the objective near $\theta_{\text{old}}$ and a poor one far from it. That suggests the rule PPO implements: optimize the surrogate, but only while the policy stays close.
+
+## 8.2 The clipped surrogate
+
+Maximizing Equation (8.2) with many gradient steps would drive the ratios as far as they can go, into the region where the surrogate is wrong. PPO's clipped objective removes the incentive to go there:
+
+$$
+L^{\text{CLIP}}(\theta) = \mathbb{E}_{\text{old}}\Big[\sum_{i:\, m_i = 1} \min\big(\rho_i \hat A_i,\ \mathrm{clip}(\rho_i,\, 1 - \epsilon_{\text{low}},\, 1 + \epsilon_{\text{high}})\, \hat A_i\big)\Big].
+$$
+
+This is Equation (8.3). The minimum makes it a pessimistic bound on the unclipped surrogate, and its behavior depends on the sign of the advantage:
+
+- **$\hat A > 0$** (the token should become more likely). The term is $\rho \hat A$ until $\rho$ reaches $1 + \epsilon_{\text{high}}$ and then stays constant. Once a good token's probability has grown by the factor $1 + \epsilon_{\text{high}}$, its gradient is zero. Below 1 the minimum keeps the unclipped term, so a good token whose probability fell is always pushed back up.
+- **$\hat A < 0$** (the token should become less likely). The term is $\rho \hat A$ until $\rho$ falls to $1 - \epsilon_{\text{low}}$ and then stays constant. Above 1 the unclipped term, which is more negative, is kept: a bad token whose probability *rose* is always pushed back down, with a gradient that grows with $\rho$.
+
+Clipping therefore removes the incentive to move a token further in the direction its advantage asks for, beyond a factor $1 \pm \epsilon$. It never removes the gradient that would undo a move in the wrong direction. The function computes the per-token objective, reduces it with Chapter 6's `aggregate_loss`, and returns the statistics that Section 8.5 uses as diagnostics. A clipped token is one where the clipped branch is strictly smaller, which is exactly where the gradient is zero.
+
+```python
+#@save
+def ppo_policy_loss(logp, old_logp, advantages, mask, clip_low=0.2, clip_high=0.2, mode='token_mean',
+                    dual_clip=None, norm_const=None):
+    """Clipped surrogate on policy tokens: logp, old_logp, mask [B, T]; advantages [B] or [B, T] -> (loss, stats)."""
+    if advantages.dim() == 1:
+        advantages = advantages[:, None]                          # one advantage per trajectory -> [B, 1]
+    advantages = advantages.detach()
+    log_ratio = logp - old_logp.detach()
+    ratio = log_ratio.exp()                                        # rho = pi_theta / pi_old, [B, T]
+    unclipped = ratio * advantages
+    clipped = ratio.clamp(1 - clip_low, 1 + clip_high) * advantages
+    objective = torch.minimum(unclipped, clipped)                  # Eq. (8.3), per token
+    if dual_clip is not None:                                      # A < 0: bound the objective below by c * A
+        objective = torch.where(advantages < 0, torch.maximum(objective, dual_clip * advantages), objective)
+    loss = arl.aggregate_loss(-objective, mask, mode, norm_const)
+    with torch.no_grad():
+        on = mask > 0
+        r = ratio[on] if on.any() else torch.ones(1)
+        stats = dict(clip_frac=((clipped < unclipped) & on).sum().item() / max(int(on.sum()), 1),
+                     approx_kl=arl.masked_mean(ratio - 1 - log_ratio, mask).item(),   # k3 estimate of KL(old || new)
+                     ratio_min=r.min().item(), ratio_max=r.max().item())
+    return loss, stats
+```
+
+The `approx_kl` statistic is the $k_3$ estimator of $\mathrm{KL}(\pi_{\text{old}} \,\|\, \pi_\theta)$ from samples of $\pi_{\text{old}}$: $\mathbb{E}_{\text{old}}[\rho - 1 - \log \rho]$, which is nonnegative token by token ([Appendix A](A-math.md); [Chapter 10](10-kl-entropy-regularization.md) compares it with the other estimators). The gradient of the loss with respect to each token's log-probability shows the per-sign behavior. Six tokens with ratios from 0.5 to 2, once with $\hat A = +1$ and once with $\hat A = -1$; `seq_mean_token_sum` over one row makes each token's gradient its raw weight.
+
+```python
+ratios = torch.tensor([[0.5, 0.79, 1.0, 1.1, 1.3, 2.0]])                     # [1, 6]
+old = torch.zeros(1, 6)
+for sign in [+1.0, -1.0]:
+    logp = ratios.log().requires_grad_()
+    loss, stats = ppo_policy_loss(logp, old, torch.tensor([sign]), torch.ones(1, 6), mode='seq_mean_token_sum')
+    grad = torch.autograd.grad(loss, logp)[0][0]                             # d loss / d log pi per token
+    print(f'A = {sign:+.0f}: -d loss/d logp =', [f'{-g + 0.0:+.2f}' for g in grad.tolist()],
+          f'| clip_frac {stats["clip_frac"]:.2f}')
+```
+
+Output:
+
+```text
+A = +1: -d loss/d logp = ['+0.50', '+0.79', '+1.00', '+1.10', '+0.00', '+0.00'] | clip_frac 0.33
+A = -1: -d loss/d logp = ['+0.00', '+0.00', '-1.00', '-1.10', '-1.30', '-2.00'] | clip_frac 0.33
+```
+
+The ascent direction on each log-probability is $\rho \hat A$ where the unclipped branch is active, because $\partial \rho / \partial \log \pi = \rho$. With $\hat A = +1$, the tokens at 1.3 and 2.0 are past $1 + \epsilon$ and get nothing, while the tokens at 0.5 and 0.79 are still pushed up. With $\hat A = -1$, the tokens at 0.5 and 0.79, already below $1 - \epsilon = 0.8$, are left alone, and the token at 2.0, a bad action that became twice as likely, is pushed down hardest. The token at 0.79 shows the asymmetry in one number: the same ratio is clipped when its advantage is negative and active when it is positive. In both rows two of the six tokens are clipped, a clip fraction of 0.33.
+
+![Figure 8.2: The per-token clipped objective as a function of the ratio for A = +1 (left) and A = -1 (right), with the unclipped surrogate dashed. Flat segments are where the gradient is zero; the dual clip at c = 3 adds a floor for A < 0.](../figures/ch08-clip-landscape.svg)
+
+Figure 8.2 draws Equation (8.3) for both signs. Each panel is the unclipped line $\rho \hat A$ with one flat piece: on the right for a positive advantage, on the left for a negative one. The flat piece is where the optimizer stops caring, and the sloped piece on the other side of 1 is where it always cares.
+
+### Dual clipping
+
+The unbounded piece for $\hat A < 0$ is deliberate, but it has a failure mode. If a bad token's ratio is very large, for example because the batch is stale or the sampler's probabilities were wrong ([Chapter 13](13-rollout-systems.md)), the term $\rho \hat A$ can dominate the whole batch's gradient. **Dual clipping** (Ye et al., 2020) bounds the objective below by $c \hat A$ for a constant $c > 1$, usually 3:
+
+```python
+logp = torch.tensor([[2.0, 5.0, 20.0]]).log().requires_grad_()               # three bad tokens, ratios 2, 5, 20
+for c in [None, 3.0]:
+    loss, _ = ppo_policy_loss(logp, torch.zeros(1, 3), torch.tensor([-1.0]), torch.ones(1, 3),
+                              mode='seq_mean_token_sum', dual_clip=c)
+    grad = torch.autograd.grad(loss, logp)[0][0]
+    print(f'dual_clip={c}: loss {loss.item():5.1f} | -d loss/d logp {[round(-g, 1) for g in grad.tolist()]}')
+```
+
+Output:
+
+```text
+dual_clip=None: loss  27.0 | -d loss/d logp [-2.0, -5.0, -20.0]
+dual_clip=3.0: loss   8.0 | -d loss/d logp [-2.0, -0.0, -0.0]
+```
+
+Without the dual clip, the token whose ratio is 20 contributes ten times the gradient of the token at 2, and the loss is $2 + 5 + 20 = 27$. With $c = 3$, the two tokens whose ratio exceeds 3 contribute a constant 3 each and no gradient, so the loss is 8, so one badly off-policy token cannot take over the update. The price is that such a token is no longer corrected at all in this update, which is acceptable when large ratios are much more often a symptom of stale or mismatched data than of a real policy change.
+
+## 8.3 The trust-region view
+
+Section 8.1 showed that the surrogate is accurate near $\theta_{\text{old}}$. **Trust Region Policy Optimization** (TRPO; Schulman et al., 2015) turns that into an algorithm. Its analysis gives a lower bound of the form
+
+$$
+J(\theta) \ge J(\theta_{\text{old}}) + L_{\text{old}}(\theta) - C \max_c \mathrm{KL}\big(\pi_{\text{old}}(\cdot \mid c) \,\|\, \pi_\theta(\cdot \mid c)\big),
+$$
+
+where $L_{\text{old}}$ here is the surrogate improvement and $C$ depends on the discount and on the largest advantage. Maximizing the right-hand side guarantees improvement. In practice TRPO maximizes $L_{\text{old}}(\theta)$ subject to an *average* KL constraint $\bar{\mathrm{KL}} \le \delta$, using the natural gradient: it solves $F x = g$ for the Fisher information matrix $F$ by conjugate gradient with Fisher-vector products, scales the step to the constraint, and backtracks with a line search until the surrogate improves and the KL is inside the region. For a language model, each Fisher-vector product is a second-order pass through the whole network, and the line search needs extra forward passes. That is why TRPO itself is rarely used for LLMs, while its idea is everywhere.
+
+PPO replaces the constraint with clipping, which costs nothing beyond a first-order optimizer. The two are not equivalent. Clipping removes the incentive to push a token's ratio past $1 \pm \epsilon$, but parameters are shared across tokens, so a step that helps other tokens can move a clipped token further, and nothing pulls it back. The block below takes one minibatch of the old batch and runs 40 Adam steps on the clipped loss and, for comparison, on the unclipped surrogate (the clip set to infinity), then reports the KL and the share of ratios outside $[0.8, 1.2]$.
+
+```python
+rows = torch.arange(64)
+adv = (old_batch['rewards'][rows] - old_batch['rewards'][rows].mean())       # [64] outcome advantages
+for name, eps in [('clipped, eps = 0.2', 0.2), ('unclipped', float('inf'))]:
+    policy = copy.deepcopy(base)
+    opt = torch.optim.Adam(policy.parameters(), lr=1e-3)
+    for step in range(40):
+        logp = arl.sequence_log_probs(policy, old_batch['ids'][rows])
+        loss, stats = ppo_policy_loss(logp, old_logp[rows], adv, mask[rows], eps, eps)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    ratio = (logp.detach() - old_logp[rows]).exp()[mask[rows] > 0]
+    outside = ((ratio < 0.8) | (ratio > 1.2)).float().mean().item()
+    print(f'{name:<18}: approx KL {stats["approx_kl"]:.3f} | ratios outside [0.8, 1.2] {outside:.2f}'
+          f' | max ratio {ratio.max():.1f}')
+```
+
+Output:
+
+```text
+clipped, eps = 0.2: approx KL 0.237 | ratios outside [0.8, 1.2] 0.41 | max ratio 12.2
+unclipped         : approx KL 5.885 | ratios outside [0.8, 1.2] 0.47 | max ratio 2896.7
+```
+
+The 64 episodes are the first four training tasks' share of the old batch. Clipping cut the KL after 40 steps by a factor of 25, from 5.9 to 0.24, and the largest ratio from about 2,900 to 12. It did not keep the ratios inside the band: 41% of them ended outside it, against 47% without any clip. The clip is a soft trust region. It slows drift by zeroing the incentive, and the drift that remains depends on the learning rate, the number of steps, and how strongly tokens share parameters. That is why PPO implementations limit the number of passes over a batch and monitor the KL directly (Section 8.5), and why some add an explicit KL penalty or stop early when the KL exceeds a target.
+
+## 8.4 The value loss and the PPO loop
+
+PPO as published trains a critic alongside the policy and uses GAE advantages ([Section 7.3](07-advantages-and-credit.md#73-generalized-advantage-estimation)). The critic regresses on the value targets $\hat V^{\text{targ}}_i = \hat A_i + V_{\text{old}}(c_i)$ that `gae_advantages` returns. Because the critic is also updated several times on the same batch, the same trust-region problem appears, and PPO2-style implementations clip it the same way: the new value may move at most $\epsilon_v$ away from the value recorded at sampling time before the clipped branch takes over,
+
+$$
+\mathcal{L}^V = \tfrac{1}{2}\, \mathbb{E}\Big[\max\big((V_\phi - \hat V^{\text{targ}})^2,\ (V_{\text{old}} + \mathrm{clip}(V_\phi - V_{\text{old}}, -\epsilon_v, \epsilon_v) - \hat V^{\text{targ}})^2\big)\Big].
+$$
+
+The maximum makes it pessimistic, as the policy's minimum does. Whether value clipping helps is disputed. In a large study of on-policy design choices on continuous-control tasks, Andrychowicz et al. (2021) found that "PPO-style value loss clipping hurts the performance regardless of the clipping threshold"; that evidence is not from language models. We implement it because it is the default in many LLM PPO stacks, with `clip=None` to turn it off.
+
+```python
+#@save
+def value_loss(values, old_values, returns, mask, clip=0.2):
+    """Clipped value regression on policy tokens: values, old_values, returns, mask [B, T] -> scalar."""
+    old_values, returns = old_values.detach(), returns.detach()
+    per_token = (values - returns) ** 2
+    if clip is not None:                                           # the move from old_values is limited to +-clip
+        moved = old_values + (values - old_values).clamp(-clip, clip)
+        per_token = torch.maximum(per_token, (moved - returns) ** 2)
+    return 0.5 * arl.masked_mean(per_token, mask)
+```
+
+### The critic needs a head start
+
+[Section 7.4](07-advantages-and-credit.md#74-learning-a-critic) measured how weak a TinyAgent critic is: explained variance 0.02 to 0.08 on fresh episodes. A critic whose new head starts from random weights is worse still, and with $\lambda < 1$ its errors enter the policy gradient directly (Figure 7.1). Two mitigations are standard, and we use both: **warm up** the critic on rollouts of the initial policy before the first policy update, and start with $\lambda = 1$, where the critic is only a baseline and cannot bias the gradient. `warm_critic` is Chapter 7's regression on Monte Carlo returns.
+
+```python
+def mc_returns(batch):
+    """Monte Carlo value targets: the outcome on every policy token [B, T-1]."""
+    return arl.returns_to_go(arl.outcome_rewards(batch['rewards'], batch['action_mask']), batch['action_mask'])
+
+def warm_critic(policy, steps=100, seed=0):
+    """A critic copied from the policy and regressed on 480 of its episodes before PPO starts."""
+    critic, data = arl.make_critic(policy), arl.collate(sample(policy, train_tasks, 24, seed=1), tok.pad_id)
+    opt, gen, targets = torch.optim.Adam(critic.parameters(), lr=1e-3), torch.Generator().manual_seed(seed), mc_returns(data)
+    for _ in range(steps):
+        idx = torch.randint(len(targets), (32,), generator=gen)
+        values = arl.critic_values(critic, data['ids'][idx])
+        loss = arl.masked_mean((values - targets[idx]) ** 2, data['action_mask'][idx])
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    return critic
+```
+
+### One PPO iteration
+
+An iteration has two phases. The first freezes everything that defines $\pi_{\text{old}}$: the log-probabilities of the sampled tokens, the critic's values, and the GAE advantages and targets computed from them. Advantages are then **whitened** across the batch's policy tokens (mean 0, standard deviation 1), as most PPO implementations do. The second phase runs `epochs` passes over the batch in shuffled minibatches, each with one policy step and one critic step, and records the statistics of each epoch.
+
+```python
+def ppo_prepare(policy, critic, batch, lam):
+    """Freeze pi_old: old log-probs, old values, whitened GAE advantages, value targets; all [B, T-1]."""
+    m = batch['action_mask']
+    with torch.no_grad():
+        old_logp = arl.sequence_log_probs(policy, batch['ids'])
+        old_values = arl.critic_values(critic, batch['ids'])
+    adv, returns = arl.gae_advantages(arl.outcome_rewards(batch['rewards'], m), old_values, m, 1.0, lam)
+    on = m > 0
+    adv = (adv - adv[on].mean()) / (adv[on].std() + 1e-8) * m
+    return old_logp, old_values, adv, returns
+```
+
+```python
+def ppo_epochs(policy, critic, popt, vopt, batch, prepared, epochs=4, minibatches=4, gen=None, target_kl=None):
+    """Clipped policy and value updates over shuffled minibatches -> list of per-epoch mean stats."""
+    old_logp, old_values, adv, returns = prepared
+    ids, m, per_epoch = batch['ids'], batch['action_mask'], []
+    for _ in range(epochs):
+        logs = []
+        for rows in torch.randperm(len(ids), generator=gen).chunk(minibatches):
+            loss, stats = ppo_policy_loss(arl.sequence_log_probs(policy, ids[rows]), old_logp[rows], adv[rows], m[rows])
+            popt.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(policy.parameters(), 1.0)
+            popt.step()
+            vloss = value_loss(arl.critic_values(critic, ids[rows]), old_values[rows], returns[rows], m[rows])
+            vopt.zero_grad()
+            vloss.backward()
+            vopt.step()
+            logs.append(stats)
+        per_epoch.append({k: sum(s[k] for s in logs) / len(logs) for k in logs[0]})
+        if target_kl is not None and per_epoch[-1]['approx_kl'] > target_kl:
+            break                                                 # early stopping (Section 8.5)
+    return per_epoch
+```
+
+The loop samples 64 episodes of random training tasks per iteration, as Chapter 6 did, and logs the batch reward and the critic's explained variance against the Monte Carlo returns, measured before the critic sees the batch. We run it twice, with $\lambda = 1$ and $\lambda = 0.95$, for 30 iterations of 4 epochs and 4 minibatches: 16 policy steps per batch.
+
+```python
+def run_ppo(lam, iters=30, epochs=4, minibatches=4, lr=1e-3, target_kl=None, seed=0):
+    """PPO with a warmed-up critic on the train tasks -> (policy, history of per-iteration dicts)."""
+    torch.manual_seed(seed)
+    policy, critic, gen = copy.deepcopy(base), warm_critic(base), torch.Generator().manual_seed(seed)
+    popt, vopt = torch.optim.Adam(policy.parameters(), lr=lr), torch.optim.Adam(critic.parameters(), lr=1e-3)
+    history = []
+    for it in range(iters):
+        tasks = [train_tasks[i] for i in torch.randint(len(train_tasks), (64,), generator=gen).tolist()]
+        batch = arl.collate(arl.rollout_batch(policy, [arl.BugFixEnv() for _ in tasks], tasks, tok, generator=gen),
+                            tok.pad_id)
+        prepared = ppo_prepare(policy, critic, batch, lam)
+        varied = batch['rewards'].std() > 0
+        ev = arl.explained_variance(prepared[1], mc_returns(batch), batch['action_mask']) if varied else float('nan')
+        per_epoch = ppo_epochs(policy, critic, popt, vopt, batch, prepared, epochs, minibatches, gen, target_kl)
+        history.append(dict(reward=batch['rewards'].mean().item(), ev=ev, per_epoch=per_epoch))
+    return policy, history
+```
+
+```python
+runs = {lam: run_ppo(lam) for lam in [1.0, 0.95]}
+for lam, (policy, history) in runs.items():
+    evs = [h['ev'] for h in history if h['ev'] == h['ev']]                     # skip NaN (all-equal batches)
+    curve = [sum(h['reward'] for h in history[i:i + 10]) / 10 for i in range(0, 30, 10)]
+    train = arl.rollout_stats(sample(policy, train_tasks, 16, seed=7))['pass_rate']
+    held = arl.rollout_stats(sample(policy, heldout_tasks, 16, seed=7))['pass_rate']
+    print(f'lambda {lam}: batch reward by 10 iterations {[round(c, 2) for c in curve]} | critic EV mean'
+          f' {sum(evs) / len(evs):+.2f} | pass train {train:.3f} held-out {held:.3f}')
+```
+
+Output:
+
+```text
+lambda 1.0: batch reward by 10 iterations [0.49, 0.88, 0.95] | critic EV mean +0.12 | pass train 0.900 held-out 0.312
+lambda 0.95: batch reward by 10 iterations [0.42, 0.85, 0.91] | critic EV mean +0.26 | pass train 0.925 held-out 0.331
+```
+
+Both runs reach a training pass rate of about 0.9 within 30 iterations, faster per sampled episode than Chapter 6's REINFORCE, which needed 80 batches to reach 0.78: each batch now feeds 16 steps instead of one. Measured against the Monte Carlo returns of each new batch, before it trains on that batch, the critic explains 12% of their variance on average with $\lambda = 1$ and 26% with $\lambda = 0.95$. That is better than Chapter 7's 2% to 8% on fresh episodes, because the warmed-up critic keeps training on the policy it evaluates, and still far from a critic that could assign credit within an episode. The held-out pass rates, 0.31 and 0.33, are lower than REINFORCE's 0.46. Reusing each batch 16 times fits the training tasks harder, including the function names that Chapter 6 found the policy memorizing. PPO made the optimization more sample-efficient and did nothing about *what* is being learned. [Chapter 9](09-grpo-and-variants.md) diagnoses that problem in the environment and fixes it there.
+
+> **Evidence.** Measured here, one seed per setting, 30 iterations of 64 episodes. The comparison between $\lambda = 1$ and $\lambda = 0.95$ is within the noise of a single run and should not be read as a preference. What the run does support is the mechanism claim: with a critic this weak, GAE adds little, and the critic costs a second network and a second optimizer.
+
+## 8.5 Diagnostics and early stopping
+
+Three numbers tell an engineer whether reuse is safe, and every PPO-family trainer should log them per epoch.
+
+- **Clip fraction**: the share of policy tokens whose clipped branch is active. Near 0, the clip is idle and the update is plain policy gradient. Rising across epochs, the policy is reaching the edge of the trust region.
+- **Approximate KL** between $\pi_{\text{old}}$ and $\pi_\theta$, the $k_3$ estimate on the batch. It measures how far the policy has moved in the quantity the trust-region bound uses.
+- **Ratio statistics**: the minimum and maximum ratio over policy tokens, which catch the few tokens the averages hide.
+
+The per-epoch statistics of the $\lambda = 1$ run, averaged over its 30 iterations:
+
+```python
+history = runs[1.0][1]
+for e in range(4):
+    stats = [h['per_epoch'][e] for h in history]
+    mean = {k: sum(s[k] for s in stats) / len(stats) for k in stats[0]}
+    print(f'epoch {e + 1}: clip_frac {mean["clip_frac"]:.3f} | approx_kl {mean["approx_kl"]:.4f}'
+          f' | ratio range {mean["ratio_min"]:.2f} to {mean["ratio_max"]:.2f}')
+```
+
+Output:
+
+```text
+epoch 1: clip_frac 0.013 | approx_kl 0.0049 | ratio range 0.72 to 1.49
+epoch 2: clip_frac 0.060 | approx_kl 0.0371 | ratio range 0.26 to 2.88
+epoch 3: clip_frac 0.075 | approx_kl 0.0685 | ratio range 0.16 to 4.70
+epoch 4: clip_frac 0.089 | approx_kl 0.1047 | ratio range 0.12 to 7.02
+```
+
+The first epoch is nearly on-policy: its first minibatch has ratios of exactly 1, and the later ones have moved by three gradient steps at most, so 1.3% of tokens are clipped and the KL is 0.005. Each later epoch moves further. By the fourth, 9% of the tokens are clipped, the KL is 21 times the first epoch's, and the average minimum and maximum ratios, 0.12 and 7.0, are far outside the clip band, as Section 8.3 predicted.
+
+![Figure 8.3: Clip fraction (left) and approximate KL (right) per PPO epoch. Averaged over the 30 iterations of the λ = 1 run (4 epochs), and for one batch updated for 16 epochs, with the early-stopping target of 0.02 marked.](../figures/ch08-epochs.svg)
+
+Figure 8.3 draws the same statistics for the training run and for a single large batch updated for 16 epochs (Section 8.6). In both, the clip fraction rises with every epoch. The KL of the training run crosses the dashed early-stopping target during the second epoch, which is where early stopping, below, cuts most iterations.
+
+**Early stopping** uses the KL as the stopping rule: after each epoch, stop if the approximate KL exceeds a target, commonly 0.01 to 0.05. It turns the number of epochs into a budget rather than a constant. `ppo_epochs` already accepts `target_kl`; we rerun the $\lambda = 1$ setting with a target of 0.02 and count how many epochs each iteration used.
+
+```python
+policy, history = run_ppo(1.0, target_kl=0.02)
+used = [len(h['per_epoch']) for h in history]
+train = arl.rollout_stats(sample(policy, train_tasks, 16, seed=7))['pass_rate']
+held = arl.rollout_stats(sample(policy, heldout_tasks, 16, seed=7))['pass_rate']
+print(f'epochs used per iteration: {used}')
+print(f'mean {sum(used) / len(used):.2f} of 4 | pass train {train:.3f} held-out {held:.3f}')
+```
+
+Output:
+
+```text
+epochs used per iteration: [2, 3, 3, 4, 3, 2, 2, 2, 3, 2, 2, 2, 2, 3, 2, 2, 4, 3, 2, 2, 4, 2, 2, 2, 2, 2, 3, 3, 2, 4]
+mean 2.53 of 4 | pass train 0.912 held-out 0.206
+```
+
+Most iterations crossed the target after their second or third epoch, so the run used about 63% of the gradient steps of the fixed-epoch run and reached the same training pass rate, 0.91. Its held-out pass rate, 0.21, is lower than the fixed-epoch runs'. It is one 160-episode measurement of one seed, about three standard errors below them, and the memorization this chapter does not address dominates it; it is not evidence that early stopping generalizes worse.
+
+## 8.6 Design problems in practice
+
+> **Problem: too many epochs.** *Symptom:* the clip fraction and the KL climb across epochs, the policy's entropy collapses or, after many epochs, jumps, and the training reward becomes erratic. *Cause:* each epoch moves the policy further from $\pi_{\text{old}}$ (Section 8.3), the surrogate's error grows with that distance (Section 8.1), and the clip does not stop the drift. *Options:* (a) fewer epochs, which wastes less compute per sample than it seems because later epochs are mostly clipped. (b) Early stopping on a KL target, which adapts the number of epochs per batch. (c) A smaller learning rate, which makes each epoch cheaper in KL but slows learning. *Default:* 1 to 2 epochs for LLM agents, with early stopping as a guard, because rollouts are where the money goes but a corrupted policy wastes all of them. The block below updates one batch for 16 epochs and prints every fourth.
+
+```python
+batch = old_batch
+torch.manual_seed(0)                                                         # the critic head's initialization
+policy, critic = copy.deepcopy(base), warm_critic(base)
+popt, vopt = torch.optim.Adam(policy.parameters(), lr=1e-3), torch.optim.Adam(critic.parameters(), lr=1e-3)
+prepared_16 = ppo_prepare(policy, critic, batch, 1.0)
+many = ppo_epochs(policy, critic, popt, vopt, batch, prepared_16, epochs=16, minibatches=4,
+                  gen=torch.Generator().manual_seed(0))
+policy_16 = policy
+with torch.no_grad():
+    entropy = [arl.masked_mean(arl.entropy_from_logits(m(batch['ids'])[:, :-1]), mask).item() for m in (base, policy)]
+for e in [0, 3, 7, 11, 15]:
+    print(f'epoch {e + 1:2d}: clip_frac {many[e]["clip_frac"]:.3f} | approx_kl {many[e]["approx_kl"]:.3f}'
+          f' | max ratio {many[e]["ratio_max"]:.1f}')
+print(f'policy-token entropy before {entropy[0]:.3f} -> after 16 epochs {entropy[1]:.3f}')
+```
+
+Output:
+
+```text
+epoch  1: clip_frac 0.043 | approx_kl 0.007 | max ratio 1.7
+epoch  4: clip_frac 0.097 | approx_kl 0.018 | max ratio 3.9
+epoch  8: clip_frac 0.135 | approx_kl 0.023 | max ratio 4.2
+epoch 12: clip_frac 0.155 | approx_kl 0.024 | max ratio 4.3
+epoch 16: clip_frac 0.170 | approx_kl 0.027 | max ratio 4.3
+policy-token entropy before 0.515 -> after 16 epochs 0.530
+```
+
+The clip fraction rises from 4% in the first epoch to 17% in the sixteenth, so later epochs spend their compute on a shrinking share of the tokens: by the end, one token in six contributes no gradient. The KL grows quickly over the first five epochs and then levels off near 0.027, above the early-stopping target from the fifth epoch on, and the largest ratio settles near 4.3, more than three times the clip edge. The two effects together are what the clip does under reuse: tokens that reach the band stop contributing, the tokens still inside it keep moving the shared parameters, and the policy keeps drifting slowly with ever less learning signal per epoch. The policy-token entropy on this batch barely changed (0.52 to 0.53), so the drift is not a collapse; it is wasted compute that moves the policy away from the distribution its data describe. Figure 8.3 contrasts this batch with the training run, whose KL per epoch is larger because its 64-episode batches give each minibatch only 16 episodes, so each step fits fewer examples harder.
+
+> **Problem: minibatch size versus staleness.** *Symptom:* splitting a batch into more minibatches speeds learning per sample at first, then destabilizes it. *Cause:* minibatch $j$ of an epoch is evaluated under a policy that has already taken $j - 1$ steps on the same batch, so later minibatches are more off-policy, even in the first epoch. *Options:* (a) fewer, larger minibatches, which are closer to on-policy but take fewer steps per sample. (b) More minibatches with a smaller learning rate. (c) Early stopping that counts minibatch steps rather than epochs. *Default:* 2 to 4 minibatches per batch, with clip fraction and KL logged per minibatch. The block below runs one epoch on the old batch with 1 to 16 minibatches and reports the KL seen by the last minibatch.
+
+```python
+for minibatches in [1, 2, 4, 8, 16]:
+    torch.manual_seed(0)
+    policy, critic = copy.deepcopy(base), warm_critic(base)
+    popt, vopt = torch.optim.Adam(policy.parameters(), lr=1e-3), torch.optim.Adam(critic.parameters(), lr=1e-3)
+    prepared = ppo_prepare(policy, critic, old_batch, 1.0)
+    old_lp, adv = prepared[0], prepared[2]
+    ppo_epochs(policy, critic, popt, vopt, old_batch, prepared, 1, minibatches, torch.Generator().manual_seed(0))
+    with torch.no_grad():
+        _, after = ppo_policy_loss(arl.sequence_log_probs(policy, old_batch['ids']), old_lp, adv, mask)
+    print(f'{minibatches:2d} minibatches of {320 // minibatches:3d}: KL after one epoch {after["approx_kl"]:.4f}'
+          f' | clip_frac {after["clip_frac"]:.3f}')
+```
+
+Output:
+
+```text
+ 1 minibatches of 320: KL after one epoch 0.0062 | clip_frac 0.051
+ 2 minibatches of 160: KL after one epoch 0.0082 | clip_frac 0.078
+ 4 minibatches of  80: KL after one epoch 0.0112 | clip_frac 0.073
+ 8 minibatches of  40: KL after one epoch 0.0186 | clip_frac 0.088
+16 minibatches of  20: KL after one epoch 0.0219 | clip_frac 0.091
+```
+
+Even a single step on the whole batch moves the policy by a KL of 0.006, because Adam's first steps have a size set by the learning rate rather than by the gradient. More minibatches mean more steps: with 16 minibatches, one epoch moves the policy 3.5 times as far and already exceeds an early-stopping target of 0.02. "One epoch" is therefore not a unit of staleness; the number of optimizer steps per batch is.
+
+> **Problem: `old_logp` from the trainer or from the sampler.** *Symptom:* a run whose clip fraction is high from the very first minibatch, or a run in which the clip never activates however many epochs it takes. *Cause:* $\pi_{\text{old}}$ must be the distribution that actually sampled the tokens. Recomputing `old_logp` with the trainer's forward pass is correct only if the trainer computes the same probabilities as the sampler. Recomputing it *inside* the update loop, from the current parameters, is a bug: every ratio is then exactly 1. *Options:* (a) recompute `old_logp` once, before the first update, with the trainer, which is what this chapter and most open-source trainers do. (b) Use the sampler's log-probabilities, which is exact about the behavior policy but makes ratios absorb any numerical mismatch between the engines. (c) Use both: the trainer's for the PPO ratio and the sampler's for an explicit mismatch correction ([Chapter 13](13-rollout-systems.md)). *Default:* (a) in a single-process setting like this one, (c) in production. The block below compares Chapter 5's stored `sample_logp` with the trainer's recomputation, then reproduces the bug.
+
+```python
+diff = ((old_logp - old_batch['sample_logp']).abs() * mask).max().item()
+print(f'max |trainer log-prob - sampler log-prob| over {int(mask.sum())} policy tokens: {diff:.1e}')
+policy = copy.deepcopy(base)
+opt = torch.optim.Adam(policy.parameters(), lr=1e-3)
+for step in range(8):                                                       # the bug: old_logp recomputed every step
+    logp = arl.sequence_log_probs(policy, old_batch['ids'][:64])
+    loss, stats = ppo_policy_loss(logp, logp.detach(), prepared_16[2][:64], mask[:64])
+    opt.zero_grad()
+    loss.backward()
+    opt.step()
+print(f'after 8 steps with old_logp = logp.detach(): clip_frac {stats["clip_frac"]:.3f}, approx_kl {stats["approx_kl"]:.4f}')
+```
+
+Output:
+
+```text
+max |trainer log-prob - sampler log-prob| over 3620 policy tokens: 2.1e-06
+after 8 steps with old_logp = logp.detach(): clip_frac 0.000, approx_kl 0.0000
+```
+
+Here the two sources agree to $2 \times 10^{-6}$, the float32 rounding difference between a padded lockstep forward pass and a full-batch one. They agree because TinyAgent samples and trains in the same process, with the same weights, the same dtype, and the same kernels, at temperature 1 without top-p. In production none of that holds. The sampler is an inference engine with its own kernels, often in bf16, with batch-dependent reductions, sometimes with different sampling parameters and with weights that may lag the trainer by one or more updates. The disagreement is then large enough to matter, and [Chapter 13](13-rollout-systems.md) measures it on Qwen3-0.6B. The second line is the bug: with `old_logp` taken from the current forward pass, every ratio is 1, the clip never binds, and the loss is plain REINFORCE no matter how many steps run. The dashboards show a clip fraction of exactly 0 and a KL of exactly 0, which is itself the signature.
+
+> **Problem: asymmetric clipping.** *Symptom:* entropy falls steadily during training, and rare actions that turn out to be good gain probability very slowly. *Cause:* the upper clip bounds the *relative* growth of a good token's probability per batch by $1 + \epsilon_{\text{high}}$, so a token with $\pi_{\text{old}} = 0.01$ can reach at most 0.012 with $\epsilon_{\text{high}} = 0.2$, while a token at 0.5 can reach 0.6. The lower clip bounds how fast probability can be removed from a bad token, and the removed mass flows mostly to the already-likely tokens. Both effects concentrate the distribution. *Options:* (a) **clip-higher**: raise $\epsilon_{\text{high}}$ (DAPO uses 0.28 with $\epsilon_{\text{low}} = 0.2$; [Chapter 9](09-grpo-and-variants.md)), which lets rare good tokens grow faster at the cost of a looser trust region. (b) An entropy bonus ([Chapter 10](10-kl-entropy-regularization.md)). (c) Lower $\epsilon_{\text{low}}$ to slow the removal of mass. *Default:* symmetric 0.2 as the baseline, and clip-higher when entropy collapse is measured. The block below asks which tokens the upper clip actually stopped in the 16-epoch run, by their probability under $\pi_{\text{old}}$.
+
+```python
+with torch.no_grad():
+    ratio = (arl.sequence_log_probs(policy_16, old_batch['ids']) - old_logp).exp()   # [B, T-1] after 16 epochs
+old_p, on = old_logp.exp(), mask > 0                                         # pi_old of each sampled token
+for lo, hi in [(0.0, 0.1), (0.1, 0.5), (0.5, 1.0)]:
+    good = on & (prepared_16[2] > 0) & (old_p >= lo) & (old_p < hi + 1e-6)   # positive-advantage tokens
+    above = (ratio[good] > 1.2).float().mean().item()
+    print(f'pi_old in [{lo:.1f}, {hi:.1f}]: {int(good.sum()):4d} tokens | ratio above 1.2: {above:.2f}'
+          f' | median ratio {ratio[good].median():.2f}')
+```
+
+Output:
+
+```text
+pi_old in [0.0, 0.1]:   59 tokens | ratio above 1.2: 0.73 | median ratio 1.39
+pi_old in [0.1, 0.5]:  235 tokens | ratio above 1.2: 0.60 | median ratio 1.23
+pi_old in [0.5, 1.0]:  469 tokens | ratio above 1.2: 0.06 | median ratio 1.00
+```
+
+Among the positive-advantage tokens that $\pi_{\text{old}}$ gave less than 0.1, 73% ended with a ratio above 1.2, with a median of 1.39: those are the tokens the upper clip stopped. Among tokens above 0.5, only 6% did, because a ratio cannot exceed $1/\pi_{\text{old}} \le 2$ and most of them were already near 1. The upper clip therefore binds mostly on exactly the rare tokens whose growth is exploration, which is DAPO's argument for raising $\epsilon_{\text{high}}$. The cap on growth is an absolute amount, $\epsilon_{\text{high}}\, \pi_{\text{old}}$ per batch, proportional to the token's current probability.
+
+## Summary
+
+- Reusing a batch after an update requires reweighting. The exact trajectory weight is a product of per-token ratios over policy tokens (the environment's terms cancel), and its variance grows exponentially with the number of policy tokens: after three REINFORCE updates, 320 base-agent episodes were worth a third of their number, and the IS estimate of the new pass rate fell far below the truth.
+- PPO's surrogate uses per-token ratios. It corrects each action's probability and ignores the change in which prefixes are visited, so it agrees with the true improvement to first order and loses accuracy as the policy moves: it predicted the improvement of one and three updates to within half a point and missed a sixth of ten updates'.
+- The clipped objective removes the incentive to push a token's ratio past $1 \pm \epsilon$ in the direction its advantage asks for, and keeps the gradient that undoes moves in the wrong direction. It is a soft trust region: after 40 steps on one minibatch, 41% of ratios were outside the band, though the KL was 25 times smaller than without the clip. Dual clipping bounds the influence of very large ratios on negative-advantage tokens.
+- PPO with a warmed-up critic learned the training tasks in 30 batches. The critic explained 12% to 26% of the variance of the returns, so it acted mostly as a baseline, and heavy reuse made the memorization of Chapter 6 worse on held-out tasks.
+- Log clip fraction, approximate KL, and ratio extremes per epoch. Both grow with every epoch and every extra minibatch; early stopping at a KL target of 0.02 used about 63% of the gradient steps for the same training pass rate. Recompute `old_logp` once before updating, never inside the loop.
+
+## Exercises
+
+1. Show that the environment's factors cancel in Equation (8.1) even when the environment is stochastic, as long as both policies face the same environment. Which assumption fails when the tool outputs depend on wall-clock time or on a shared cache, and what happens to the ratio?
+2. Derive the performance-difference identity of Section 8.1 from the definition of $A^{\text{old}}$ by telescoping $\sum_i \big(r_i + V^{\text{old}}(c_{\mathrm{nx}(i)}) - V^{\text{old}}(c_i)\big)$ along a trajectory of $\pi_\theta$. Where exactly does the per-token surrogate make its approximation?
+3. Change an assumption: repeat the IS table of Section 8.1 with self-normalized importance sampling, $\sum_n w_n R_n / \sum_n w_n$. Is it closer to the fresh-sample pass rate? It is biased; in which direction, and why is that bias often preferred?
+4. Implement the KL-penalty variant of PPO ("PPO-penalty"): no clipping, a term $\beta\, \widehat{\mathrm{KL}}$ in the loss, and $\beta$ doubled or halved after each batch to track a KL target. Compare its per-epoch KL with the clipped version on the run of Section 8.4.
+5. Run Section 8.4's PPO with `value_loss(..., clip=None)` and with `clip=0.05`. Track the critic's explained variance on fresh episodes. Does value clipping help or hurt this critic?
+6. Measure the clip fraction separately for positive- and negative-advantage tokens in the 16-epoch run. Which side binds more often, and how does raising $\epsilon_{\text{high}}$ to 0.28 change the entropy after 16 epochs?
+7. Design review: a teammate proposes 8 epochs of 8 minibatches per batch "to make rollouts eight times cheaper". Using the measurements of Section 8.6, list what you would expect on the dashboard, the experiment you would ask for, and the guard you would require before agreeing.

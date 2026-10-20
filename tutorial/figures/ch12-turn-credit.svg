@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 470" width="980" height="470" role="img" aria-label="Turn-level credit on one real episode"><style>
+svg{--plate:#fcfcfb;--hi:#18181b;--mid:#71717a;--lo:#d4d4d8;--accent:#2a78d6;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+@media (prefers-color-scheme: dark){svg{--plate:#111113;--hi:#fafafa;--mid:#a1a1aa;--lo:#3f3f46;--accent:#3987e5}}
+.plate{fill:var(--plate)}
+.sil{fill:var(--plate);stroke:var(--hi);stroke-width:.9;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.crease{fill:none;stroke:var(--mid);stroke-width:.9;stroke-linecap:round;opacity:.75;vector-effect:non-scaling-stroke}
+.floor{fill:var(--lo)}
+.guide{fill:none;stroke:var(--lo);stroke-width:.9;stroke-dasharray:2 4;vector-effect:non-scaling-stroke}
+.track{fill:none;stroke:var(--mid);stroke-width:.9;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.accent{fill:none;stroke:var(--accent);stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+.pulse{fill:none;stroke:var(--accent);stroke-width:2.6;stroke-linecap:round;stroke-dasharray:10 400;
+  animation:flow 3.2s linear infinite}
+@keyframes flow{from{stroke-dashoffset:410}to{stroke-dashoffset:0}}
+@media (prefers-reduced-motion: reduce){.pulse{animation:none;stroke-dasharray:none;opacity:0}}
+.leader{fill:none;stroke:var(--mid);stroke-width:.7;vector-effect:non-scaling-stroke}
+.dot{fill:var(--hi)}
+.num{fill:var(--mid);font-size:10px;letter-spacing:.08em}
+.name{fill:var(--hi);font-size:12px;font-weight:600;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.desc{fill:var(--mid);font-size:11px;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.cap{fill:var(--mid);font-size:10px;letter-spacing:.14em}
+.read{fill:var(--hi);font-size:11px}
+.tlabel{fill:var(--mid);font-size:10px}
+.cell{fill:var(--plate);stroke:var(--mid);stroke-width:.9}
+.cell-prompt{fill:var(--plate);stroke:var(--mid);stroke-width:.9;stroke-dasharray:1.5 2.5}
+.cell-policy{fill:var(--plate);stroke:var(--accent);stroke-width:1.4}
+.cell-reward{fill:var(--plate);stroke:var(--hi);stroke-width:.9}
+.ctext{fill:var(--hi);font-size:11px}
+.mask{fill:var(--mid);font-size:10px}
+.mask1{fill:var(--accent);font-size:10px;font-weight:600}
+.card{fill:var(--plate);stroke:var(--hi);stroke-width:.9}
+.card-soft{fill:var(--plate);stroke:var(--mid);stroke-width:.9}
+.card-accent{fill:var(--plate);stroke:var(--accent);stroke-width:1.4}
+.card-dot{fill:var(--plate);stroke:var(--mid);stroke-width:.9;stroke-dasharray:1.5 2.5}
+.ctitle{fill:var(--hi);font-size:12px;font-weight:600;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.cline{fill:var(--mid);font-size:11px;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.cmono{fill:var(--hi);font-size:11px}
+.chead{fill:var(--mid);font-size:10px;letter-spacing:.12em}
+.vpos{fill:var(--accent);font-size:13px;font-weight:600}
+.vneg{fill:var(--hi);font-size:13px;font-weight:600}
+.vzero{fill:var(--mid);font-size:13px}
+.ttemplate{fill:var(--mid);font-size:10px}
+.readk{fill:var(--mid);font-size:11px}
+</style><rect class="plate" width="980" height="470" rx="10"/>
+<text class="cap" x="24" y="34" text-anchor="start">FIG 12.1 · TURN-LEVEL CREDIT ON ONE REAL EPISODE</text><text class="readk" x="24" y="50" text-anchor="start">turn-GAE policy and its critic after 40 steps; reward = verdict − 0.05 per call; γ = 1, λ = 0.95; unwhitened</text><text class="chead" x="172.0" y="109.0" text-anchor="end">CALL a_k</text><text class="cline" x="172.0" y="161.0" text-anchor="end">reward r_k</text><text class="cline" x="172.0" y="215.0" text-anchor="end">value V(s_k)</text><text class="cline" x="172.0" y="269.0" text-anchor="end">TD error δ_k</text><text class="cline" x="172.0" y="323.0" text-anchor="end">turn advantage A_k</text><rect class="card" x="190.0" y="84.0" width="150.0" height="40.0" rx="8"></rect><text class="cmono" x="265.0" y="108.0" text-anchor="middle">read</text><rect class="card-soft" x="212.0" y="138.0" width="106.0" height="36.0" rx="8"></rect><text class="vneg" x="265.0" y="161.0" text-anchor="middle">−0.050</text><rect class="card-soft" x="212.0" y="192.0" width="106.0" height="36.0" rx="8"></rect><text class="vpos" x="265.0" y="215.0" text-anchor="middle">+0.571</text><rect class="card-soft" x="212.0" y="246.0" width="106.0" height="36.0" rx="8"></rect><text class="vneg" x="265.0" y="269.0" text-anchor="middle">−0.116</text><rect class="card-soft" x="212.0" y="300.0" width="106.0" height="36.0" rx="8"></rect><text class="vpos" x="265.0" y="323.0" text-anchor="middle">+0.180</text><path class="track" d="M344.0,104.0 L368.0,104.0"/><path class="track" d="M361.7,107.0 L368.0,104.0 L361.7,101.0"/><rect class="card" x="374.0" y="84.0" width="150.0" height="40.0" rx="8"></rect><text class="cmono" x="449.0" y="108.0" text-anchor="middle">edit fix_comparison</text><rect class="card-soft" x="396.0" y="138.0" width="106.0" height="36.0" rx="8"></rect><text class="vneg" x="449.0" y="161.0" text-anchor="middle">−0.050</text><rect class="card-soft" x="396.0" y="192.0" width="106.0" height="36.0" rx="8"></rect><text class="vpos" x="449.0" y="215.0" text-anchor="middle">+0.505</text><rect class="card-soft" x="396.0" y="246.0" width="106.0" height="36.0" rx="8"></rect><text class="vneg" x="449.0" y="269.0" text-anchor="middle">−0.031</text><rect class="card-soft" x="396.0" y="300.0" width="106.0" height="36.0" rx="8"></rect><text class="vpos" x="449.0" y="323.0" text-anchor="middle">+0.312</text><path class="track" d="M528.0,104.0 L552.0,104.0"/><path class="track" d="M545.7,107.0 L552.0,104.0 L545.7,101.0"/><rect class="card" x="558.0" y="84.0" width="150.0" height="40.0" rx="8"></rect><text class="cmono" x="633.0" y="108.0" text-anchor="middle">test</text><rect class="card-soft" x="580.0" y="138.0" width="106.0" height="36.0" rx="8"></rect><text class="vneg" x="633.0" y="161.0" text-anchor="middle">−0.050</text><rect class="card-soft" x="580.0" y="192.0" width="106.0" height="36.0" rx="8"></rect><text class="vpos" x="633.0" y="215.0" text-anchor="middle">+0.524</text><rect class="card-soft" x="580.0" y="246.0" width="106.0" height="36.0" rx="8"></rect><text class="vpos" x="633.0" y="269.0" text-anchor="middle">+0.070</text><rect class="card-soft" x="580.0" y="300.0" width="106.0" height="36.0" rx="8"></rect><text class="vpos" x="633.0" y="323.0" text-anchor="middle">+0.361</text><path class="track" d="M712.0,104.0 L736.0,104.0"/><path class="track" d="M729.7,107.0 L736.0,104.0 L729.7,101.0"/><rect class="card" x="742.0" y="84.0" width="150.0" height="40.0" rx="8"></rect><text class="cmono" x="817.0" y="108.0" text-anchor="middle">submit</text><rect class="card-soft" x="764.0" y="138.0" width="106.0" height="36.0" rx="8"></rect><text class="vpos" x="817.0" y="161.0" text-anchor="middle">+0.950</text><rect class="card-soft" x="764.0" y="192.0" width="106.0" height="36.0" rx="8"></rect><text class="vpos" x="817.0" y="215.0" text-anchor="middle">+0.645</text><rect class="card-soft" x="764.0" y="246.0" width="106.0" height="36.0" rx="8"></rect><text class="vpos" x="817.0" y="269.0" text-anchor="middle">+0.305</text><rect class="card-soft" x="764.0" y="300.0" width="106.0" height="36.0" rx="8"></rect><text class="vpos" x="817.0" y="323.0" text-anchor="middle">+0.305</text><text class="desc" x="902.0" y="215.0" text-anchor="start">V(end) = 0</text><text class="desc" x="190.0" y="380.0" text-anchor="start">Token-level GAE on the same episode varies within each call: +0.08..+0.13,  +0.23..+0.40,  +0.19..+0.35,  +0.09..+0.29</text><text class="desc" x="190.0" y="400.0" text-anchor="start">δ_k = r_k + V(s_k+1) − V(s_k);  A_k = δ_k + λ · A_k+1.  Accent: positive; ink: negative.</text></svg>

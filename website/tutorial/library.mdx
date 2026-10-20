@@ -1,0 +1,227 @@
+---
+title: "The agentrl library"
+---
+
+The book builds `agentrl` one `#@save` block at a time. Each entry links to the chapter that derives it. Regenerate the package with `python3 scripts/build_library.py`.
+
+
+## [2. Reinforcement Learning Fundamentals](/tutorial/chapters/02-rl-fundamentals)
+
+| Definition | Summary |
+| --- | --- |
+| `repair_transitions(state)` | Return &#123;action: [(next_state, prob), ...]&#125; for one non-terminal repair state. |
+| `make_repair_mdp(step_cost=0.0)` | Build the repair MDP: P [S, A, S] (terminal rows all zero) and R [S, A], float64. |
+| `discounted_return(rewards, gamma)` | Discounted sum over the last axis: rewards [..., T] -> returns [...]. |
+| `policy_evaluation(P, R, policy, gamma)` | Exact V^pi by linear solve. P [S, A, S], R [S, A], policy [S, A] -> V [S]. |
+| `value_iteration(P, R, gamma, iters=10000, tol=1e-12)` | Optimal values and a greedy policy. P [S, A, S], R [S, A] -> (V* [S], actions [S]). |
+
+## [3. Language Models as Policies](/tutorial/chapters/03-language-models-as-policies)
+
+| Definition | Summary |
+| --- | --- |
+| `selected_log_probs(logits, ids)` | Log-probability of each chosen id: logits [..., V], ids [...] -> [...]. |
+| `entropy_from_logits(logits)` | Entropy of softmax(logits) over the last axis: [..., V] -> [...]. |
+| `sampling_log_probs(logits, temperature=1.0, top_p=1.0)` | Log-probs of the distribution actually sampled from: [..., V] -> [..., V], -inf = excluded. |
+| `sample_next(logits, temperature=1.0, top_p=1.0, generator=None)` | Sample from logits [B, V] -> (ids [B], logp [B]) under the sampling distribution. |
+| `class TinyAgent` | Small causal transformer policy: ids [B, T] -> logits [B, T, V]. |
+| `sequence_log_probs(model, ids)` | Log-probs of ids[:, 1:] given their prefixes: ids [B, T] -> [B, T-1]. |
+| `chunked_log_probs(hidden, weight, ids, chunk_size=128)` | Selected-token log-probs without a full [B, T, V] tensor: hidden [B, T, D], weight [V, D], ids [B, T] -> [B, T]. |
+
+## [4. Environments and Tools: the BugFix Gym](/tutorial/chapters/04-environments-and-tools)
+
+| Definition | Summary |
+| --- | --- |
+| `class Task` | One repair task; tests are lists of (args tuple, expected value) pairs. |
+| `run_tests(source, tests, fn_name)` | Execute TRUSTED source and call fn_name on each test -> [(passed, got)]. |
+| `sample_args(family, variant, rng)` | Draw one small test input for a family. |
+| `draw_tests(family, variant, buggy, fixed, fn_name, rng, n_public=3, n_hidden=8)` | Distinct inputs, expected values from the fixed source; buggy must fail public and hidden. |
+| `make_tasks(split='train', seed=0)` | BugFix tasks for split in &#123;'train', 'heldout', 'all'&#125;; seed draws the test inputs. |
+| `compact_source(source)` | Projection of source for the read tool: tokens space-separated, lines kept, indentation dropped. |
+| `swap_minmax(source, tests)` |  |
+| `fix_range_end(source, tests)` |  |
+| `fix_comparison(source, tests)` |  |
+| `add_zero_guard(source, tests)` |  |
+| `fix_init(source, tests)` |  |
+| `hardcode_tests(source, tests)` |  |
+| `parse_call(text)` | Parse '&lt;call> tool [arg] &lt;/call>' -> (tool, arg or None); None if malformed. |
+| `format_results(results, tests)` | One line per test: 'pass ( args )' or 'fail ( args ) -> got want expected'. |
+| `apply_tool(task, source, call)` | Execute one parsed call on the current source -> (observation, new_source, event). |
+| `hidden_reward(info)` | 1.0 if the agent submitted and all hidden tests pass. |
+| `public_reward(info)` | 1.0 if the agent submitted and all public tests pass (hackable). |
+| `class BugFixEnv` | Repair episode: reset(task) -> obs; step(action_text) -> (obs, reward, done, info). |
+| `infer_op(read_obs)` | The oracle's rule: map words of the read observation to the repair op. |
+| `scripted_policy(kind, seed=0)` | Hand-written policy: kind in &#123;'oracle', 'blind', 'random', 'hacker'&#125;; maps observations -> action text. |
+| `run_episode(policy, env, task)` | Run a text policy for one episode -> (reward, info). |
+| `_tool(name, description, required, **properties)` | MCP-style tool schema; every property type is given as a JSON-schema type name. |
+
+## [5. Trajectories, Templates, and Masks](/tutorial/chapters/05-trajectories-and-templates)
+
+| Definition | Summary |
+| --- | --- |
+| `class Tokenizer` | Word-level tokenizer: whitespace words (newline -> &lt;nl>) &lt;-> ids; specials have fixed ids. |
+| `build_tokenizer(tasks)` | Tokenizer covering the call grammar, gym messages, small integers, and all task text. |
+| `class Trajectory` | One episode: ids [T]; action_mask, sample_logp [T-1] aligned to ids[1:]; owner, turn [T]. |
+| `class Episode` | Token log of one episode: append sampled calls and encoded observations (token-in/token-out). |
+| `make_trajectory(episode)` | Freeze an Episode into a Trajectory; masks and log-probs are shifted to ids[1:]. |
+| `scripted_rollout(policy, env, task, tok, max_turns=6, max_len=256)` | Encode a text policy's episode through the same token path; sample_logp is 0 (not a model). |
+| `generate_call(model, ids, tok, temperature=1.0, generator=None)` | Sample one call after prefix ids (list) -> (call ids, sampling log-probs). |
+| `rollout(model, env, task, tok, max_turns=6, temperature=1.0, generator=None)` | Sample one episode token-in/token-out -> Trajectory (ids, action_mask, sample_logp, reward, info). |
+| `pad_rows(rows, length, value)` | Right-pad 1-D tensors to a common length -> [B, length]. |
+| `rollout_batch(model, envs, tasks, tok, max_turns=6, temperature=1.0, generator=None)` | Sample len(tasks) episodes in lockstep (one forward per token step) -> list of Trajectory. |
+| `collate(trajs, pad_id)` | Pad trajectories -> ids, attention_mask [B, T]; action_mask, sample_logp, turn_ids [B, T-1]; rewards [B]. |
+
+## [6. Policy Gradients](/tutorial/chapters/06-policy-gradient)
+
+| Definition | Summary |
+| --- | --- |
+| `masked_mean(x, mask, dim=None)` | Mean of x where mask is 1: x, mask [B, T] -> scalar (dim=None) or reduced over dim. |
+| `make_base_agent(tok, seed=0, kinds=('random', 'blind'), episodes_per_task=8, steps=200, batch_size=32, lr=0.003)` | TinyAgent behavior-cloned on well-formed but unskilled scripted play on the train tasks. |
+| `rollout_stats(trajs)` | Summary of a list of Trajectory -> dict of reward, pass_rate, valid_calls, submit_rate, turns, action_tokens. |
+| `aggregate_loss(per_token, mask, mode='token_mean', norm_const=None)` | Reduce per-token terms [B, T] under mask [B, T] to a scalar; mode sets each token's weight. |
+| `reinforce_loss(logp, advantages, mask, mode='token_mean', norm_const=None)` | Surrogate -A * log pi on policy tokens: logp, mask [B, T]; advantages [B] or [B, T], detached. |
+| `policy_gradient_step(model, optimizer, batch, advantages, mode='token_mean', norm_const=None, max_grad_norm=1.0)` | One REINFORCE update on a collated batch; advantages [B] or [B, T-1] -> dict(loss, grad_norm). |
+
+## [7. Advantages and Credit Assignment](/tutorial/chapters/07-advantages-and-credit)
+
+| Definition | Summary |
+| --- | --- |
+| `outcome_rewards(rewards, mask)` | Place each trajectory's reward [B] on its last policy token -> [B, T], zero elsewhere. |
+| `returns_to_go(rewards, mask, gamma=1.0)` | Discounted return-to-go over policy tokens only: rewards, mask [B, T] -> [B, T], 0 off-mask. |
+| `gae_advantages(rewards, values, mask, gamma=1.0, lam=0.95)` | GAE over policy tokens only: rewards, values, mask [B, T] -> (advantages, returns) [B, T], 0 off-mask. |
+| `make_critic(model)` | Value model: a copy of a TinyAgent whose output head has one unit (ids [B, T] -> [B, T, 1]). |
+| `critic_values(critic, ids)` | Values of the prefixes that predict ids[:, 1:]: ids [B, T] -> [B, T-1]. |
+| `explained_variance(pred, target, mask)` | 1 - Var(target - pred) / Var(target) over masked positions; 1 is perfect, &lt;= 0 is useless. |
+| `group_advantages(rewards, group_size, normalize_std=True, eps=1e-06)` | GRPO-style advantages: rewards [B] in consecutive groups of G -> (r - group mean) [/ group std], [B]. |
+| `rloo_advantages(rewards, group_size)` | Leave-one-out advantages: r_i - mean of the other G-1 rewards in its group -> [B]. |
+| `turn_advantages(rewards, values, mask, turn_ids, gamma=1.0, lam=0.95)` | Turn-level GAE: one value per call (at its first token), rewards summed per call -> [B, T] on policy tokens. |
+
+## [8. PPO: Reusing Samples Safely](/tutorial/chapters/08-ppo)
+
+| Definition | Summary |
+| --- | --- |
+| `ppo_policy_loss(logp, old_logp, advantages, mask, clip_low=0.2, clip_high=0.2, mode='token_mean', dual_clip=None, norm_const=None)` | Clipped surrogate on policy tokens: logp, old_logp, mask [B, T]; advantages [B] or [B, T] -> (loss, stats). |
+| `value_loss(values, old_values, returns, mask, clip=0.2)` | Clipped value regression on policy tokens: values, old_values, returns, mask [B, T] -> scalar. |
+
+## [9. GRPO and the Critic-Free Family](/tutorial/chapters/09-grpo-and-variants)
+
+| Definition | Summary |
+| --- | --- |
+| `class RLConfig` | Settings of train_rl; defaults are the book's GRPO on the anonymized one-edit gym (Section 9.4). |
+| `make_env(cfg)` | One fresh environment as cfg describes it: budgets, reward, and edit limit. |
+| `sample_groups(model, env_factory, tasks, tok, cfg, generator)` | cfg.group_size consecutive episodes per task -> list of len(tasks) * G Trajectory. |
+| `behavior_stats(trajs)` | Per-episode averages: pass_rate, reward, reads, tests, edits, first_edit_right, turns, length. |
+| `compute_advantages(batch, cfg)` | One advantage per episode [B] from batch['rewards'] laid out in groups of cfg.group_size. |
+| `kl_penalty(logp, ref_logp, kind='k3')` | Per-token estimate of KL(pi_theta || pi_ref) on tokens sampled from pi_theta: [B, T] -> [B, T]. |
+| `policy_loss(logp, old_logp, advantages, mask, cfg)` | The clipped surrogate at token or sequence level, as cfg says -> (loss, stats). |
+| `rl_update(model, optimizer, batch, advantages, cfg, ref_model=None, generator=None)` | cfg.epochs passes of cfg.minibatches clipped steps on one batch -> dict of mean stats. |
+| `sample_step(model, env_factory, tasks, tok, cfg, generator)` | Sample one step's groups -> (kept episodes for the update, all sampled episodes). |
+| `train_rl(model, tasks, tok, cfg, steps, log_every=0, eval_tasks=None, eval_every=20, env_factory=None, ref_model=None)` | Group-based RL on tasks; trains model in place -> history, one dict of statistics per step. |
+| `evaluate(model, tasks, tok, n_samples=1, temperature=1.0, generator=None, cfg=None, env_factory=None)` | n_samples episodes per task in cfg's environment -> behavior_stats dict (pass_rate, reads, ...). |
+| `randomize_names(task, rng)` | Copy of task whose function is renamed to a random gym function name not already in its source. |
+| `class EditBudgetEnv` | BugFixEnv that applies at most max_edits edits per episode; later edits use a turn and change nothing. |
+| `make_rl_base(tok, seed=0)` | The RL starting point from Chapter 9 on: the base agent with 1 demonstration set in 9 from the oracle. |
+| `gspo_policy_loss(logp, old_logp, advantages, mask, clip_low=0.0003, clip_high=0.0004)` | Sequence-level clipped surrogate: logp, old_logp, mask [B, T]; advantages [B] -> (loss, stats). |
+
+## [10. KL, Entropy, and Regularization](/tutorial/chapters/10-kl-entropy-regularization)
+
+| Definition | Summary |
+| --- | --- |
+| `kl_estimate(logp, ref_logp, kind='k3')` | Per-token KL(pi_theta || pi_ref) estimate [B, T]; kind 'k1'|'k2'|'k3', or 'k1+'|'k3+' = value of k, gradient of k2. |
+| `entropy_bonus(logits, mask)` | Mean full-vocabulary entropy over policy positions: logits [B, T, V], mask [B, T] -> differentiable scalar. |
+| `regularized_update(model, optimizer, batch, advantages, cfg, ref_model=None, generator=None, entropy_coef=0.0)` | arl.rl_update with an entropy bonus and the KL term computed by kl_estimate(cfg.kl_kind) -> dict of stats. |
+| `sequence_kl(batch, ref_model, temperature=1.0)` | Sum over policy tokens of k1 = log pi_old - log pi_ref, from the sampler's log-probs -> [B]. |
+| `train_regularized(model, tasks, tok, cfg, steps, entropy_coef=0.0, kl_in_reward=False, ref_model=None)` | arl.train_rl with an entropy bonus and KL in the loss or (kl_in_reward) in the reward -> history. |
+
+## [11. Rewards, Verifiers, and Reward Hacking](/tutorial/chapters/11-rewards-and-verifiers)
+
+| Definition | Summary |
+| --- | --- |
+| `make_reward(kind='hidden', exploit_penalty=0.0, invalid_penalty=0.0, step_penalty=0.0, wrong_submit=0.0)` | Reward hook for BugFixEnv: terminal info dict -> float, a verifier score plus penalty terms. |
+| `class LoggedEnv` | Wraps an environment and appends each finished episode's terminal info (plus its reward) to log. |
+| `log_by_step(history, log, n_eval=0)` | Split a LoggedEnv log into one list of infos per train_rl step; n_eval = eval episodes per eval step. |
+| `reward_dashboard(infos)` | Public-test pass, hidden-test pass, and exploit share of a list of terminal infos. |
+| `flaky_reward(reward, false_neg=0.0, false_pos=0.0, seed=0)` | Wrap reward(info): a pass reads as 0 w.p. false_neg; a failed submission reads as 1 w.p. false_pos. |
+
+## [12. Multi-Turn Agents and Long Horizons](/tutorial/chapters/12-multi-turn-and-long-horizons)
+
+| Definition | Summary |
+| --- | --- |
+| `per_call_rewards(trajs, mask, step_penalty=0.0)` | Token rewards [B, T]: -step_penalty on each call's last token, hidden-test verdict on the episode's last. |
+| `masked_whiten(x, mask, eps=1e-06)` | Normalize x to mean 0, std 1 over positions where mask is 1; zero elsewhere. [B, T] -> [B, T]. |
+| `context_view(ids, owner, turn, k, keep_obs=None)` | Token ids the policy sees before call k: tool tokens of turns older than the last keep_obs are dropped. |
+| `call_sample(traj, view, call_ids, call_logp)` | One call as its own Trajectory: ids = view + call; mask and sampling log-probs on the call tokens only. |
+| `context_rollout_batch(model, envs, tasks, tok, keep_obs=None, max_turns=6, temperature=1.0, generator=None)` | Lockstep episodes whose calls see context_view -> (episode Trajectories, [(episode index, call Trajectory)]). |
+| `evaluate_context(model, tasks, tok, keep_obs=None, n_samples=16, seed=7, cfg=None)` | Behavior statistics of n_samples episodes per task, sampled with context_view(keep_obs) and renamed tasks. |
+| `class EarlyStopEnv` | EditBudgetEnv that ends the episode, unsubmitted, after max_invalid malformed or unknown calls. |
+| `single_turn(task)` | Copy of task whose prompt includes the source, graded after one call by MixedTurnEnv. |
+| `class MixedTurnEnv` | EditBudgetEnv that ends single_turn tasks after the first call and grades them as submitted. |
+
+## [13. Rollout Systems and Off-Policy Correction](/tutorial/chapters/13-rollout-systems)
+
+| Definition | Summary |
+| --- | --- |
+| `agent_episode_durations(n, generator, mean_turns=8, max_turns=40, tokens_per_turn=(100, 600), decode_rate=40.0, tool_median=2.0, tool_sigma=1.0)` | Simulated wall-clock seconds of n agent episodes -> [n]. Turns ~ geometric, tool latency ~ log-normal. |
+| `simulate_pipeline(durations, n_slots, batch_size, train_time, sync_time, max_staleness=0, interrupt=True, steps=10)` | Discrete-event rollout/trainer pipeline; durations [N] s -> dict(events, time, throughput, staleness, ...). |
+| `tis_weights(logp_trainer, logp_sampler, mask, cap=2.0)` | Truncated IS weights min(pi/mu, cap) per token, detached: [B, T] -> [B, T], 0 where mask is 0. |
+| `mis_weights(logp_trainer, logp_sampler, mask, low=0.5, high=5.0)` | Masked IS weights (IcePop): pi/mu inside [low, high], else 0; detached [B, T] -> [B, T]. |
+| `offpolicy_update(model, optimizer, batch, advantages, cfg, correction='none', cap=2.0, generator=None)` | Decoupled clipped update on data from a behavior policy mu (batch['sample_logp']) -> dict of stats. |
+| `train_offpolicy(model, tasks, tok, cfg, steps, lag=0, correction='none', cap=2.0, sampler=None)` | train_rl with a behavior policy `lag` updates old (optionally sampler(model)) -> history of dicts. |
+
+## [14. Scaling and Efficiency](/tutorial/chapters/14-scaling-and-efficiency)
+
+| Definition | Summary |
+| --- | --- |
+| `pack_sequences(trajs, max_tokens, pad_id=0)` | First-fit-decreasing packing of Trajectory objects into rows of max_tokens -> dict of [R, L] / [R, L-1]. |
+| `packed_logits(model, ids, position_ids, segment_ids)` | TinyAgent forward on packed rows with a block-diagonal causal mask: ids [R, L] -> logits [R, L, V]. |
+| `token_budget_batches(lengths, max_tokens)` | Group sequence indices into microbatches whose padded size (count * longest) &lt;= max_tokens -> list of lists. |
+| `checkpointed_log_probs(hidden, weight, ids, chunk_size=1024)` | Chunked selected-token log-probs, recomputed in backward: hidden [B, T, D], weight [V, D], ids [B, T] -> [B, T]. |
+| `filter_by_pass_rate(tasks, pass_rates, low=0.0, high=1.0)` | Tasks whose estimated pass rate lies strictly inside (low, high). |
+| `train_curriculum(model, tasks, tok, cfg, steps, low=0.0, high=1.0, revisit=1)` | train_rl sampling only tasks inside filter_by_pass_rate (plus `revisit` others) -> history of dicts. |
+
+## [15. SFT, Rejection Sampling, and Preferences](/tutorial/chapters/15-sft-and-rejection-sampling)
+
+| Definition | Summary |
+| --- | --- |
+| `sft_loss(model, batch)` | Masked NLL on policy tokens: batch from collate (ids [B, T], action_mask [B, T-1]) -> scalar. |
+| `sft_train(model, trajs, tok, steps=100, lr=0.003, batch_size=32, seed=0, hook=None, every=10)` | Minibatch SFT on trajectories with sft_loss; hook(step) runs every `every` steps -> list of losses. |
+| `pass_rate(model, tasks, tok, n_samples=4, temperature=1.0, seed=0, reward='hidden')` | Sample n_samples episodes per task in lockstep -> (mean reward, list of Trajectory). |
+| `action_entropy(model, batch)` | Mean next-token entropy over action tokens of a collate batch -> float. |
+| `dpo_loss(policy_logp_chosen, policy_logp_rejected, ref_chosen, ref_rejected, beta=0.1)` | DPO loss from summed action log-probs, each [B] -> scalar; reference terms are constants. |
+
+## [16. Distillation for Agents](/tutorial/chapters/16-distillation)
+
+| Definition | Summary |
+| --- | --- |
+| `distill_loss(student_logits, teacher_logits, mask, kind='reverse_kl')` | Per-token KL between student and (detached) teacher: logits [B, T, V], mask [B, T] -> masked mean. |
+
+## [17. Evaluation](/tutorial/chapters/17-evaluation)
+
+| Definition | Summary |
+| --- | --- |
+| `sample_counts(model, tasks, tok, n, cfg=None, generator=None)` | n episodes per task under cfg's harness -> successes per task [N] (submitted and hidden tests pass). |
+| `pass_at_k(n, c, k)` | Unbiased pass@k from c successes out of n samples; c is an int or a tensor [N] -> float or [N]. |
+| `wilson_interval(successes, n, z=1.96)` | Wilson score interval for c successes of n Bernoulli trials; successes int or tensor -> (lo, hi). |
+| `bootstrap_ci(values, n_boot=1000, alpha=0.05, generator=None)` | Percentile bootstrap interval for the mean of values [N], one value per independent unit -> (lo, hi). |
+| `paired_bootstrap_diff(a, b, n_boot=1000, alpha=0.05, generator=None)` | Mean of a - b over paired units [N] with a percentile bootstrap interval -> (diff, lo, hi). |
+| `required_units(sd, effect, alpha=0.05, power=0.8)` | Units (tasks, seeds) for a two-sided z-test to detect a mean difference `effect` given per-unit sd. |
+
+## [18. Debugging RL Runs](/tutorial/chapters/18-debugging-rl-runs)
+
+| Definition | Summary |
+| --- | --- |
+| `log_metrics(sampled, cfg, update=None)` | One dashboard row from a step's sampled Trajectory list (+ the update's stats) -> flat dict. |
+| `prepare_batch(model, batch, cfg, bug=None)` | What the trainer feeds its loss -> (mask, old_logp [B, T-1], advantages [B]), with an optional fault. |
+| `make_ref(model, cfg, bug=None)` | The frozen KL reference (None when cfg.kl_coef is 0); the live model itself under 'ref_is_policy'. |
+| `minibatch_backward(model, batch, rows, mask, old_logp, advantages, cfg, bug=None, ref_model=None)` | Loss and backward for one minibatch, no optimizer step -> stats dict (clip_frac, ..., entropy, loss). |
+| `debug_update(model, optimizer, batch, cfg, bug=None, ref_model=None, generator=None)` | arl.rl_update with diagnostics and an optional fault from BUGS -> dict of mean stats. |
+| `train_logged(model, tasks, tok, cfg, steps, bug=None, eval_tasks=None, eval_every=10, env_factory=None)` | arl.train_rl with log_metrics rows and an optional fault from BUGS; trains in place -> history. |
+| `pad_batch(batch, extra, pad_id=0)` | The same batch with `extra` columns of right padding on every [B, T] and [B, T-1] tensor. |
+| `flat_grad(model, batch, mask, old_logp, advantages, cfg, bug=None)` | The trainer's backward on the whole batch, no optimizer step -> (gradient vector, stats). |
+| `step_checks(model, batch, owned, trainer_logp, cfg, bug=None)` | Invariants of one real update on a copy of model -> dict of (measured value, passed). |
+| `sanity_checks(model, trajs, tok, cfg, bug=None)` | Invariants of the instrumented trainer on one batch at step 0 -> dict check -> (measured value, passed). |
+
+## [A. Mathematical Tools](/tutorial/chapters/A-math)
+
+| Definition | Summary |
+| --- | --- |
+| `mc_mean_and_stderr(samples)` | Mean and standard error of i.i.d. samples along the last axis: [..., n] -> ([...], [...]). |

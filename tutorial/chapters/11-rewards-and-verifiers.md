@@ -1,0 +1,589 @@
+# 11. Rewards, Verifiers, and Reward Hacking
+
+Every chapter so far has trained on one reward: 1 if the agent submitted and every hidden test passed, 0 otherwise. Chapters 6 to 10 took it as given and asked how to turn it into a gradient. This chapter asks where it comes from and what it certifies. A policy gradient increases the probability of whatever earned reward in the policy's own samples ([Section 9.4](09-grpo-and-variants.md#94-shortcut-features-in-environment-design)), so the reward is the specification of the task. Wherever the reward and the intended behavior disagree, a strong enough optimizer finds the disagreement. For coding agents the best-known disagreement is special-casing the tests instead of fixing the code, and the BugFix gym was built with that exploit, `hardcode_tests`, on its edit menu.
+
+We first write the reward as a function of the episode's terminal record and compare the verifiers a coding environment can offer. We then reproduce reward hacking: train on the public tests the agent can see, watch the training reward climb while the hidden pass rate does not, and read the dashboard signature. Three fixes follow, together with the rule behind them: the reward used for training and the measurement used for evaluation must not share a weakness. The second half covers rewards that are learned or judged rather than executed, process rewards, and potential-based shaping, the one form of reward shaping that provably leaves the optimal policy unchanged.
+
+```python
+#@save
+import random
+import torch
+import torch.nn.functional as F
+import agentrl as arl
+```
+
+```python
+import copy
+torch.set_num_threads(4)                     # the shared check host is loaded; see Chapter 10
+tok = arl.build_tokenizer(arl.make_tasks('all'))
+train_tasks, heldout_tasks = arl.make_tasks('train'), arl.make_tasks('heldout')
+rl_base = arl.make_rl_base(tok)
+```
+
+## 11.1 Verifiable rewards
+
+A **verifiable reward** is computed by a program that checks the outcome, here by executing tests, rather than by a model that predicts quality. Its value is that it is cheap to trust: if the tests are right and the agent cannot see or change them, a pass means the code behaves correctly on those inputs. Its two limits are coverage, since a test suite checks finitely many inputs, and exposure, since anything the agent can observe it can learn to satisfy without solving the task.
+
+`BugFixEnv` calls its reward hook once, at the end of an episode, with the terminal `info` dictionary of [Section 4.5](04-environments-and-tools.md#45-the-action-grammar-and-the-environment). Writing the reward as a function of that record separates the **verifier**, which scores the final state, from **reward terms** that score the episode's conduct. `VERIFIERS` holds four verifiers: all hidden tests (the book's default), all public tests (the ones the `test` tool shows), and the fraction of each suite that passes. `make_reward` adds three optional terms: a penalty when a known exploit appears in the edit log, a format penalty per malformed call, and a cost per turn, which [Chapter 12](12-multi-turn-and-long-horizons.md) studies. A fourth argument sets the reward of a submission that fails its verifier.
+
+```python
+#@save
+VERIFIERS = {
+    'hidden': lambda info: float(info['submitted'] and info['hidden_pass']),     # all hidden tests pass
+    'public': lambda info: float(info['submitted'] and info['public_pass']),     # all visible tests pass
+    'partial': lambda info: float(info['submitted']) * info['hidden_frac'],      # share of hidden tests
+    'public_partial': lambda info: float(info['submitted']) * info['public_frac'],
+}
+
+
+def make_reward(kind='hidden', exploit_penalty=0.0, invalid_penalty=0.0, step_penalty=0.0, wrong_submit=0.0):
+    """Reward hook for BugFixEnv: terminal info dict -> float, a verifier score plus penalty terms."""
+    verify = VERIFIERS[kind]
+    def reward(info):
+        score = verify(info)
+        score -= exploit_penalty * ('hardcode_tests' in info['ops'])        # detector of one known exploit
+        score -= invalid_penalty * info['n_invalid']                          # format term: malformed calls
+        score -= step_penalty * info['n_turns']                               # cost per call (Chapter 12)
+        score += wrong_submit * (info['submitted'] and verify(info) < 1)      # e.g. -1 for a failed submission
+        return score
+    return reward
+```
+
+The returned function plugs into `RLConfig(reward=...)` or any `BugFixEnv`. We score the scripted policies of [Section 4.6](04-environments-and-tools.md#46-scripted-baselines) under the four verifiers, plus one more policy that submits immediately without touching the code. Each policy plays 5 episodes on each of the 20 training tasks.
+
+```python
+policies = {kind: lambda seed, kind=kind: arl.scripted_policy(kind, seed) for kind in ['oracle', 'blind', 'random', 'hacker']}
+policies['submit now'] = lambda seed: (lambda observations: '<call> submit </call>')
+verifiers = {kind: make_reward(kind) for kind in VERIFIERS}
+scripted_infos = {name: [arl.run_episode(make(seed), arl.BugFixEnv(), task)[1]
+                         for task in train_tasks for seed in range(5)] for name, make in policies.items()}
+print(f'{"policy":<11}' + ''.join(f'{kind:>15}' for kind in verifiers))
+for name, infos in scripted_infos.items():
+    print(f'{name:<11}' + ''.join(f'{sum(map(fn, infos)) / len(infos):15.3f}' for fn in verifiers.values()))
+```
+
+Output:
+
+```text
+policy              hidden         public        partial public_partial
+oracle               1.000          1.000          1.000          1.000
+blind                0.200          0.200          0.538          0.487
+random               0.160          0.310          0.385          0.453
+hacker               0.000          1.000          0.397          1.000
+submit now           0.000          0.000          0.397          0.333
+```
+
+Read the table by columns. The hidden verifier ranks the policies as intended: the oracle at 1, guessing near 0.2, and the hacker at 0. The public verifier gives the hacker the oracle's score, 1.000, because `hardcode_tests` makes exactly the visible tests pass. The two fractional verifiers give credit to code that was never fixed: the buggy source already passes part of each suite, so submitting immediately earns 0.397 of the hidden suite without a single edit, and the blind guesser earns more partial credit (0.538) than its binary pass rate (0.200) by a factor of 2.7. The hacker's fractional hidden score equals the do-nothing score, because `hardcode_tests` only adds lines for the public inputs. The random policy shows the remaining distinction: its public pass rate (0.310) is twice its hidden one (0.160), because one of its nine calls is the exploit. Each verifier defines a different task, and only the first one is the task we want.
+
+## 11.2 Dense and sparse rewards
+
+A binary reward is **sparse**: most episodes of a weak policy earn exactly 0, and with a group baseline a group whose attempts all fail has zero advantage ([Section 7.5](07-advantages-and-credit.md#75-critic-free-baselines-from-groups)). A **dense** reward assigns different values to more of the episodes, so more groups carry gradient. Partial credit is the obvious way to densify a test-based reward. We sample one batch of 8 groups of 8 from the RL base agent and score the same episodes with the binary and the partial hidden-test verifiers.
+
+```python
+cfg = arl.RLConfig()
+base_trajs = arl.sample_groups(rl_base, lambda: arl.make_env(cfg), train_tasks, tok, cfg, torch.Generator().manual_seed(0))
+for kind in ['hidden', 'partial']:
+    rewards = torch.tensor([make_reward(kind)(t.info) for t in base_trajs]).view(-1, 8)   # [tasks, G]
+    informative = (rewards.std(-1) > 1e-6).float().mean().item()
+    print(f'{kind:<8} mean reward {rewards.mean():.3f} | distinct reward values {len(rewards.unique()):3d}'
+          f' | groups with nonzero variance {informative:.2f}')
+```
+
+Output:
+
+```text
+hidden   mean reward 0.125 | distinct reward values   2 | groups with nonzero variance 0.75
+partial  mean reward 0.373 | distinct reward values   7 | groups with nonzero variance 0.95
+```
+
+The base agent's mean binary reward is 0.125, and 75% of its groups contain at least one success and one failure. The partial verifier takes 7 distinct values instead of 2 and makes 95% of the groups informative. That is the case for density: more of the batch carries gradient. Its mean reward, 0.373, is three times the binary one, and almost all of the difference is credit for tests that the unfixed code passes anyway, as the table of Section 11.1 showed.
+
+Density has a price that the group normalization of GRPO makes visible. Dividing by the group's standard deviation rescales *any* nonzero spread to unit size, so a group whose attempts all fail, but by slightly different fractions of the hidden tests, receives advantages as large as a group with one real success. The block finds such a group in the batch and prints its partial rewards and GRPO advantages.
+
+```python
+partial = torch.tensor([make_reward('partial')(t.info) for t in base_trajs]).view(-1, 8)
+binary = torch.tensor([t.reward for t in base_trajs]).view(-1, 8)
+g = next(i for i in range(len(partial)) if binary[i].sum() == 0 and partial[i].std() > 0)
+print('partial rewards :', [round(x, 2) for x in partial[g].tolist()])
+print('GRPO advantages :', [round(x, 2) for x in arl.group_advantages(partial[g], 8).tolist()])
+```
+
+Output:
+
+```text
+partial rewards : [0.62, 0.62, 0.62, 0.0, 0.0, 0.62, 0.62, 0.62]
+GRPO advantages : [0.54, 0.54, 0.54, -1.62, -1.62, 0.54, 0.54, 0.54]
+```
+
+In this group no attempt fixed the bug. Six attempts submitted unfixed code and scored 0.62, the share of hidden tests that code passes; two did not submit and scored 0. Std-normalized, the six submissions receive $+0.54$ each and the two non-submissions $-1.62$: the gradient pushes hard toward submitting unfixed code. Under the binary verifier this group has zero advantage and teaches nothing, which is the right answer for a group without a fix.
+
+Does partial credit help or hurt learning here? Answering requires training, so we write the two helpers that every experiment in this chapter uses: `run` trains a copy of the RL base agent for 40 steps of the default configuration with a given reward, evaluating on held-out tasks every 10 steps, and `held_out` measures the hidden-test pass rate of a policy on the held-out tasks. Section 11.7 runs the partial-credit comparison; the binary hidden-test run of Section 11.4 is the reference for the whole chapter.
+
+```python
+def run(reward, steps=40, seed=0, log=None):
+    """Train a copy of the RL base agent on train_tasks with this reward -> (policy, history)."""
+    cfg = arl.RLConfig(reward=reward, seed=seed)
+    factory = (lambda: LoggedEnv(arl.make_env(cfg), log)) if log is not None else None
+    policy = copy.deepcopy(rl_base)
+    return policy, arl.train_rl(policy, train_tasks, tok, cfg, steps, eval_tasks=heldout_tasks, eval_every=10,
+                                env_factory=factory)
+
+def held_out(policy, n=16):
+    """Hidden-test pass rate and behavior on held-out tasks, default environment."""
+    return arl.evaluate(policy, heldout_tasks, tok, n, generator=torch.Generator().manual_seed(7), cfg=arl.RLConfig())
+```
+
+`run` refers to `LoggedEnv`, which Section 11.3 defines before it is first called with a log.
+
+## 11.3 Reproducing reward hacking
+
+To watch hacking happen we need the quantities the training reward does not show: the hidden pass rate, and how often the exploit is used. `LoggedEnv` wraps any environment and appends each finished episode's terminal record, with its reward, to a list. `log_by_step` cuts that list into one slice per training step, using the episode counts in the history and skipping the evaluation episodes that `train_rl` runs through the same factory. `reward_dashboard` turns a slice into the three numbers an engineer should plot for any coding reward: the rate at which the training verifier passes, the rate at which an independent verifier passes, and the share of episodes with a known exploit.
+
+```python
+#@save
+class LoggedEnv:
+    """Wraps an environment and appends each finished episode's terminal info (plus its reward) to log."""
+    def __init__(self, env, log):
+        self.env, self.log = env, log
+
+    def __getattr__(self, name):                        # reset, final_info, max_turns, ... pass through
+        return getattr(self.env, name)
+
+    def step(self, action_text):
+        obs, reward, done, info = self.env.step(action_text)
+        if done:
+            self.log.append(dict(info, reward=reward))
+        return obs, reward, done, info
+
+
+def log_by_step(history, log, n_eval=0):
+    """Split a LoggedEnv log into one list of infos per train_rl step; n_eval = eval episodes per eval step."""
+    out, start = [], 0
+    for record in history:
+        out.append(log[start:start + record['n_episodes']])
+        start += record['n_episodes'] + (n_eval if 'eval_pass' in record else 0)
+    return out
+
+
+def reward_dashboard(infos):
+    """Public-test pass, hidden-test pass, and exploit share of a list of terminal infos."""
+    n = max(len(infos), 1)
+    return dict(public=sum(i['submitted'] and i['public_pass'] for i in infos) / n,
+                hidden=sum(i['submitted'] and i['hidden_pass'] for i in infos) / n,
+                exploit=sum('hardcode_tests' in i['ops'] for i in infos) / n)
+```
+
+The hacking run is the book's default configuration with one change: the reward is the public-test verifier. Everything else, including the anonymized one-edit gym and the starting policy, is as in [Chapter 9](09-grpo-and-variants.md). We evaluate on held-out tasks every 10 steps; `eval_pass` is always the hidden-test pass rate, whatever the training reward is.
+
+```python
+hack_log = []
+hack_policy, hack_history = run(make_reward('public'), log=hack_log)
+hack_steps = log_by_step(hack_history, hack_log, n_eval=4 * len(heldout_tasks))
+for record, infos in zip(hack_history, hack_steps):
+    if record['step'] % 5 == 0 or record['step'] == 39:
+        d = reward_dashboard(infos)
+        held = f"{record['eval_pass']:.3f}" if 'eval_pass' in record else '  -  '
+        print(f"step {record['step']:2d} | train reward {record['reward']:.3f} | public pass {d['public']:.3f} |"
+              f" hidden pass {d['hidden']:.3f} | hardcode share {d['exploit']:.2f} | reads {record['reads']:.2f}"
+              f" | held-out hidden {held}")
+```
+
+Output:
+
+```text
+step  0 | train reward 0.234 | public pass 0.234 | hidden pass 0.172 | hardcode share 0.08 | reads 0.31 | held-out hidden 0.175
+step  5 | train reward 0.562 | public pass 0.562 | hidden pass 0.297 | hardcode share 0.28 | reads 0.47 | held-out hidden   -  
+step 10 | train reward 0.891 | public pass 0.891 | hidden pass 0.125 | hardcode share 0.78 | reads 0.28 | held-out hidden 0.050
+step 15 | train reward 0.938 | public pass 0.938 | hidden pass 0.031 | hardcode share 0.97 | reads 0.14 | held-out hidden   -  
+step 20 | train reward 0.953 | public pass 0.953 | hidden pass 0.000 | hardcode share 0.97 | reads 0.00 | held-out hidden 0.000
+step 25 | train reward 0.969 | public pass 0.969 | hidden pass 0.016 | hardcode share 0.95 | reads 0.02 | held-out hidden   -  
+step 30 | train reward 0.969 | public pass 0.969 | hidden pass 0.000 | hardcode share 0.98 | reads 0.00 | held-out hidden 0.000
+step 35 | train reward 1.000 | public pass 1.000 | hidden pass 0.000 | hardcode share 1.00 | reads 0.00 | held-out hidden   -  
+step 39 | train reward 1.000 | public pass 1.000 | hidden pass 0.000 | hardcode share 1.00 | reads 0.00 | held-out hidden 0.000
+```
+
+Within 10 steps the exploit is in 78% of the batch, and by step 15 in 97%. The training reward rises from 0.234 to 1.000, and the public pass rate tracks it exactly, because it *is* the reward. The hidden pass rate rises at first, to 0.297 at step 5, while the policy still reads and fixes some bugs alongside the exploit, then falls to 0 as the exploit crowds everything else out. Reading falls from 0.31 calls per episode to 0. On held-out tasks, which the policy never trained on, the hidden pass rate is 0.175 at step 0 and 0 from step 20 on: the exploit is not specific to the training tasks, because `hardcode_tests` works on any task. Compared with the 0.20 that a blind guess gets, the hacking run ends *below* the policy it started from.
+
+![Figure 11.1: Reward hacking on the BugFix gym. Top: public-test pass rate (the training reward) and hidden-test pass rate of the training batch per step, under the public-test reward. Bottom: share of episodes that apply `hardcode_tests`, under the public-test reward and under the same reward with an exploit penalty. RL base agent, default configuration, 40 steps of 64 episodes.](../figures/ch11-hacking.svg)
+
+Figure 11.1 is the dashboard signature of reward hacking, and every element of it generalizes. The training reward is a smooth, rising, low-variance curve; nothing about it looks wrong. The independent measurement (hidden tests) moves in the opposite direction after a brief rise. A behavior statistic, here the share of a named exploit, rises in step with the reward. On a real dashboard the second and third curves exist only if someone built them: the hidden-test pass rate requires a second verifier, and the exploit share requires knowing what to look for.
+
+## 11.4 Fixing a hacked reward
+
+There are three families of fixes, and they work at different places. The first changes the **verifier**: grade with tests the agent cannot observe. The second adds a **detector**: recognize known exploits in the episode and penalize or discard them. The third changes **monitoring**: measure an independent signal during training, so that hacking is seen even when the reward cannot be fixed. We train the first two and compare them with the hacking run; the hidden-test run is the book's default configuration.
+
+```python
+hidden_log, penalty_log = [], []
+hidden_policy, hidden_history = run(make_reward('hidden'), log=hidden_log)
+penalty_policy, penalty_history = run(make_reward('public', exploit_penalty=1.0), log=penalty_log)
+print(f'{"training reward":<26} | last 10 steps: public  hidden  hardcode | held-out: pass  reads')
+for name, policy, history, log in [('public tests', hack_policy, hack_history, hack_log),
+                                   ('hidden tests', hidden_policy, hidden_history, hidden_log),
+                                   ('public - exploit penalty', penalty_policy, penalty_history, penalty_log)]:
+    late = [i for infos in log_by_step(history, log, 4 * len(heldout_tasks))[30:] for i in infos]
+    d, h = reward_dashboard(late), held_out(policy)
+    print(f"{name:<26} | {d['public']:20.3f} {d['hidden']:7.3f} {d['exploit']:9.2f} |"
+          f" {h['pass_rate']:14.3f} {h['reads']:6.2f}")
+```
+
+Output:
+
+```text
+training reward            | last 10 steps: public  hidden  hardcode | held-out: pass  reads
+public tests               |                0.991   0.002      0.99 |          0.013   0.01
+hidden tests               |                0.711   0.711      0.00 |          0.762   1.02
+public - exploit penalty   |                0.811   0.809      0.00 |          0.719   1.09
+```
+
+Grading with hidden tests removes the exploit's payoff, and the policy essentially never uses it (a share of 0.00 over its last 640 episodes); its held-out pass rate is 0.762, the book's default result at 40 steps. The penalty run keeps the hackable public verifier and subtracts 1 whenever `hardcode_tests` appears, which makes the exploit worth 0. It learns to read and fix just as well, 0.719 held-out, a difference within the single-seed noise of Chapter 9's ablations. Its last-10-step public and hidden pass rates are almost equal (0.811 and 0.809), which is the dashboard telling us that, once the exploit is gone, the public tests in this gym agree with the hidden ones.
+
+The penalty works here because the gym has exactly one exploit and the detector recognizes it perfectly. Neither holds for a real agent. Detectors are written for exploits someone has already seen, such as edits to test files, `sys.exit(0)` before the assertions, or literals copied from test inputs, and a policy under pressure from a penalty is pushed toward the exploits the detector does not recognize. Baker et al. (2025) report this pattern with a learned monitor: adding a chain-of-thought monitor to the training reward of a reasoning model in agentic coding environments helped "at low optimization levels", and with more optimization the agents learned "obfuscated reward hacking, hiding their intent within the CoT". A detector is therefore most valuable as a *monitor* whose output is logged and audited, and least valuable as a reward term that the policy can learn to evade.
+
+### The train/eval reward split
+
+The three runs differ in one place: whether the reward that drives the update shares a weakness with the measurement that decides whether training worked. In the hacking run, the training reward checked the public tests, and so did nothing else; the only reason we saw the hack is that `eval_pass` uses the hidden tests. In general:
+
+- The **training reward** must be cheap, dense enough to learn from, and as hard to exploit as possible. It is optimized, so every weakness will be found.
+- The **evaluation measurement** must be independent of the training reward: different tests, different tasks, and, for any learned or judged component, a different model. It is not optimized, so it stays honest only if no gradient ever flows from it.
+- **Held-out monitoring during training** is what connects them. Plot the gap between the training reward and the independent measurement every few steps. A gap that grows while the training reward climbs is the signature of Figure 11.1, and it is visible within the first 10 steps of the hacking run above.
+
+There is a hierarchy of tests in a real coding environment. Public tests (those in the repository the agent can read and run) are observable. Hidden tests (graded after the episode, outside the sandbox) are not observable, but they are used for the reward, so they are optimized against: a policy can overfit their *style*, for example by learning which behaviors those suites never check. A third set, never used for any reward, is the only one that measures generalization. SWE-bench's `FAIL_TO_PASS` and `PASS_TO_PASS` tests ([Section 4.7](04-environments-and-tools.md#47-real-coding-environments-and-isolation)) are hidden tests in this sense when used as a training reward, and a benchmark built from them stops being an independent measurement for a model trained on the same harness.
+
+## 11.5 Learned rewards and judges
+
+Tests do not exist for every task. When they do not, the reward comes from a model: a **reward model** trained on human or automated preferences, or an **LLM judge** prompted with a rubric. Both trade verifiability for coverage.
+
+### A Bradley–Terry reward model
+
+The **Bradley–Terry** model assumes that a preference between two outcomes is a logistic function of the difference of their latent scores, $P(\tau_w \succ \tau_l) = \sigma\big(r_\phi(\tau_w) - r_\phi(\tau_l)\big)$. Fitting $r_\phi$ by maximum likelihood on labeled pairs gives the reward-model loss used in RLHF since Christiano et al. (2017),
+
+$$
+\mathcal{L}(\phi) = -\mathbb{E}_{(\tau_w, \tau_l)}\big[\log \sigma\big(r_\phi(\tau_w) - r_\phi(\tau_l)\big)\big].
+$$
+
+The loss sees only differences, so $r_\phi$ is identified up to an additive constant, and its scale is set by how separable the pairs are. We build pairs from the RL base agent's own episodes: within each group, every passing episode is preferred to every failing one, with the hidden tests as the labeler. The reward model is a copy of TinyAgent with a one-unit head, `make_critic` from [Section 7.4](07-advantages-and-credit.md#74-learning-a-critic), read at the last token of the episode.
+
+```python
+def preference_pairs(trajs, G=8):
+    """(winner, loser) pairs within each group of G: hidden-test passes beat failures."""
+    pairs = []
+    for g in range(0, len(trajs), G):
+        wins = [t for t in trajs[g:g + G] if t.reward > 0]
+        pairs += [(w, l) for w in wins for l in trajs[g:g + G] if l.reward == 0]
+    return pairs
+
+
+def rm_scores(rm, trajs):
+    """Reward-model score of each episode: the head's output at its last token -> [B]."""
+    batch = arl.collate(trajs, tok.pad_id)
+    last = batch['attention_mask'].sum(-1).long() - 1
+    return rm(batch['ids'])[torch.arange(len(trajs)), last, 0]
+```
+
+We sample 4 batches of groups on the training tasks for training pairs and one batch on the held-out tasks for test pairs, then fit the Bradley–Terry loss for 150 steps.
+
+```python
+def groups_of(model, tasks, seed):
+    return arl.sample_groups(model, lambda: arl.make_env(cfg), tasks, tok, cfg, torch.Generator().manual_seed(seed))
+
+train_pairs = [p for seed in range(1, 5) for p in preference_pairs(groups_of(rl_base, train_tasks, seed))]
+test_pairs = preference_pairs(groups_of(rl_base, heldout_tasks, 9))
+torch.manual_seed(0)
+rm, gen = arl.make_critic(rl_base), torch.Generator().manual_seed(0)
+opt = torch.optim.Adam(rm.parameters(), lr=1e-3)
+for step in range(150):
+    pick = [train_pairs[i] for i in torch.randint(len(train_pairs), (64,), generator=gen).tolist()]
+    margin = rm_scores(rm, [w for w, _ in pick]) - rm_scores(rm, [l for _, l in pick])   # [64]
+    loss = -F.logsigmoid(margin).mean()
+    opt.zero_grad(); loss.backward(); opt.step()
+with torch.no_grad():
+    for name, pairs in [('train', train_pairs), ('held-out', test_pairs)]:
+        acc = (rm_scores(rm, [w for w, _ in pairs]) > rm_scores(rm, [l for _, l in pairs])).float().mean()
+        print(f'{name:<9} pairs {len(pairs):4d} | pairwise accuracy {acc:.3f}')
+```
+
+Output:
+
+```text
+train     pairs  597 | pairwise accuracy 0.993
+held-out  pairs   40 | pairwise accuracy 0.875
+```
+
+The reward model separates 99.3% of its 597 training pairs and 87.5% of 40 held-out pairs, on functions and constants it never saw. With so few held-out pairs that figure has a standard error of about 0.05, but it is far above chance: the model has learned something general about what successful episodes look like.
+
+A reward model is used out of distribution as soon as the policy changes: RL moves the policy toward whatever the model scores highly, including behaviors that were rare or absent in its training pairs. We score scripted episodes the reward model never saw: the oracle, blind guesses, and the hacker, plus a **reading hacker** that reads the file, applies `hardcode_tests`, tests, and submits.
+
+```python
+def reading_hacker(observations):
+    return ['<call> read </call>', '<call> edit hardcode_tests </call>', '<call> test </call>',
+            '<call> submit </call>'][min(len(observations) - 1, 3)]
+
+rng = random.Random(0)
+scripted = {'oracle': arl.scripted_policy('oracle'), 'blind': arl.scripted_policy('blind', seed=1),
+            'hacker': arl.scripted_policy('hacker'), 'reading hacker': reading_hacker}
+episodes = {name: [arl.scripted_rollout(policy, arl.make_env(cfg), arl.randomize_names(task, rng), tok)
+                   for task in heldout_tasks for _ in range(4)] for name, policy in scripted.items()}
+with torch.no_grad():
+    for name, trajs in episodes.items():
+        scores = rm_scores(rm, trajs)
+        print(f'{name:<15} hidden pass {sum(t.reward for t in trajs) / len(trajs):.2f} | RM score mean {scores.mean():+.2f}')
+```
+
+Output:
+
+```text
+oracle          hidden pass 1.00 | RM score mean +4.31
+blind           hidden pass 0.23 | RM score mean -2.46
+hacker          hidden pass 0.00 | RM score mean +0.41
+reading hacker  hidden pass 0.00 | RM score mean +3.08
+```
+
+On scripted episodes, the reward model ranks the oracle highest (+4.31) and blind guessing lowest (−2.46), as a good proxy should. The hacker that never reads scores +0.41, between the two. The reading hacker scores +3.08, much closer to the oracle than to failure, although none of its episodes passes a hidden test. What the model learned is *what successful episodes look like* in its training data: a `read`, followed by an edit, an all-`pass` test output, and a submit. The reading hacker reproduces every one of those features and fixes nothing. An RL run against this reward model would push probability toward the reading hacker, because its score is high and its behavior is easy to learn.
+
+Gao et al. (2022) measured the consequence at scale: as a policy is optimized against a proxy reward model, a gold-standard reward first rises and then falls, and the turning point depends on the reward model's size and data. The proxy is accurate on the distribution it was trained on and is exploited off it, which is exactly what RL produces.
+
+### LLM judges
+
+An **LLM judge** reads the transcript, or the final patch, and returns a score, often against a rubric. It needs no training and covers tasks without tests. It is also a reward computed from what the policy produced, so the policy can optimize the judge's inputs. Its failure modes are those of the reward model plus its own: surface features ("One Token to Fool LLM-as-a-Judge" (2025) reports that strings such as a lone colon or "Let's solve this problem step by step." elicit false positives), sensitivity to length and confident tone, and run-to-run noise. A judge also sees only what the transcript shows. We stand in for a judge with a rubric applied to the decoded transcript: did the agent read the code, run the tests, see them pass at the end, and submit? This is a caricature of an LLM judge, not a model of one; what it shares with a real judge is that it scores evidence visible in the transcript.
+
+```python
+def rubric_judge(traj):
+    """Share of 4 rubric items visible in the transcript: read, tested, last test all pass, submitted."""
+    text = tok.decode(traj.ids.tolist())
+    last_test = text.split('<call> test </call>')[-1].split('</obs>')[0] if '<call> test </call>' in text else 'fail'
+    items = ['<call> read </call>' in text, '<call> test </call>' in text, 'fail' not in last_test,
+             bool(traj.info['submitted'])]
+    return sum(items) / len(items)
+
+for name, trajs in episodes.items():
+    print(f'{name:<15} hidden pass {sum(t.reward for t in trajs) / len(trajs):.2f} |'
+          f' judge score {sum(map(rubric_judge, trajs)) / len(trajs):.2f}')
+```
+
+Output:
+
+```text
+oracle          hidden pass 1.00 | judge score 1.00
+blind           hidden pass 0.23 | judge score 0.25
+hacker          hidden pass 0.00 | judge score 0.75
+reading hacker  hidden pass 0.00 | judge score 1.00
+```
+
+The rubric judge gives the reading hacker 1.00, the oracle's score, and the plain hacker 0.75: the exploit's transcript shows a read (for the reading hacker), a test run, all tests passing, and a submission, which is everything the rubric asks for. A real LLM judge reads more than four features, and an exploit must work harder to fool it, but the structure of the failure is the same: the judge scores evidence that the policy produces, and a policy optimized against it learns to produce the evidence.
+
+## 11.6 Process rewards and potential-based shaping
+
+An outcome reward arrives once, at the end. A **process reward** scores intermediate steps: a process reward model (PRM) trained on step labels, as in Let's Verify Step by Step (2023) and Math-Shepherd (2023), or a heuristic such as "a test went from failing to passing". It gives credit where it is earned, which is what turn-level advantages need ([Section 7.6](07-advantages-and-credit.md#76-turn-level-advantages)). It also changes the task: a policy maximizes the *sum* of rewards, and a bonus that can be collected repeatedly, or without making progress, becomes a goal of its own.
+
+**Reward shaping** adds a term $F(s, a, s')$ to the environment's reward. Ng, Harada, and Russell (1999) showed that shaping of the form
+
+$$
+F(s, a, s') = \gamma\,\Phi(s') - \Phi(s),
+$$
+
+for any function $\Phi$ of the state, leaves the optimal policy unchanged, and that, without further assumptions on the MDP, no other form of $F$ guarantees this. The sufficiency half has a short proof. Along any trajectory, the shaping terms telescope:
+
+$$
+\sum_{t=0}^{T-1} \gamma^t \big(\gamma\Phi(s_{t+1}) - \Phi(s_t)\big) = \gamma^{T}\Phi(s_T) - \Phi(s_0).
+$$
+
+If $\Phi$ is 0 at terminal states (or $\gamma^T \to 0$), the shaped return of every trajectory from $s_0$ is its original return minus $\Phi(s_0)$. Taking expectations, $Q'^{\pi}(s, a) = Q^{\pi}(s, a) - \Phi(s)$ for every policy $\pi$, so in every state all actions shift by the same constant, and the argmax, the optimal policy, does not move. A bonus that is not a difference of potentials has no such guarantee.
+
+We check this on the repair MDP of [Chapter 2](02-rl-fundamentals.md#21-markov-decision-processes). `shape` adds the expected shaping term $\gamma\,\mathbb{E}[\Phi(s')] - \Phi(s)$ to every state-action reward. The potential $\Phi$ is a progress score, 0 for `unread`, larger for `read`, larger still for a correct edit, and 0 for `done`. The non-potential alternative pays 0.2 every time the agent reads, a "reward the good habit" process bonus.
+
+```python
+P, R = arl.make_repair_mdp()
+STATES, ACTIONS = arl.REPAIR_STATES, arl.REPAIR_ACTIONS
+
+def shape(R, P, phi, gamma):
+    """R'[s, a] = R[s, a] + gamma * E[phi(s') | s, a] - phi(s): potential-based shaping, [S, A]."""
+    return R + gamma * torch.einsum('sat,t->sa', P, phi) - phi[:, None]
+
+phi = torch.tensor([0.0, 0.3, 0.7, 0.2, 0.9, 0.4, 0.0], dtype=torch.float64)   # done must be 0
+read_bonus = R.clone()
+read_bonus[:, ACTIONS.index('read')] += 0.2
+gamma = 0.9
+for name, reward in [('original', R), ('potential shaping', shape(R, P, phi, gamma)), ('read bonus', read_bonus)]:
+    V, best = arl.value_iteration(P, reward, gamma)
+    print(f'{name:<18} V*(unread) {V[0]:+.3f} | pi* = ' + ' '.join(f'{s}:{ACTIONS[a]}' for s, a in zip(STATES[:-1], best.tolist())))
+V, _ = arl.value_iteration(P, R, gamma)
+V_shaped, _ = arl.value_iteration(P, shape(R, P, phi, gamma), gamma)
+print('max |V_shaped - (V - phi)| =', f'{(V_shaped - (V - phi)).abs().max():.1e}')
+```
+
+Output:
+
+```text
+original           V*(unread) +0.773 | pi* = unread:read read:edit edited_ok:submit edited_bad:test passed:submit failed:edit
+potential shaping  V*(unread) +0.773 | pi* = unread:read read:edit edited_ok:submit edited_bad:test passed:submit failed:edit
+read bonus         V*(unread) +2.000 | pi* = unread:read read:read edited_ok:read edited_bad:read passed:read failed:read
+max |V_shaped - (V - phi)| = 3.2e-13
+```
+
+With $\gamma = 0.9$, the potential-shaped MDP has the original optimal policy in every state: read, edit, submit when the edit is correct, test when it is not, and edit again after a failed test. Its optimal value at `unread` is the original 0.773 because $\Phi(\text{unread}) = 0$, and in every state $V'^{*} = V^{*} - \Phi$ to within $3 \times 10^{-13}$, as the proof predicts. The read bonus, a process reward of 0.2 per read, makes reading forever optimal from every state, with value $0.2/(1-0.9) = 2.0$, more than twice what solving the task is worth. In an LLM agent the same mechanism produces an agent that inspects files indefinitely; the turn budget hides it as "never submits" ([Chapter 12](12-multi-turn-and-long-horizons.md)).
+
+The proof also says what potential-based shaping *cannot* do for the book's training loop. With $\gamma = 1$ and $\Phi = 0$ at the end of the episode, the shaped return of every episode of a task is its original return minus $\Phi(s_0)$, a constant for that task. A group baseline subtracts it. Under outcome-level GRPO, a potential-based shaping term has *no effect at all* on the gradient; its value appears only when credit is assigned per turn, by a critic or a turn-level advantage that sees the individual terms ([Chapter 12](12-multi-turn-and-long-horizons.md)). And a shaping term that looks potential-based but uses a potential the agent can manipulate, or one that is not 0 at the end, is simply a new reward. The block makes this concrete in the gym: $\Phi$ = the fraction of *public* tests that pass in the current source, computed after every call of an oracle episode and a hacker episode.
+
+```python
+def public_potentials(policy, task):
+    """Phi(s_t) = fraction of public tests passing, before the first call and after every call."""
+    env, observations = arl.make_env(cfg), []
+    observations.append(env.reset(task))
+    phis = []
+    while True:
+        phis.append(sum(ok for ok, _ in arl.run_tests(env.source, task.public_tests, task.fn_name)) / 3)
+        if env.done:
+            return phis
+        observations.append(env.step(policy(observations))[0])
+
+for name in ['oracle', 'hacker']:
+    phis = public_potentials(arl.scripted_policy(name), train_tasks[0])
+    terms = [round(b - a, 2) for a, b in zip(phis, phis[1:])]
+    print(f'{name:<7} Phi {[round(p, 2) for p in phis]} | per-call terms {terms} | sum {sum(terms):+.2f}')
+```
+
+Output:
+
+```text
+oracle  Phi [0.33, 0.33, 1.0, 1.0, 1.0] | per-call terms [0.0, 0.67, 0.0, 0.0] | sum +0.67
+hacker  Phi [0.33, 1.0, 1.0, 1.0] | per-call terms [0.67, 0.0, 0.0] | sum +0.67
+```
+
+The oracle's potential rises from 1/3 (the buggy code passes one public test) to 1 at its edit; the hacker's rises at its edit just the same. Both collect +0.67 of shaping, and with $\Phi = 0$ imposed at the end the sum would be $-\Phi(s_0) = -0.33$ for both, a constant. Without that terminal condition, the shaping return is $\Phi(s_T) - \Phi(s_0)$, the public pass fraction of the final code minus a constant: the public-test reward of Section 11.3, hackable in exactly the same way. Process signals computed from what the agent can observe are as exploitable as the outcome signals they are computed from.
+
+Figure 11.3 collects the reward types of this chapter on four axes. The top four rows are measured on the gym: signal density is the share of the RL base agent's groups with nonzero reward variance (Section 11.2), and hackability is the hacker's reward divided by the oracle's (Section 11.1). The bottom four rows are the book's qualitative judgments, labeled as such. No row is light in every column. The verifiers that are hardest to hack (hidden tests) are the least dense; every way of adding density (fractions, learned models, judges, process rewards) adds a way to be exploited, except potential-based shaping, which under an outcome-level advantage adds nothing at all.
+
+![Figure 11.3: Reward design matrix. Rows: reward types; columns: signal density, hackability, cost, and noise. Top four rows measured on the BugFix gym; bottom four rows are qualitative judgments. Darker means more.](../figures/ch11-reward-matrix.svg)
+
+## 11.7 Design problems in practice
+
+> **Problem: sparse binary rewards.** *Symptom:* most groups have zero advantage, early learning is slow, and hard tasks are never learned. *Cause:* a binary verifier gives no signal until a success is sampled; a group of $G$ attempts at a task with pass rate $p$ is uninformative with probability $p^G + (1-p)^G$ ([Section 7.5](07-advantages-and-credit.md#75-critic-free-baselines-from-groups)). *Options:* (a) larger groups or dynamic sampling, paid in rollouts ([Chapter 9](09-grpo-and-variants.md)). (b) A curriculum that keeps tasks of medium pass rate ([Chapter 14](14-scaling-and-efficiency.md)). (c) Partial credit or shaping, which densify the signal and change the task (next problem). (d) A better starting policy (SFT or distillation, [Chapters 15](15-sft-and-rejection-sampling.md) and [16](16-distillation.md)). *Default:* keep the binary verifier and fix density with (a), (b), and (d); add partial credit only with a measurement of what it rewards. The hidden-test run's history shows how sparse the binary reward is over training.
+
+```python
+zero = [h['zero_adv_frac'] for h in hidden_history]
+print('hidden-test run, zero-advantage groups by 10-step window:', [round(sum(zero[i:i + 10]) / 10, 2) for i in range(0, 40, 10)])
+```
+
+Output:
+
+```text
+hidden-test run, zero-advantage groups by 10-step window: [0.21, 0.19, 0.4, 0.71]
+```
+
+As the hidden-test run learns, the binary reward becomes *less* informative, not more: the share of zero-advantage groups rises from 0.21 in the first ten steps to 0.71 in the last ten, because most groups now pass every attempt. Early in training, sparsity was not the bottleneck (Section 11.2 measured 75% informative groups for the RL base agent); late in training, saturation is.
+
+> **Problem: partial-credit gaming.** *Symptom:* the reward rises while the binary pass rate does not, or the policy settles on submitting quickly. *Cause:* a fractional verifier pays for tests that the unfixed code already passes, so doing nothing has a positive reward, and any behavior that moves the fraction a little, including breaking code in ways that happen to pass more cases, earns credit. With GRPO's standard-deviation normalization, those small differences get full-sized advantages (Section 11.2). *Options:* (a) binary reward on the task's FAIL_TO_PASS tests, with partial credit only on tests that the original code fails. (b) Partial credit added to a binary term that dominates it. (c) Partial credit without std normalization (Dr. GRPO), so that small differences give small advantages. *Default:* (a). The partial-credit run of Section 11.2 measures what it bought here.
+
+```python
+partial_policy, partial_history = run(make_reward('partial'))
+for name, policy, history in [('binary hidden', hidden_policy, hidden_history), ('partial hidden', partial_policy, partial_history)]:
+    h = held_out(policy)
+    print(f"{name:<15} reward, last 10 steps {sum(r['reward'] for r in history[-10:]) / 10:.3f} | held-out pass"
+          f" {h['pass_rate']:.3f} | reads {h['reads']:.2f} | turns {h['turns']:.2f}")
+```
+
+Output:
+
+```text
+binary hidden   reward, last 10 steps 0.711 | held-out pass 0.762 | reads 1.02 | turns 3.88
+partial hidden  reward, last 10 steps 0.901 | held-out pass 0.588 | reads 0.99 | turns 4.12
+```
+
+The partial-credit run reaches a higher training reward, 0.901 against 0.711, and a *lower* held-out pass rate, 0.588 against 0.762. Its reward includes the credit that unfixed submissions collect, so a reward of 0.9 does not mean nine fixes in ten. Both policies read about once per episode, so partial credit did not prevent the skill from being learned at this scale; it made the reward a worse measurement of it and the policy a little worse at it (one seed).
+
+> **Problem: judge exploitation.** *Symptom:* judge scores rise steadily while executed tests or human review do not; transcripts grow more confident and formulaic. *Cause:* the judge scores the transcript, which the policy writes, and is therefore an optimization target with the blind spots of Section 11.5. *Options:* (a) use a judge only where no executable check exists, and combine it with one that does. (b) Rubrics with instance-specific, checkable items (Rubrics as Rewards, 2025). (c) A judge that is not the model being trained and is refreshed or ensembled. (d) Monitor judge score against an independent measurement, as in Section 11.4. *Default:* (a) and (d); never let a judge be the only reward for a capability that tests can check. The rubric judge above gave the reading hacker the oracle's score.
+
+> **Problem: reward noise from flaky tests.** *Symptom:* a correct policy's reward varies between identical runs, groups that should be uniform have nonzero advantages, and learning slows without a visible cause. *Cause:* if a correct solution fails with probability $\epsilon_-$ (false negatives) and an incorrect submission passes with probability $\epsilon_+$ (false positives), the expected reward of a policy with true pass rate $p$ is $(1 - \epsilon_- - \epsilon_+)\,p + \epsilon_+\cdot s$, where $s$ is its submit rate. The noise rescales the signal by $1 - \epsilon_- - \epsilon_+$ and adds variance; false positives also pay for submitting anything. *Options:* (a) rerun failing tests and take the majority, multiplying grading cost. (b) Validate every task by running its reference fix repeatedly and drop flaky tasks ([Section 4.8](04-environments-and-tools.md#48-design-problems-in-practice)). (c) Larger groups to average the noise. *Default:* (b) before training, then (a) for the remaining tests that flake. `flaky_reward` wraps any reward with both kinds of noise; we train with each at a rate of 0.3.
+
+```python
+#@save
+def flaky_reward(reward, false_neg=0.0, false_pos=0.0, seed=0):
+    """Wrap reward(info): a pass reads as 0 w.p. false_neg; a failed submission reads as 1 w.p. false_pos."""
+    rng = random.Random(seed)
+    def noisy(info):
+        r = reward(info)
+        if r > 0 and rng.random() < false_neg:
+            return 0.0
+        if r <= 0 and info['submitted'] and rng.random() < false_pos:
+            return 1.0
+        return r
+    return noisy
+```
+
+```python
+flaky_runs = {'clean': hidden_history}
+for name, kw in [('false negatives 0.3', dict(false_neg=0.3)), ('false positives 0.3', dict(false_pos=0.3))]:
+    policy, flaky_runs[name] = run(flaky_reward(make_reward('hidden'), **kw))
+    h = held_out(policy)
+    print(f"{name:<20} train reward, last 10 {sum(r['reward'] for r in flaky_runs[name][-10:]) / 10:.3f} |"
+          f" train pass, last 10 {sum(r['pass_rate'] for r in flaky_runs[name][-10:]) / 10:.3f} |"
+          f" held-out pass {h['pass_rate']:.3f}")
+```
+
+Output:
+
+```text
+false negatives 0.3  train reward, last 10 0.544 | train pass, last 10 0.766 | held-out pass 0.706
+false positives 0.3  train reward, last 10 0.841 | train pass, last 10 0.764 | held-out pass 0.675
+```
+
+Both noisy runs still learn to read and fix: their true pass rates over the last ten steps, 0.766 and 0.764, match the clean run's 0.711 within noise, and their held-out pass rates, 0.706 and 0.675, are a little below the clean 0.762. What the noise does change is the *reported* reward. With 30% false negatives, the training reward (0.544) understates the true pass rate by about 30%; with 30% false positives it overstates it (0.841), because failed submissions are paid at random. Figure 11.2 shows the two curves for each run. At this scale, with GRPO's group comparison, symmetric noise of this size costs little learning; the cost appears in what the dashboard says, and in the slower learning that the expected-advantage scaling $1 - \epsilon_- - \epsilon_+$ predicts for harder tasks with fewer successes per group.
+
+![Figure 11.2: Flaky verifiers. Left: the training reward as the noisy verifier reports it. Right: the hidden-test pass rate of the same batches. Hidden-test reward, clean or with 30% false negatives or 30% false positives; RL base agent, 40 steps, one seed.](../figures/ch11-flaky.svg)
+
+> **Problem: reward scale and normalization.** *Symptom:* changing a reward's units, or adding a small penalty term, changes the learning speed or the learned behavior far more than expected. *Cause:* with std-normalized group advantages, the scale of the reward cancels within a group, so multiplying it by 10 changes nothing; without std normalization (`adv_mode='mean'`, Dr. GRPO) the advantage scales with the reward and acts like a learning-rate change. A penalty term, in turn, competes with the verifier in reward units: a format penalty of 0.5 per malformed call can outweigh a success. *Options:* (a) keep the verifier in [0, 1] and set every term's size relative to it, in units of "how many failures is this worth". (b) Std normalization, with its difficulty bias ([Section 7.5](07-advantages-and-credit.md#75-critic-free-baselines-from-groups)). (c) Batch-level scaling of group-centered advantages. *Default:* (a) with (c) or std normalization, and every term logged separately. The block computes advantages for the same batch at two reward scales.
+
+```python
+rewards = torch.tensor([t.reward for t in base_trajs])
+for mode in ['grpo', 'mean']:
+    a1 = arl.compute_advantages({'rewards': rewards}, arl.RLConfig(adv_mode=mode))
+    a10 = arl.compute_advantages({'rewards': 10 * rewards}, arl.RLConfig(adv_mode=mode))
+    print(f'adv_mode={mode:<5} mean |A| at reward scale 1: {a1.abs().mean():.3f} | at scale 10: {a10.abs().mean():.3f}')
+```
+
+Output:
+
+```text
+adv_mode=grpo  mean |A| at reward scale 1: 0.512 | at scale 10: 0.512
+adv_mode=mean  mean |A| at reward scale 1: 0.203 | at scale 10: 2.031
+```
+
+With std normalization, multiplying every reward by 10 leaves the advantages unchanged (mean $|A|$ 0.512 at both scales). Without it, the advantages grow tenfold, from 0.203 to 2.031, and so does the gradient: a reward-scale change is a learning-rate change. The same arithmetic governs penalty terms: under `adv_mode='mean'`, a 0.05 step cost moves advantages by 0.05 per call whatever the verifier's scale; under std normalization, its effect depends on how much the verifier varies within the group.
+
+> **Problem: leaking tests.** *Symptom:* training reward on the "hidden" verifier climbs faster than a fresh held-out evaluation, or solutions contain literal values from the grader. *Cause:* the hidden tests reach the agent through some channel: a test tool that runs them, a file in the repository, an error message, or test data copied into the training tasks. A leaked hidden test is a public test, and every exploit of Section 11.3 applies to it. *Options:* (a) grade outside the sandbox after the episode, and audit observations for grader content ([Section 4.8](04-environments-and-tools.md#48-design-problems-in-practice)). (b) Keep a third test set that no reward ever uses. (c) Canary strings in grader files and a scan of transcripts for them. *Default:* (a) and (b). The block simulates a leak: the `test` tool, and therefore `hardcode_tests`, sees the hidden tests too.
+
+```python
+import dataclasses
+leaky = [dataclasses.replace(t, public_tests=t.public_tests + t.hidden_tests) for t in train_tasks]
+for name, tasks in [('no leak', train_tasks), ('hidden tests leaked', leaky)]:
+    infos = [arl.run_episode(arl.scripted_policy('hacker'), arl.BugFixEnv(), t)[1] for t in tasks]
+    print(f'{name:<20} hacker reward: public {sum(map(make_reward("public"), infos)) / len(infos):.2f}'
+          f' | hidden {sum(map(make_reward("hidden"), infos)) / len(infos):.2f}')
+```
+
+Output:
+
+```text
+no leak              hacker reward: public 1.00 | hidden 0.00
+hidden tests leaked  hacker reward: public 1.00 | hidden 1.00
+```
+
+With the hidden tests visible to the `test` tool, `hardcode_tests` special-cases them too, and the hacker's *hidden* reward becomes 1.00. A leak converts the training reward that Section 11.4 trusted into the one that Section 11.3 broke, and nothing in the training curves distinguishes the two. Only a third test set that never reached the agent would show it.
+
+## Summary
+
+- A reward is the specification of the task. Writing it as a function of the episode's terminal record separates the verifier (what counts as success) from reward terms (what the episode's conduct costs); `make_reward` and `flaky_reward` implement both. Public tests, hidden tests, and test fractions define different tasks: the hacker scores 1.000 on the public verifier and 0 on the hidden one.
+- Training on the public tests reproduced reward hacking in about 10 steps: the exploit spread to 97% of episodes, the training reward reached 1.000, and the hidden pass rate on held-out tasks fell from 0.175 to 0. Its dashboard signature is a smooth rising reward, a falling independent measurement, and a rising behavior statistic. Grading with hidden tests (0.762 held-out) or penalizing the known exploit (0.719) removed it.
+- The training reward and the evaluation measurement must not share a weakness: hidden tests are still optimized against, leaked tests are public tests, and only a set that no reward ever uses measures generalization. Monitor the gap between them during training.
+- Learned and judged rewards are proxies that RL takes out of distribution: a Bradley–Terry reward model with 87.5% held-out pairwise accuracy scored a reading hacker at +3.08 against the oracle's +4.31, and a rubric judge scored it equal to the oracle. Partial credit and std normalization paid submissions of unfixed code; partial credit raised the training reward and lowered the held-out pass rate.
+- Potential-based shaping $\gamma\Phi(s') - \Phi(s)$ provably leaves the optimal policy unchanged (checked to $3 \times 10^{-13}$ on the repair MDP), and a read bonus made reading forever optimal. Under outcome-level GRPO a potential-based term with $\Phi = 0$ at the end has no effect at all; a potential computed from public tests is a public-test reward. All measurements here are single-seed mechanism demonstrations on a 158k-parameter model.
+
+## Exercises
+
+1. Prove the necessity half of Ng et al.'s result in a two-state example: construct an MDP and a shaping term $F(s, a, s')$ that is not a difference of potentials and changes the optimal policy, then show that no $\Phi$ reproduces your $F$.
+2. Change an assumption: rerun the hacking run of Section 11.3 starting from the Chapter 6 base agent (`arl.make_base_agent(tok)`) instead of `make_rl_base`. Does the exploit spread faster or slower? Relate the answer to how often each starting policy applies `hardcode_tests` before training.
+3. Write a second exploit op for the gym, for example one that wraps the function body in `try/except` and returns the expected value of the first public test on any error, and add it to `EDIT_OPS` in a copy of the environment. Train with `make_reward('public', exploit_penalty=1.0)`. Does the policy move to the undetected exploit? What does this say about detectors as reward terms?
+4. Train the default configuration against the Bradley–Terry reward model of Section 11.5 instead of the hidden tests: sample with `arl.sample_step`, replace `batch['rewards']` by `rm_scores`, and update with `arl.rl_update`. Plot the RM score and the hidden pass rate over 40 steps. Do you see the rise-then-fall of Gao et al.?
+5. Derive the expected GRPO advantage of an episode under the flaky reward of Section 11.7 as a function of $\epsilon_-$, $\epsilon_+$, and the group's true pass rate. At what value of $\epsilon_- + \epsilon_+$ does the expected gradient vanish?
+6. Implement the potential $\Phi$ = fraction of *hidden* tests passing as a per-turn shaping term with `turn_advantages` and a critic ([Section 7.6](07-advantages-and-credit.md#76-turn-level-advantages)). Does it speed up learning compared with outcome-only GRPO? Explain why the same term under outcome-only GRPO cannot.
+7. Design review: your team's SWE agent is trained with a reward of "all `FAIL_TO_PASS` tests pass", and an LLM judge was added to penalize "test special-casing". After 200 steps the judge's flag rate fell to 0.5% and SWE-bench Verified rose by 2 points, while a fresh internal benchmark fell by 1 point. Write down the hypotheses, the measurements that would distinguish them, and the changes to the reward and the evaluation that you would propose.

@@ -1,0 +1,685 @@
+---
+title: "18. Debugging RL Runs"
+---
+
+[Chapter 17](/tutorial/chapters/17-evaluation) made a pass rate into a measurement with an error bar. This chapter asks what to do when the measurement is bad, or, more dangerously, good for the wrong reason. An RL run is a loop of five programs (sampler, environment, reward, advantage, update) that feed each other, and a fault in any of them produces a run that still executes, still logs, and often still learns something. A supervised loss that is wrong usually announces itself as a loss that does not fall. An RL bug can raise the reward: a mask that trains on the wrong tokens, a stale probability ratio, and a broken gradient-accumulation normalizer all produced rising reward curves in this chapter's experiments.
+
+We do three things. First, we decide what to log and give each number a healthy range measured on TinyAgent. Second, we build a compact instrumented trainer, check that it reproduces `train_rl` exactly, and then break it on purpose, one fault at a time: an off-by-one mask, a stale `old_logp`, entropy collapse, length bias, a sign error, reward hacking, a learning rate that is too high, a gradient-accumulation bug, a temperature mismatch, and a reference model that is secretly the live policy. Each fault gets its dashboard signature next to a healthy run. Third, we turn the signatures into invariants that a codebase can assert before step 1, and into a triage procedure from symptom to test. Every run here is a 158k-parameter mechanism demonstration on 20 training tasks; the signatures transfer, the magnitudes do not.
+
+```python
+#@save
+import copy
+import dataclasses
+import torch
+import torch.nn.functional as F
+import agentrl as arl
+```
+
+```python
+torch.set_num_threads(4)                     # the check host is shared (see Chapter 10)
+tok = arl.build_tokenizer(arl.make_tasks('all'))
+train_tasks, heldout_tasks = arl.make_tasks('train'), arl.make_tasks('heldout')
+base = arl.make_rl_base(tok)                 # Chapter 9's starting policy
+```
+
+## 18.1 What to log, and why
+
+A metric earns a place on the dashboard when some failure moves it before the reward does, or moves it when the reward does not. That rule sorts the useful numbers into four groups.
+
+1. **Outcome.** The training reward, the hidden-test pass rate of the training batch, and the pass rate on held-out tasks. The training reward is what the optimizer sees, so it is the number a fault can corrupt without anyone noticing; the held-out pass rate under an independent verifier is the check on it ([Chapter 11](/tutorial/chapters/11-rewards-and-verifiers), [Chapter 17](/tutorial/chapters/17-evaluation)).
+2. **Behavior.** What the agent did: reads, tests, and edits per episode, malformed calls, submissions, the share of episodes that use a known exploit (`hardcode_tests`), and the number of policy tokens per episode, split into passing and failing episodes. These say *how* a reward was earned, which [Chapter 9](/tutorial/chapters/09-grpo-and-variants#9-4-shortcut-features-in-environment-design) showed is the difference between a skill and a shortcut.
+3. **Optimizer health.** The policy entropy on action tokens, the approximate KL between the policy before and after the update (`approx_kl`), the clip fraction, the extremes of the ratio $\rho$, the gradient norm before clipping, the KL to the reference policy when one is used, and the share of groups whose rewards are all equal (`zero_adv_frac`), which carry no gradient. With a critic, add the explained variance of its values ([Section 7.4](/tutorial/chapters/07-advantages-and-credit#7-4-learning-a-critic)); this chapter's runs are critic-free.
+4. **Consistency.** Quantities that should be a fixed value in a correct implementation, such as the gap between the log-probabilities the sampler recorded and the ones the trainer recomputes. A healthy run puts them at float-precision noise; any visible value is a bug. These are the cheapest metrics to log and the most diagnostic.
+
+`log_metrics` builds the rollout half of one dashboard row from the episodes a step sampled. It reuses Chapter 9's `behavior_stats` and adds the metrics that chapter did not need: malformed calls, the exploit share, submissions, and the lengths of passing and failing episodes. The update half comes from the trainer below and is merged in through `update`.
+
+```python
+#@save
+def log_metrics(sampled, cfg, update=None):
+    """One dashboard row from a step's sampled Trajectory list (+ the update's stats) -> flat dict."""
+    n, G = len(sampled), cfg.group_size
+    rewards = torch.tensor([t.reward for t in sampled]).view(-1, G)                  # [P, G]
+    passed = [bool(t.info['submitted'] and t.info['hidden_pass']) for t in sampled]
+    lengths = [float(t.action_mask.sum()) for t in sampled]                           # policy tokens per episode
+    def mean_length(want):
+        picked = [length for length, p in zip(lengths, passed) if p == want]
+        return sum(picked) / max(len(picked), 1)
+    row = dict(arl.behavior_stats(sampled), n_episodes=n,
+               zero_adv_frac=(rewards.max(-1).values == rewards.min(-1).values).float().mean().item(),
+               malformed=sum(t.info['n_invalid'] for t in sampled) / n,
+               hardcode=sum('hardcode_tests' in t.info['ops'] for t in sampled) / n,
+               submitted=sum(bool(t.info['submitted']) for t in sampled) / n,
+               length_pass=mean_length(True), length_fail=mean_length(False))
+    return dict(row, **(update or {}))
+```
+
+## 18.2 An instrumented trainer with injectable faults
+
+To show what a fault looks like, we need a trainer in which each fault is one switch. The trainer below is Chapter 9's `rl_update` and `train_rl`, split at the places where real bugs live, with a `bug` argument that turns one fault on. `BUGS` lists the code faults; the other failures in the catalogue (a high learning rate, reward hacking, length bias) are configuration choices and need no switch.
+
+`prepare_batch` produces the three tensors the loss consumes: the action mask, `old_logp`, and the advantages. Three faults live here. The off-by-one mask is built from the token owners aligned to `ids` instead of `ids[1:]`, which moves every policy span one position to the right: each call loses its first token, `<call>`, and gains the token after its last one, the `<obs>` delimiter that the environment writes. The temperature fault takes `old_logp` from a sampler that ran at temperature 0.7, as a system does when it trusts the inference engine's log-probabilities. The sign error negates the advantages. `make_ref` builds the KL reference, and under `ref_is_policy` it returns the live model itself, a one-character bug in a real codebase (`ref = policy` instead of a deep copy).
+
+```python
+#@save
+BUGS = {
+    'mask_shift': '(1) action mask aligned to ids instead of ids[1:]: each policy span moves one token right',
+    'stale_old_logp': '(2) old_logp recomputed from the current weights before every minibatch',
+    'entropy_sign': '(3) entropy bonus added with the wrong sign: an entropy penalty of ENTROPY_COEF',
+    'sign_flip': '(5) advantages negated',
+    'accum_local': '(8) minibatch accumulated over 4 length-sorted microbatches, each token_mean / 4',
+    'sampler_temp': '(9) sampler at SAMPLER_TEMP and its log-probs used as old_logp; trainer at cfg.temperature',
+    'ref_is_policy': '(10) the KL reference is the live policy object',
+}
+SAMPLER_TEMP, ENTROPY_COEF = 0.7, 0.3
+
+
+def prepare_batch(model, batch, cfg, bug=None):
+    """What the trainer feeds its loss -> (mask, old_logp [B, T-1], advantages [B]), with an optional fault."""
+    ids, mask = batch['ids'], batch['action_mask']                         # [B, T], [B, T-1]
+    if bug == 'mask_shift':
+        mask = F.pad(mask, (1, 0))[:, :-1]
+    with torch.no_grad():
+        old_logp = arl.selected_log_probs(model(ids)[:, :-1] / cfg.temperature, ids[:, 1:])
+    if bug == 'sampler_temp':
+        old_logp = batch['sample_logp']
+    advantages = arl.compute_advantages(batch, cfg)
+    return mask, old_logp, -advantages if bug == 'sign_flip' else advantages
+
+
+def make_ref(model, cfg, bug=None):
+    """The frozen KL reference (None when cfg.kl_coef is 0); the live model itself under 'ref_is_policy'."""
+    if not cfg.kl_coef:
+        return None
+    return model if bug == 'ref_is_policy' else copy.deepcopy(model).eval()
+```
+
+`minibatch_backward` computes the loss of one minibatch and backpropagates it, without stepping the optimizer. Two more faults live here. Under `accum_local`, the minibatch is split into four microbatches sorted by length, as a token-budget scheduler would split it, and each microbatch's `token_mean` loss is divided by four: the normalization bug of [Section 14.4](/tutorial/chapters/14-scaling-and-efficiency#14-4-gradient-accumulation-and-loss-normalization). Under `entropy_sign`, an entropy bonus is added to the loss instead of subtracted, which turns it into an entropy penalty. The KL to the reference is computed inside the minibatch, from the reference's forward pass on the same rows, so a reference that is the live policy gives exactly zero.
+
+```python
+#@save
+def minibatch_backward(model, batch, rows, mask, old_logp, advantages, cfg, bug=None, ref_model=None):
+    """Loss and backward for one minibatch, no optimizer step -> stats dict (clip_frac, ..., entropy, loss)."""
+    ids = batch['ids']
+    parts = rows[mask[rows].sum(-1).argsort()].chunk(4) if bug == 'accum_local' else [rows]
+    logs = []
+    for part in parts:
+        logits = model(ids[part])[:, :-1] / cfg.temperature                    # [b, T-1, V]
+        logp = arl.selected_log_probs(logits, ids[part, 1:])
+        loss, stats = arl.policy_loss(logp, old_logp[part], advantages[part], mask[part], cfg)
+        if bug == 'entropy_sign':
+            loss = loss + ENTROPY_COEF * arl.entropy_bonus(logits, mask[part])
+        if ref_model is not None:
+            with torch.no_grad():
+                ref_logp = arl.selected_log_probs(ref_model(ids[part])[:, :-1] / cfg.temperature, ids[part, 1:])
+            kl = arl.masked_mean(arl.kl_penalty(logp, ref_logp, cfg.kl_kind), mask[part])
+            loss, stats['kl_ref'] = loss + cfg.kl_coef * kl, kl.item()
+        (loss / len(parts)).backward()
+        stats['entropy'] = arl.masked_mean(arl.entropy_from_logits(logits.detach()), mask[part]).item()
+        logs.append(dict(stats, loss=loss.item()))
+    return {k: sum(s[k] for s in logs) / len(logs) for k in logs[0]}
+```
+
+`debug_update` is `rl_update` assembled from the two pieces, with the stale-`old_logp` fault: before every minibatch it recomputes "old" log-probabilities from the current weights, which is what happens when the no-grad forward pass is moved inside the minibatch loop. It also logs the consistency metric of Section 18.1, `logp_gap`, the mean absolute difference between the sampler's recorded log-probabilities and the trainer's own recomputation on the tokens the loss trains on.
+
+```python
+#@save
+def debug_update(model, optimizer, batch, cfg, bug=None, ref_model=None, generator=None):
+    """arl.rl_update with diagnostics and an optional fault from BUGS -> dict of mean stats."""
+    mask, old_logp, advantages = prepare_batch(model, batch, cfg, bug)
+    trainer_logp = prepare_batch(model, batch, cfg)[1] if bug else old_logp      # clean recomputation
+    gap = (trainer_logp - batch['sample_logp']).abs()[mask > 0]                   # [N trained tokens]
+    logs = []
+    for _ in range(cfg.epochs):
+        for rows in torch.randperm(len(advantages), generator=generator).chunk(cfg.minibatches):
+            if bug == 'stale_old_logp':
+                old_logp = prepare_batch(model, batch, cfg)[1]
+            optimizer.zero_grad()
+            stats = minibatch_backward(model, batch, rows, mask, old_logp, advantages, cfg, bug, ref_model)
+            stats['grad_norm'] = float(torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm))
+            optimizer.step()
+            logs.append(stats)
+    out = {k: sum(s[k] for s in logs) / len(logs) for k in logs[0]}
+    return dict(out, logp_gap=gap.mean().item(), loss_tokens=mask.sum().item() / len(mask))
+```
+
+`train_logged` is `train_rl` with `log_metrics` rows and the sampler configuration that the temperature fault needs. It evaluates on held-out tasks every `eval_every` steps with the same protocol as `train_rl`: 4 episodes per task, hidden-test pass rate, in the training environment.
+
+```python
+#@save
+def train_logged(model, tasks, tok, cfg, steps, bug=None, eval_tasks=None, eval_every=10, env_factory=None):
+    """arl.train_rl with log_metrics rows and an optional fault from BUGS; trains in place -> history."""
+    torch.manual_seed(cfg.seed)
+    gen = torch.Generator().manual_seed(cfg.seed)
+    env_factory = env_factory or (lambda: arl.make_env(cfg))
+    sampler_cfg = dataclasses.replace(cfg, temperature=SAMPLER_TEMP) if bug == 'sampler_temp' else cfg
+    ref_model = make_ref(model, cfg, bug)
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
+    history = []
+    for step in range(steps):
+        kept, sampled = arl.sample_step(model, env_factory, tasks, tok, sampler_cfg, gen)
+        batch = arl.collate(kept, tok.pad_id)
+        batch['n_turns'] = torch.tensor([float(t.info['n_turns']) for t in kept])
+        row = log_metrics(sampled, cfg, debug_update(model, optimizer, batch, cfg, bug, ref_model, gen))
+        if eval_tasks is not None and (step % eval_every == 0 or step == steps - 1):
+            row['eval_pass'] = arl.evaluate(model, eval_tasks, tok, 4, cfg.temperature,
+                                            torch.Generator().manual_seed(step), cfg, env_factory)['pass_rate']
+        history.append(dict(row, step=step))
+    return history
+```
+
+A debugging harness is only useful if, with no fault injected, it is the trainer it claims to be. We train two copies of the RL base agent for 5 steps, one with `train_rl` and one with `train_logged`, and compare every parameter and every statistic both histories record.
+
+```python
+reference, logged = copy.deepcopy(base), copy.deepcopy(base)
+hist_ref = arl.train_rl(reference, train_tasks, tok, arl.RLConfig(), steps=5)
+hist_log = train_logged(logged, train_tasks, tok, arl.RLConfig(), steps=5)
+same_params = all(torch.equal(p, q) for p, q in zip(reference.parameters(), logged.parameters()))
+same_stats = all(a[k] == b[k] for a, b in zip(hist_ref, hist_log) for k in a)
+print(f'parameters bit-identical: {same_params} | all {len(hist_ref[0])} train_rl statistics identical: {same_stats}')
+```
+
+Output:
+
+```text
+parameters bit-identical: True | all 17 train_rl statistics identical: True
+```
+
+The healthy run is the book's default configuration for 24 steps, with a held-out evaluation every 8 steps. `run` stores each history under a name, and `show` prints a few metrics of each run as the mean of its first four steps, an arrow, the mean of its last four, and the final held-out pass rate.
+
+```python
+RUNS = {}
+def run(name, cfg=arl.RLConfig(), bug=None, steps=24):
+    """Train a fresh copy of the RL base agent with train_logged; keep its history in RUNS[name]."""
+    RUNS[name] = train_logged(copy.deepcopy(base), train_tasks, tok, cfg, steps, bug, heldout_tasks, eval_every=8)
+
+def show(names, keys):
+    """Per run: each metric as mean(first 4 steps) -> mean(last 4 steps), and the last held-out pass rate."""
+    for name in names:
+        h = RUNS[name]
+        mean = lambda k, part: sum(r[k] for r in part) / len(part)
+        cells = ' | '.join(f'{k} {mean(k, h[:4]):.3g} -> {mean(k, h[-4:]):.3g}' for k in keys)
+        print(f"{name:<17}| {cells} | held-out {h[-1]['eval_pass']:.2f}")
+
+run('healthy')
+```
+
+```python
+TAXONOMY = ['reward', 'eval_pass', 'entropy', 'approx_kl', 'clip_frac', 'ratio_max', 'grad_norm', 'length',
+            'zero_adv_frac', 'reads', 'malformed', 'hardcode', 'logp_gap']
+healthy = RUNS['healthy']
+for key in TAXONOMY:
+    values = sorted(r[key] for r in healthy if key in r)
+    print(f'{key:<14} step 0 {healthy[0][key]:9.3g} | last {healthy[-1][key]:9.3g} |'
+          f' min {values[0]:9.3g} | median {values[len(values) // 2]:9.3g} | max {values[-1]:9.3g}')
+```
+
+Output:
+
+```text
+reward         step 0     0.172 | last     0.656 | min     0.172 | median     0.438 | max     0.859
+eval_pass      step 0       0.1 | last       0.7 | min       0.1 | median     0.525 | max       0.7
+entropy        step 0     0.565 | last      0.21 | min     0.169 | median     0.355 | max     0.565
+approx_kl      step 0   0.00322 | last  0.000681 | min  9.61e-05 | median  0.000303 | max   0.00322
+clip_frac      step 0    0.0139 | last         0 | min         0 | median         0 | max    0.0139
+ratio_max      step 0      1.21 | last      1.27 | min      1.03 | median      1.11 | max      1.27
+grad_norm      step 0     0.204 | last     0.243 | min     0.155 | median     0.226 | max     0.288
+length         step 0      13.2 | last      14.4 | min        11 | median      13.7 | max      14.4
+zero_adv_frac  step 0     0.375 | last     0.375 | min         0 | median      0.25 | max     0.625
+reads          step 0     0.312 | last      1.08 | min     0.312 | median      1.11 | max      1.61
+malformed      step 0    0.0625 | last    0.0469 | min    0.0312 | median    0.0781 | max     0.188
+hardcode       step 0    0.0781 | last         0 | min         0 | median    0.0156 | max     0.125
+logp_gap       step 0  3.05e-08 | last  6.98e-09 | min  6.98e-09 | median  3.07e-08 | max  5.02e-08
+```
+
+With no fault, the 24-step run raises the training reward from 0.17 to 0.66 and the held-out pass rate from 0.10 to 0.70. The columns give the healthy range of every metric in this setup, and every failure below is read against them. Three groups deserve a closer look. The consistency metric `logp_gap` stays between $7 \times 10^{-9}$ and $5 \times 10^{-8}$: the sampler and the trainer run the same fp32 model on the same tokens and agree to rounding error. The update is small. `approx_kl` is 0.003 at step 0 and about $3 \times 10^{-4}$ afterwards, the largest ratio is at most 1.27, and the clip fraction is 0 in at least half of the steps, because the first of the two minibatches is exactly on-policy and the second moves little. And between 0 and 63% of groups per step carry no gradient (median 25%), from the first step on, because the base agent fails all eight attempts at some tasks.
+
+The table condenses Section 18.1 into a reference card. The healthy column is measured above; the failure column refers to the catalogue that follows, numbered as in the opening of the chapter.
+
+| Metric | Healthy on TinyAgent (24 steps) | What a departure flags |
+| --- | --- | --- |
+| reward, batch pass rate | 0.17 → 0.66 | everything, but it rose under faults (1), (2), (6), (8) |
+| held-out hidden pass rate | 0.10 → 0.70 | (6) hacking, shortcuts; the only check on the reward itself |
+| entropy of action tokens | 0.57 → 0.21, smooth | falls ahead of the reward: (3) collapse; rises: (1), (7) |
+| `approx_kl` per step | 0.003 at step 0, then about 3e-4 | (7) learning rate: 0.31 at step 0; heavy sample reuse |
+| `clip_frac` | 0 to 0.014 | exactly 0 for a whole run: (2) stale `old_logp` |
+| ratio extremes | max 1.03 to 1.27 | far from 1: (1), (9) |
+| `grad_norm` before clipping | 0.16 to 0.29 | (1): up to 1.5; exactly 0: every group flat |
+| policy tokens per episode, by outcome | 11 to 14 | failures growing: (4) length bias |
+| `zero_adv_frac` | 0 to 0.63 | toward 1 at low reward: (3), (5), (7), (9); at high reward: saturation |
+| reads, malformed calls, exploit share | reads 0.31 → 1.08; malformed below 0.19; `hardcode` → 0 | reads vanish: (3), (9); malformed: (7); exploit: (6) |
+| `logp_gap` (sampler vs trainer) | 7e-9 to 5e-8 | (1), (9); retokenization drift (Chapter 5); engine mismatch (Chapter 13) |
+| `kl_ref` (with a KL term) | 0.014 → 0.057 at $\beta = 0.1$ | exactly 0: (10) reference = policy |
+| critic explained variance | no critic here; 0.1 to 0.3 in Chapters 7–8 | a critic that tracks nothing |
+
+## 18.3 Faults in what the loss sees
+
+The first three faults corrupt the inputs of the loss: which tokens it trains on, and which probabilities it treats as $\pi_{\text{old}}$. If Section 18.1's grouping is right, their signatures should be in the consistency metrics, before any curve has had time to move.
+
+```python
+run('mask_shift', bug='mask_shift')
+run('stale_old_logp', bug='stale_old_logp')
+run('sampler_temp', bug='sampler_temp')
+show(['healthy', 'mask_shift', 'stale_old_logp', 'sampler_temp'],
+     ['reward', 'logp_gap', 'clip_frac', 'ratio_max', 'grad_norm'])
+```
+
+Output:
+
+```text
+healthy          | reward 0.191 -> 0.656 | logp_gap 3.79e-08 -> 8.86e-09 | clip_frac 0.00385 -> 0 | ratio_max 1.12 -> 1.14 | grad_norm 0.191 -> 0.229 | held-out 0.70
+mask_shift       | reward 0.188 -> 0.52 | logp_gap 3.75 -> 3.1 | clip_frac 0.0129 -> 0.0437 | ratio_max 1.23 -> 2.96 | grad_norm 0.478 -> 1.5 | held-out 0.47
+stale_old_logp   | reward 0.207 -> 0.715 | logp_gap 4.32e-08 -> 1.51e-08 | clip_frac 0 -> 0 | ratio_max 1 -> 1 | grad_norm 0.225 -> 0.238 | held-out 0.68
+sampler_temp     | reward 0.227 -> 0.156 | logp_gap 0.0752 -> 0.0285 | clip_frac 0.0218 -> 0 | ratio_max 2.65 -> 2.96 | grad_norm 0.202 -> 0 | held-out 0.15
+```
+
+The off-by-one mask did not stop learning. Its training reward rose from 0.19 to 0.52, and a reward curve alone would pass it as a slower seed of the healthy run. The consistency metric disagrees from step 0: `logp_gap` averages 3.75 nats per trained token over the first four steps, against $4 \times 10^{-8}$. The sampler records log-probabilities only for tokens it sampled. On the `<obs>` delimiter that the shifted mask now covers, its record is the placeholder 0, while the trainer's model gives the delimiter a log-probability far below zero, because no demonstration ever trained the policy to predict it. The same tokens drive the optimizer metrics. The gradient of $\log \pi$ with respect to a token's logit is $1 - \pi$, near 1 for a token the model considers nearly impossible, so these few tokens dominate the update: the gradient norm is 0.48 at the start and 1.5 at the end, against about 0.2. Their ratios move far as well (largest ratio 3.0, clip fraction 0.044). The fault cost 23 points of held-out pass rate, 0.47 against 0.70.
+
+The stale-`old_logp` run is the opposite case. Its outcome cannot be told apart from the healthy one (training reward 0.72 against 0.66, held-out 0.68 against 0.70), and its only signature is that two optimizer metrics sit *exactly* at their trivial values for the whole run: clip fraction 0 and largest ratio 1. When `old_logp` is recomputed from the current weights, $\rho \equiv 1$, the clip can never act, and PPO silently becomes a sequence of plain policy-gradient steps. Here that is harmless, because each batch is used for two minibatch steps and the second moves little. With more epochs or minibatches the clip is what stops the policy from moving too far on one batch ([Section 8.5](/tutorial/chapters/08-ppo#8-5-diagnostics-and-early-stopping) measured clip fraction and KL growing over four epochs), and this bug removes it without a trace in the reward. A metric that is exactly 0 or exactly 1 for a whole run is a warning, not a reassurance.
+
+The temperature fault is the most destructive of the three. The sampler ran at temperature 0.7, and the trainer, at temperature 1, used the sampler's log-probabilities as $\pi_{\text{old}}$. The training reward fell from 0.23 to 0.16 and the held-out pass rate ended at 0.15, below the blind single guess of 0.20. `logp_gap` is 0.075 nats at the start, six orders of magnitude above healthy noise, and the largest ratio at step 0 is already 2.65, where a correct pipeline has $\rho = 1$ exactly before the first update. The behavior metrics show what happened next.
+
+```python
+show(['healthy', 'mask_shift', 'sampler_temp'], ['entropy', 'malformed', 'reads', 'zero_adv_frac'])
+```
+
+Output:
+
+```text
+healthy          | entropy 0.531 -> 0.195 | malformed 0.0625 -> 0.0664 | reads 0.473 -> 1.09 | zero_adv_frac 0.312 -> 0.375 | held-out 0.70
+mask_shift       | entropy 0.579 -> 0.795 | malformed 0.043 -> 0.121 | reads 0.418 -> 1.2 | zero_adv_frac 0.312 -> 0.0938 | held-out 0.47
+sampler_temp     | entropy 0.47 -> 0.156 | malformed 0 -> 0 | reads 0.0859 -> 0.00391 | zero_adv_frac 0.281 -> 1 | held-out 0.15
+```
+
+Reads fell from 0.09 per episode to 0.004, and by the end every group had equal rewards (`zero_adv_frac` 1.0) and the gradient norm was 0: the policy stopped exploring and the run died. The mask fault, by contrast, raised entropy (0.58 to 0.80) and malformed calls (0.04 to 0.12), side effects of training a token the policy never emits and no longer training the `<call>` token that opens each call.
+
+Why would a temperature mismatch kill exploration in particular? Lowering the temperature moves probability from rare tokens to common ones, so for a rare token the ratio $\pi_{T=1}/\mu_{T=0.7}$ starts above 1, and for a common token below 1. PPO's clip removes the gradient of a positive-advantage token whose ratio exceeds $1 + \epsilon$. We measure this on one batch of the base agent sampled at temperature 0.7, before any update. `probe` samples 64 episodes the way a given (possibly faulty) pipeline samples them; Section 18.6 reuses it.
+
+```python
+check_cfg = arl.RLConfig(kl_coef=0.1)          # with a KL term, so that Section 18.6's reference checks apply
+def probe(bug=None, seed=1):
+    """64 episodes of the base agent on 8 training tasks, sampled as the (possibly faulty) pipeline samples."""
+    cfg = dataclasses.replace(check_cfg, temperature=SAMPLER_TEMP) if bug == 'sampler_temp' else check_cfg
+    return arl.sample_groups(base, lambda: arl.make_env(cfg), train_tasks[:8], tok, cfg,
+                             torch.Generator().manual_seed(seed))
+```
+
+```python
+batch = arl.collate(probe('sampler_temp'), tok.pad_id)                       # sampled at T = 0.7
+mask, old_logp, adv = prepare_batch(base, batch, check_cfg, 'sampler_temp')
+ratio = (prepare_batch(base, batch, check_cfg)[1] - old_logp).exp()          # pi_T=1 / mu_T=0.7, [B, T-1]
+rare = old_logp.exp() < 0.5                                                  # the sampler gave them < 0.5
+positive = (adv > 0)[:, None] & (mask > 0)                                   # tokens the update should reinforce
+for name, sel in [('rare (mu < 0.5)', rare & positive), ('common (mu >= 0.5)', ~rare & positive)]:
+    print(f'{name:<19} tokens with A > 0: {int(sel.sum()):4d} | mean ratio {ratio[sel].mean():.2f} |'
+          f' clipped (ratio > 1.2) {(ratio[sel] > 1.2).float().mean():.2f}')
+```
+
+Output:
+
+```text
+rare (mu < 0.5)     tokens with A > 0:   17 | mean ratio 1.17 | clipped (ratio > 1.2) 0.12
+common (mu >= 0.5)  tokens with A > 0:   91 | mean ratio 0.95 | clipped (ratio > 1.2) 0.00
+```
+
+Among the tokens the update should reinforce, the rare ones (sampler probability below 0.5) start with a mean ratio of 1.17, and 12% of them are clipped before the policy has changed at all; the common ones start at 0.95, and none is clipped. The clip, which exists to keep the policy from moving too far, here withholds gradient from the rare good actions, and rare good actions are what exploration consists of. Two effects therefore act together: the cooler sampler draws reads less often (0.09 per episode at step 0, against 0.47 at temperature 1), and when a read is rewarded, part of its update is clipped away. The rare-token sample is small (17 tokens), and the chapter does not run the control with a consistent temperature of 0.7 on both sides; in an exploratory run not reported here, consistent sampling and training at a lower temperature learned normally, which points at the mismatch rather than the temperature. Exercise 1 asks you to run the control. The fix does not depend on the decomposition: the trainer must compute probabilities under the distribution the sampler actually used ([Chapter 3](/tutorial/chapters/03-language-models-as-policies)), or correct for the difference with importance weights ([Chapter 13](/tutorial/chapters/13-rollout-systems)).
+
+## 18.4 Faults in the gradient
+
+The next three faults leave the loss's inputs intact and corrupt the gradient: its sign, its size, and its normalization. The sign and learning-rate runs stop at step 8, as an engineer would stop them once the failure is unambiguous.
+
+```python
+run('sign_flip', bug='sign_flip', steps=8)
+run('lr 1e-2', arl.RLConfig(lr=1e-2), steps=8)
+run('accum_local', bug='accum_local')
+show(['healthy', 'sign_flip', 'lr 1e-2', 'accum_local'], ['reward', 'approx_kl', 'entropy', 'malformed', 'turns'])
+for name in ['healthy', 'lr 1e-2']:
+    print(f'{name:<17}', ' '.join(f"{r['approx_kl']:.4f}" for r in RUNS[name][:8]), '| approx_kl, steps 0-7')
+```
+
+Output:
+
+```text
+healthy          | reward 0.191 -> 0.656 | approx_kl 0.00112 -> 0.000442 | entropy 0.531 -> 0.195 | malformed 0.0625 -> 0.0664 | turns 3.52 -> 4.26 | held-out 0.70
+sign_flip        | reward 0.125 -> 0.0273 | approx_kl 0.00145 -> 0.000167 | entropy 0.551 -> 0.501 | malformed 0.0664 -> 0.0312 | turns 4.21 -> 5.48 | held-out 0.03
+lr 1e-2          | reward 0.043 -> 0 | approx_kl 0.0953 -> 0.00214 | entropy 0.417 -> 1.08 | malformed 0.762 -> 2.89 | turns 4.75 -> 6 | held-out 0.00
+accum_local      | reward 0.219 -> 0.668 | approx_kl 0.00129 -> 0.000197 | entropy 0.499 -> 0.204 | malformed 0.0391 -> 0.16 | turns 3.64 -> 4.38 | held-out 0.65
+healthy           0.0032 0.0007 0.0003 0.0003 0.0006 0.0005 0.0006 0.0002 | approx_kl, steps 0-7
+lr 1e-2           0.3098 0.0642 0.0049 0.0024 0.0038 0.0021 0.0018 0.0009 | approx_kl, steps 0-7
+```
+
+With its advantages negated, the policy performs gradient *descent* on the reward. The training reward fell from 0.13 to 0.03 in eight steps, the held-out pass rate to 0.03, and episodes lengthened from 4.2 to 5.5 turns, because using the budget without submitting is a reliable way to earn 0. The optimizer metrics are unremarkable: `approx_kl`, entropy, and malformed calls are all in the healthy range. Only the outcome says the run is wrong, which is why Section 18.6 tests the direction of an update directly.
+
+A learning rate of $10^{-2}$, ten times the default, shows first in the optimizer and format metrics. Malformed calls rose from 0.76 to 2.89 per episode, entropy from 0.42 to 1.08 nats, every late episode used all 6 turns, and the reward fell from 0.04 to 0. The last two lines of the output show the order of events in the per-step KL.
+
+The first update at learning rate $10^{-2}$ moved the policy by an approximate KL of 0.31 nats per token, about 100 times the healthy first step's 0.0032, and the second by 0.064. After that, the per-step KL fell back toward healthy values. The run had not recovered: its reward had already collapsed, the groups were flat, and there was little gradient left to apply. This is the general shape of an instability: one or two steps with a large `approx_kl` or `grad_norm`, then a quiet, broken run. A dashboard that shows only smoothed curves can hide the cause and show only the aftermath, so log the per-step maximum alongside the mean.
+
+The accumulation fault has no signature at all. Its training reward (0.67) and held-out pass rate (0.65) match the healthy run within the noise of a 40-episode evaluation (a binomial standard error of about 0.07 at a pass rate of 0.7), and so does every optimizer metric; malformed calls end slightly higher (0.16 against 0.07). Yet the gradient is wrong: the invariant check of Section 18.6 measures a relative error of 0.54 against the one-pass gradient (Figure 18.2), because tokens in short microbatches receive several times the weight of tokens in long ones ([Section 14.4](/tutorial/chapters/14-scaling-and-efficiency#14-4-gradient-accumulation-and-loss-normalization)). In this gym the episodes are short and similar in length, the error acts like a noisy reweighting of tokens, and the run survives. With long-tailed agent episodes, a length-sorted microbatch can hold a single very long trajectory, whose tokens then receive a small fraction of their intended weight. Whether that shows on a dashboard depends on the run; whether it is present does not, and only a test of the gradient can say.
+
+## 18.5 Faults in the objective
+
+The last four failures come from the objective rather than from a defect in the update: a regularizer, a loss aggregation, a reward, and a reference model. We expect their signatures in the behavior statistics.
+
+```python
+run('entropy_sign', bug='entropy_sign')
+show(['healthy', 'entropy_sign'], ['reward', 'entropy', 'reads', 'zero_adv_frac'])
+```
+
+Output:
+
+```text
+healthy          | reward 0.191 -> 0.656 | entropy 0.531 -> 0.195 | reads 0.473 -> 1.09 | zero_adv_frac 0.312 -> 0.375 | held-out 0.70
+entropy_sign     | reward 0.176 -> 0.176 | entropy 0.445 -> 0.0268 | reads 0.191 -> 0.00781 | zero_adv_frac 0.344 -> 0.844 | held-out 0.20
+```
+
+We force an entropy collapse with an entropy bonus whose sign is flipped, which makes it a penalty of 0.3 on the mean entropy of action tokens. In real runs, collapse usually has slower causes, such as a low sampling temperature, a reward that favors one mode, or many epochs per batch ([Chapter 10](/tutorial/chapters/10-kl-entropy-regularization)), but its signature is the same. Entropy fell from 0.45 to 0.027 nats, and reads disappeared with it, from 0.19 per episode to 0.008. The reward stayed at 0.18 and the held-out pass rate ended at 0.20, the blind single-guess ceiling of [Section 9.4](/tutorial/chapters/09-grpo-and-variants#9-4-shortcut-features-in-environment-design): the policy collapsed onto "edit, submit" before it discovered that reading pays. `zero_adv_frac` separates this from success. A converged policy and a collapsed one both have low entropy and many flat groups, but here 84% of groups are flat at a reward of 0.18, so almost all of them are all-fail groups, while a converged policy's flat groups are all-pass. Log the all-pass and all-fail shares separately, and treat "entropy falling faster than the reward rises" as the early warning.
+
+```python
+run('healthy, 12 turns', arl.RLConfig(max_turns=12), steps=16)
+run('length bias', arl.RLConfig(max_turns=12, loss_mode='seq_mean_token_mean'), steps=16)
+show(['healthy, 12 turns', 'length bias'], ['reward', 'length_pass', 'length_fail', 'turns', 'reads'])
+```
+
+Output:
+
+```text
+healthy, 12 turns| reward 0.23 -> 0.488 | length_pass 13.9 -> 13.2 | length_fail 16.1 -> 12.8 | turns 4.34 -> 3.98 | reads 0.57 -> 1.08 | held-out 0.55
+length bias      | reward 0.195 -> 0.512 | length_pass 14.3 -> 12.7 | length_fail 20.8 -> 33.9 | turns 5.45 -> 6.77 | reads 0.75 -> 2.71 | held-out 0.55
+```
+
+Length bias needs room to appear, so both runs here have a 12-turn budget and run 16 steps; they differ only in the loss aggregation. Under `token_mean`, failing episodes got shorter, from 16 to 13 policy tokens. Under `seq_mean_token_mean` they grew from 21 to 34 tokens, and episodes used 6.8 turns against 4.0, with 2.7 reads per episode where one is enough. Passing episodes stayed at about 13 tokens in both runs, and neither the training reward (0.51 against 0.49) nor the held-out pass rate (0.55 in both) separated them. This is the mechanism of [Section 6.6](/tutorial/chapters/06-policy-gradient#6-6-loss-aggregation): under per-sequence normalization each failing episode carries a fixed total penalty, so each of its tokens is penalized less when the episode is longer, and the cheapest way to fail is to fail slowly. The signature is length split by outcome; the overall mean length mixes the effect with the changing share of failures. For a coding agent, this failure costs rollout time and context long before it shows in the reward.
+
+```python
+run('public reward', arl.RLConfig(reward='public'))
+show(['healthy', 'public reward'], ['reward', 'pass_rate', 'hardcode', 'reads'])
+```
+
+Output:
+
+```text
+healthy          | reward 0.191 -> 0.656 | pass_rate 0.191 -> 0.656 | hardcode 0.0703 -> 0 | reads 0.473 -> 1.09 | held-out 0.70
+public reward    | reward 0.273 -> 0.969 | pass_rate 0.176 -> 0.00781 | hardcode 0.125 -> 0.969 | reads 0.418 -> 0.0352 | held-out 0.00
+```
+
+Reward hacking reproduces [Chapter 11](/tutorial/chapters/11-rewards-and-verifiers#11-3-reproducing-reward-hacking)'s run in 24 steps. The training reward is the public-test verifier, and it rose from 0.27 to 0.97, the best curve in this chapter. On the same episodes, the hidden-test pass rate fell from 0.18 to 0.008, the share that applies `hardcode_tests` rose from 0.13 to 0.97, reads fell to 0.04 per episode, and the held-out pass rate ended at 0. The exploit share is the most direct metric because it names the behavior, but it exists only because someone already knew the exploit. The hidden-test pass rate needs an independent verifier, and it also catches exploits that nobody anticipated.
+
+```python
+run('KL 0.1', arl.RLConfig(kl_coef=0.1), steps=8)
+run('ref_is_policy', arl.RLConfig(kl_coef=0.1), bug='ref_is_policy', steps=8)
+show(['KL 0.1', 'ref_is_policy'], ['reward', 'kl_ref'])
+print('ref_is_policy identical to the run without KL:',
+      all(a['reward'] == b['reward'] and a['grad_norm'] == b['grad_norm'] for a, b in zip(RUNS['ref_is_policy'], healthy)))
+```
+
+Output:
+
+```text
+KL 0.1           | reward 0.203 -> 0.27 | kl_ref 0.0142 -> 0.0571 | held-out 0.23
+ref_is_policy    | reward 0.191 -> 0.277 | kl_ref 0 -> 0 | held-out 0.28
+ref_is_policy identical to the run without KL: True
+```
+
+The last fault is a reference model that is the live policy. With $\beta = 0.1$ and a frozen copy as the reference, the KL to the reference grows from 0.014 to 0.057 nats per token in eight steps as the policy moves away from its start. With the live policy as the reference, it is exactly 0 at every step, and the run is bit-identical to the healthy run without any KL term: the $k_3$ estimate and its gradient both vanish when $\pi_{\text{ref}} = \pi_\theta$. Every other metric is healthy, because this run *is* the healthy run. The failure is that the regularization the configuration asks for does not exist, and it surfaces only when someone needs it, for example when a long run drifts. A KL that is exactly zero while its coefficient is not is always a bug.
+
+![Figure 18.1: The dashboard of ten failures. Each failure has two panels: the training batch reward (top) and the metric that exposes it (bottom), in red, against its matched healthy run in blue. Healthy runs: the default configuration, except a 12-turn budget for the length-bias control and a KL coefficient of 0.1 for the reference fault. 24 steps of 64 episodes; the sign-error and learning-rate runs stopped at 8 steps, and the length-bias pair ran 16 steps.](/tutorial/figures/ch18-dashboard.svg)
+
+Figure 18.1 collects the ten failures as a dashboard shows them. Read the top panel of each pair first. In four of the ten (the stale ratio, the length bias, the accumulation bug, the live reference) the reward curve is inside the healthy run's step-to-step noise; in one (the mask) it rises more slowly but still rises; and in one (reward hacking) it is the best curve on the page. Then read the bottom panels, which show why Section 18.1 sorted metrics into groups. Consistency metrics flag the code faults (1), (2), (9), and (10) from the first step: a log-prob gap of $10^{0.5}$ instead of $10^{-8}$, a clip fraction pinned at 0, ratios with single steps above 20, a KL pinned at 0. The format metric flags the learning rate (7) within two steps. Behavior metrics flag the objective failures (3), (4), and (6), whose training reward either never separates from the healthy run or moves the wrong way. And one fault, (8), flags nothing.
+
+## 18.6 Invariants every RL codebase should assert
+
+Every fault of Sections 18.3–18.5 that lives in code violates an identity that holds for a correct trainer at step 0, before any training. Checking the identities costs a few forward and backward passes on one batch, and a failed check names the fault far more precisely than a curve does. The book's list:
+
+1. **Mask = policy tokens.** The loss mask covers exactly the positions whose target token the policy sampled.
+2. **Sampler = trainer log-prob.** On those positions, the trainer's recomputed log-probability equals the sampler's record up to numerical noise: $10^{-4}$ here, where both are fp32; for bf16 engines, a threshold set from the measured mismatch distribution ([Chapter 13](/tutorial/chapters/13-rollout-systems), Section 13.6).
+3. **Ratio = 1 before any step.** In the first minibatch of a step, $\rho = \pi_\theta / \pi_{\text{old}}$ is exactly 1.
+4. **Group advantage mean = 0** for group baselines ([Section 7.5](/tutorial/chapters/07-advantages-and-credit#7-5-critic-free-baselines-from-groups)), which also checks that groups are laid out as the advantage function expects.
+5. **Loss invariant to padding.** Appending pad columns to the batch changes nothing.
+6. **Accumulated = one-pass gradient.** Gradient accumulation reproduces the gradient of one backward pass over the whole batch.
+7. **`old_logp` frozen in the update.** After the first minibatch step, later minibatches see $\rho \neq 1$, so `approx_kl` over the update is positive.
+8. **The update follows the sign of the advantage.** After one update, $\log \pi(\tau)$ rises for episodes with $A > 0$ and falls for $A < 0$: the change and the advantage are positively correlated.
+9. **KL to the reference is 0 at init and positive after a step**, when a reference is used. The first half holds by construction in this trainer; the second catches a live reference.
+
+`pad_batch` and `flat_grad` are small helpers: one adds right padding, the other runs the trainer's backward on a whole batch and returns its gradient as one vector. `step_checks` takes one real update on a copy of the model and tests invariants 7 to 9.
+
+```python
+#@save
+def pad_batch(batch, extra, pad_id=0):
+    """The same batch with `extra` columns of right padding on every [B, T] and [B, T-1] tensor."""
+    return dict(batch, **{k: F.pad(batch[k], (0, extra), value=pad_id if k == 'ids' else 0)
+                          for k in ['ids', 'attention_mask', 'action_mask', 'sample_logp']})
+
+
+def flat_grad(model, batch, mask, old_logp, advantages, cfg, bug=None):
+    """The trainer's backward on the whole batch, no optimizer step -> (gradient vector, stats)."""
+    model.zero_grad()
+    stats = minibatch_backward(model, batch, torch.arange(len(advantages)), mask, old_logp, advantages, cfg, bug)
+    grad = torch.cat([p.grad.flatten() for p in model.parameters()])
+    model.zero_grad()
+    return grad, stats
+
+
+def step_checks(model, batch, owned, trainer_logp, cfg, bug=None):
+    """Invariants of one real update on a copy of model -> dict of (measured value, passed)."""
+    trained = copy.deepcopy(model)
+    ref = make_ref(trained, cfg, bug)
+    stats = debug_update(trained, torch.optim.Adam(trained.parameters(), lr=cfg.lr), batch, cfg, bug, ref,
+                         torch.Generator().manual_seed(0))
+    new_logp = prepare_batch(trained, batch, cfg)[1]
+    moved = ((new_logp - trainer_logp) * owned).sum(-1)                         # change of log pi(episode), [B]
+    corr = torch.corrcoef(torch.stack([moved, arl.compute_advantages(batch, cfg)]))[0, 1].item()
+    kl = 0.0 if ref is None else arl.masked_mean(arl.kl_penalty(new_logp, prepare_batch(ref, batch, cfg)[1]),
+                                                 owned).item()
+    return {'old_logp frozen in the update': (stats['approx_kl'], stats['approx_kl'] > 0),
+            'update raises log pi where A > 0': (corr, corr > 0),
+            'KL to reference > 0 after a step': (kl, ref is None or kl > 0)}
+```
+
+```python
+#@save
+def sanity_checks(model, trajs, tok, cfg, bug=None):
+    """Invariants of the instrumented trainer on one batch at step 0 -> dict check -> (measured value, passed)."""
+    batch = arl.collate(trajs, tok.pad_id)
+    batch['n_turns'] = torch.tensor([float(t.info['n_turns']) for t in trajs])
+    mask, old_logp, adv = prepare_batch(model, batch, cfg, bug)
+    owned = (arl.pad_rows([t.owner[1:] for t in trajs], mask.shape[1], -1) == arl.OWNER['policy']).float()
+    trainer_logp = prepare_batch(model, batch, cfg)[1]
+    gap = (trainer_logp - batch['sample_logp']).abs()[mask > 0].max().item()
+    full, _ = flat_grad(model, batch, mask, old_logp, adv, cfg, None if bug == 'accum_local' else bug)
+    grad, stats = flat_grad(model, batch, mask, old_logp, adv, cfg, bug)          # the trainer's own path
+    padded = pad_batch(batch, 8, tok.pad_id)
+    _, pad_stats = flat_grad(model, padded, *prepare_batch(model, padded, cfg, bug), cfg, bug)
+    ratio_err = max(stats['ratio_max'] - 1, 1 - stats['ratio_min'])
+    group_mean = adv.view(-1, cfg.group_size).mean(-1).abs().max().item()
+    pad_err = abs(pad_stats['loss'] - stats['loss'])
+    accum_err = ((grad - full).norm() / full.norm()).item()
+    checks = {'mask = policy tokens': (int((mask != owned).sum()), bool((mask == owned).all())),
+              'sampler = trainer log-prob': (gap, gap < 1e-4),
+              'ratio = 1 before any step': (ratio_err, ratio_err < 1e-4),
+              'group advantage mean = 0': (group_mean, group_mean < 1e-5),
+              'loss invariant to padding': (pad_err, pad_err < 1e-5),
+              'accumulated = one-pass gradient': (accum_err, accum_err < 1e-4)}
+    return dict(checks, **step_checks(model, batch, owned, trainer_logp, cfg, bug))
+```
+
+```python
+for name, (value, ok) in sanity_checks(base, probe(), tok, check_cfg).items():
+    print(f'{name:<34} {value:10.3g}  {"ok" if ok else "FAIL"}')
+```
+
+Output:
+
+```text
+mask = policy tokens                        0  ok
+sampler = trainer log-prob           1.31e-06  ok
+ratio = 1 before any step                   0  ok
+group advantage mean = 0             2.24e-08  ok
+loss invariant to padding            7.45e-09  ok
+accumulated = one-pass gradient             0  ok
+old_logp frozen in the update         0.00223  ok
+update raises log pi where A > 0        0.514  ok
+KL to reference > 0 after a step       0.0124  ok
+```
+
+`sanity_checks` builds the batch exactly as the trainer does and runs the six static checks and the three one-step checks, returning each check's measured value and verdict. The trajectories carry their token owners ([Section 5.6](/tutorial/chapters/05-trajectories-and-templates#5-6-trajectories-and-masks)), which is what makes the mask check independent of the mask under test. With no fault, all nine checks pass, and the values show the margins. The mask matches the owners exactly. The largest sampler–trainer gap over 64 episodes is $1.3 \times 10^{-6}$: lockstep sampling runs the episodes in different batch shapes than the trainer, so fp32 rounding differs slightly, which is why the threshold is not zero. Padding changes the loss by $7 \times 10^{-9}$. After one step, the change in episode log-probability correlates with the advantage at 0.51; a small clipped step over two minibatches is not expected to give a correlation near 1, and its sign is what matters. Now the same checks with each code fault switched on, one row per fault and one column per check, numbered as in the list above.
+
+```python
+MATRIX = {bug: sanity_checks(base, probe(bug), tok, check_cfg, bug) for bug in [None, *BUGS]}
+names = list(MATRIX[None])
+print(f'{"":<15}', ' '.join(f'{i + 1:>4}' for i in range(len(names))))
+for bug, checks in MATRIX.items():
+    print(f'{str(bug):<15}', ' '.join(f'{"ok" if ok else "FAIL":>4}' for _, ok in checks.values()))
+```
+
+Output:
+
+```text
+                   1    2    3    4    5    6    7    8    9
+None              ok   ok   ok   ok   ok   ok   ok   ok   ok
+mask_shift      FAIL FAIL   ok   ok FAIL   ok   ok   ok   ok
+stale_old_logp    ok   ok   ok   ok   ok   ok FAIL   ok   ok
+entropy_sign      ok   ok   ok   ok   ok   ok   ok   ok   ok
+sign_flip         ok   ok   ok   ok   ok   ok   ok FAIL   ok
+accum_local       ok   ok   ok   ok   ok FAIL   ok   ok   ok
+sampler_temp      ok FAIL FAIL   ok   ok   ok   ok   ok   ok
+ref_is_policy     ok   ok   ok   ok   ok   ok   ok   ok FAIL
+```
+
+Every code fault fails at least one check, and the failing checks identify it: the stale ratio fails only check 7, the sign error only check 8, the accumulation bug only check 6, the live reference only check 9. Figure 18.2 shows the matrix with the measured values. Three results deserve comment. The off-by-one mask fails three checks, one of them padding invariance, which we did not design for it: shifting a mask to the right drops the last column of an unpadded batch but moves it into a pad column of a padded one, so the loss depends on the padding. The temperature fault fails both log-probability checks, with step-0 ratios as large as 3 where they should all be 1. And the entropy penalty passes all nine: it is a plausible-looking term with the wrong sign, the update still follows the sign of the advantage (correlation 0.37 in Figure 18.2), and only the dashboard of Section 18.5 shows the collapse. Invariants catch implementation faults; objective faults need the dashboard. Neither catches reward hacking, the learning rate, or length bias, which are configuration choices running correct code, and need the held-out evaluation and the healthy reference.
+
+![Figure 18.2: Which invariant catches which fault. Rows: the instrumented trainer with no fault and with each code fault of `BUGS`; columns: the nine checks of `sanity_checks`, run once on 64 episodes of the RL base agent before any training. Red cells fail.](../figures/ch18-checks.svg)
+
+## 18.7 Triage: from symptom to test
+
+A dashboard says *that* something is wrong. Triage is the procedure that turns a symptom into the cheapest test that decides between its causes. The book's procedure has four steps, in order of cost.
+
+1. **Run the invariants.** `sanity_checks` costs a few forward and backward passes on one batch, and it identifies or rules out every code fault of this chapter. Run it at the start of every run, and again after every change to the trainer, the template, the sampler, or the batching code.
+2. **Read the consistency metrics.** A `logp_gap` above noise, a ratio or clip fraction stuck at its trivial value, or a KL that is exactly 0 is a bug, not a dynamic, and needs no comparison run.
+3. **Compare against a healthy reference.** Optimizer and behavior metrics have no fixed correct value. Their meaning comes from the healthy range of the same setup (the table of Section 18.2) and from the seed spread ([Chapter 17](/tutorial/chapters/17-evaluation)). Change one thing at a time against the reference.
+4. **Check the outcome against an independent signal.** Held-out tasks under a verifier the policy cannot see are the only defense against a reward that measures the wrong thing.
+
+Figure 18.3 maps each symptom of this chapter to its first test.
+
+![Figure 18.3: Triage map. Left: a symptom on the dashboard. Middle: the first test to run. Right: the faults it points to, numbered as in this chapter's catalogue. Read a row left to right; several symptoms share a test, and the consistency checks of Section 18.6 come first because they are cheap and decisive.](/tutorial/figures/ch18-triage.svg)
+
+Two notes on using the map. Symptoms share causes: a `zero_adv_frac` rising toward 1 at a low reward appeared under the entropy collapse, the temperature mismatch, the sign error, and the high learning rate, so the test decides, not the symptom. And the order matters: a consistency fault can imitate the dynamic failures downstream of it. The mask fault raised the gradient norm, the clip fraction, entropy, and malformed calls, which together look like a learning rate that is too high; lowering the learning rate, the natural response, does nothing about the cause. Fix the cheap invariants before tuning anything.
+
+> **In production.** verl at the project's pinned commit `00094bd` (source read on the check host, 2026-10-13) logs most of these groups: score, reward, advantage, and return statistics; `response_length/mean`, `max`, `min`, and `clip_ratio` (the share of responses cut at the length limit); `actor/entropy`; `actor/pg_clipfrac` and `actor/pg_clipfrac_lower` (the dual clip); `actor/ppo_kl`, a masked mean of the log-ratio (the $k_1$ estimate); the gradient norm; and `critic/vf_explained_var` when a critic is used. When the rollout's log-probabilities are recorded in the batch, it also computes `training/rollout_probs_diff_mean`, `_max`, and `_std`, absolute differences of token *probabilities* between the rollout engine and the trainer on the response mask, and their Pearson correlation: the consistency metric of this chapter, on probabilities rather than log-probabilities. Task-specific behavior statistics, such as tool calls per episode or an exploit share, are the user's to add.
+
+## 18.8 Design problems in practice
+
+> **Problem: a run that looks healthy on reward but is broken.** *Symptom:* the training reward rises, perhaps a little more slowly than in earlier runs, and nobody looks further. *Cause:* a policy gradient is robust to many implementation faults, because the gradient on the correct tokens is still present. A fault that adds wrong terms, drops some right ones, or removes a safety mechanism slows or biases learning without stopping it; the mask fault of Section 18.3 is the canonical case. *Options:* (a) gate every run on `sanity_checks` at step 0; (b) log the consistency metrics (`logp_gap`, ratios and KLs that should be exactly trivial) and alert on any value above noise; (c) compare reward curves against a pinned healthy reference run. *Default:* (a) and (b), which are cheap and decisive; (c) alone cannot tell a slower bug from a slower seed. The two reward curves, every four steps:
+
+```python
+for name in ['healthy', 'mask_shift']:
+    h = RUNS[name]
+    print(f'{name:<11}| reward', ' '.join(f"{h[i]['reward']:.2f}" for i in range(0, 24, 4)),
+          f"| held-out {h[-1]['eval_pass']:.2f} | logp_gap {h[0]['logp_gap']:.2g} | grad_norm {h[0]['grad_norm']:.2f}")
+```
+
+Output:
+
+```text
+healthy    | reward 0.17 0.34 0.36 0.44 0.53 0.72 | held-out 0.70 | logp_gap 3e-08 | grad_norm 0.20
+mask_shift | reward 0.17 0.27 0.39 0.41 0.39 0.50 | held-out 0.47 | logp_gap 3.5 | grad_norm 0.48
+```
+
+Through step 12, the faulty run's rewards (0.17, 0.27, 0.39, 0.41) track the healthy run's (0.17, 0.34, 0.36, 0.44) within their step-to-step noise. The faulty run falls behind only later, ending at 0.50 against 0.72 at step 20, a gap that someone looking only at the reward could attribute to a seed. The step-0 numbers on the same lines are unambiguous: a log-prob gap of 3.5 against $3 \times 10^{-8}$, and a gradient norm 2.4 times the healthy one.
+
+> **Problem: a silent failure seen only in held-out evaluation.** *Symptom:* every training-side metric looks good, or better than usual: rising reward, falling entropy, small KL steps, normal gradient norms. *Cause:* the training signal and the goal have separated. Reward hacking is the clean case ([Chapter 11](/tutorial/chapters/11-rewards-and-verifiers)); memorized shortcuts ([Chapter 9](/tutorial/chapters/09-grpo-and-variants#9-4-shortcut-features-in-environment-design)) and a reward that measures a proxy are others. No training-side metric can see it, because they all measure the policy's relation to the reward it was given. *Options:* (a) held-out evaluation under an independent verifier at a fixed cadence; (b) behavior statistics for every exploit found so far; (c) periodic human or model review of sampled trajectories. *Default:* (a) always, with (b) for known exploits, and (c) when (a) and (b) disagree with what the trajectories suggest. The hacking run of Section 18.5:
+
+```python
+h = RUNS['public reward']
+for step in [0, 8, 16, 23]:
+    r = h[step]
+    print(f"step {step:2d} | reward {r['reward']:.3f} | entropy {r['entropy']:.3f} | grad_norm {r['grad_norm']:.3f}"
+          f" | approx_kl {r['approx_kl']:.1e} | held-out hidden pass {r['eval_pass']:.3f}")
+```
+
+Output:
+
+```text
+step  0 | reward 0.234 | entropy 0.565 | grad_norm 0.252 | approx_kl 3.3e-03 | held-out hidden pass 0.175
+step  8 | reward 0.750 | entropy 0.310 | grad_norm 0.404 | approx_kl 4.7e-04 | held-out hidden pass 0.125
+step 16 | reward 0.969 | entropy 0.115 | grad_norm 0.155 | approx_kl 1.4e-04 | held-out hidden pass 0.025
+step 23 | reward 0.969 | entropy 0.092 | grad_norm 0.200 | approx_kl 2.2e-05 | held-out hidden pass 0.000
+```
+
+Read the step-16 row without its last column: reward 0.97, entropy 0.12, a gradient norm of 0.16, and an `approx_kl` of $1.4 \times 10^{-4}$, the profile of a run converging cleanly. Its held-out hidden-test pass rate was 0.025, on the way to 0 at step 23, from 0.175 at the start. The same logic applies to checkpoint selection: a checkpoint chosen by training reward would be the most hacked one. Choose checkpoints on a held-out validation split ([Section 17.8](/tutorial/chapters/17-evaluation#17-8-choosing-a-checkpoint-without-touching-the-test-set)) and keep the test split for the final report.
+
+> **Problem: a spike that does not reproduce.** *Symptom:* a run shows a spike in `grad_norm`, `approx_kl`, or reward, and a rerun of the same configuration does not, so the cause cannot be inspected. *Cause:* either the rerun did not draw the same samples, or numerical nondeterminism changed them. *Options:* (a) make every step replayable: log the seeds and sampler state, and save the batch (token ids, sampler log-probs, rewards) with a model checkpoint at every step, or at every step whose metrics cross a threshold, then replay the update deterministically and inspect the batch; (b) estimate the seed spread of the metric ([Chapter 17](/tutorial/chapters/17-evaluation)) before calling a spike anomalous; (c) batch-invariant kernels, which remove the numerical source at a throughput cost (the Thinking Machines report in [Chapter 20](/tutorial/chapters/20-frontier)). *Default:* (a) and (b): a replayed spike is a bug report with evidence, and a spike inside the seed spread is noise. The block measures how far three kinds of rerun move the first six steps: an exact rerun, a rerun from weights multiplied by $1 + 10^{-5}$ noise (a stand-in for nondeterministic reductions), and a rerun with a different seed.
+
+```python
+def signature(h):
+    """What a rerun must match: per-step reward, length, and gradient norm."""
+    return [(r['reward'], r['length'], r['grad_norm']) for r in h]
+
+again = train_logged(copy.deepcopy(base), train_tasks, tok, arl.RLConfig(), 6)
+nudged = copy.deepcopy(base)
+with torch.no_grad():                                  # relative 1e-5 noise on every weight
+    for p in nudged.parameters():
+        p.mul_(1 + 1e-5 * torch.randn(p.shape, generator=torch.Generator().manual_seed(0)))
+perturbed = train_logged(nudged, train_tasks, tok, arl.RLConfig(), 6)
+other_seed = train_logged(copy.deepcopy(base), train_tasks, tok, arl.RLConfig(seed=1), 6)
+print('same seed, 6 steps, identical:', signature(again) == signature(healthy[:6]))
+for name, h in [('weights x (1 + 1e-5 noise)', perturbed), ('seed 1', other_seed)]:
+    print(f'{name:<26} rewards equal at {sum(a["reward"] == b["reward"] for a, b in zip(h, again))}/6 steps |'
+          f' max |grad_norm diff| {max(abs(a["grad_norm"] - b["grad_norm"]) for a, b in zip(h, again)):.1e}')
+```
+
+Output:
+
+```text
+same seed, 6 steps, identical: True
+weights x (1 + 1e-5 noise) rewards equal at 6/6 steps | max |grad_norm diff| 8.3e-06
+seed 1                     rewards equal at 0/6 steps | max |grad_norm diff| 1.7e-01
+```
+
+The same seed reproduced six steps exactly, even though the reference run interleaved held-out evaluations with training: evaluation uses its own generator, so it cannot shift the training stream. Weights perturbed by $10^{-5}$ changed the gradient norms by at most $8 \times 10^{-6}$ and no reward. No sampled episode changed in six steps, because a categorical sample flips only when its uniform draw lands within the perturbation of a probability boundary. A different seed changed the reward at every step and the gradient norm by up to 0.17, more than the healthy run's whole range of gradient norms (0.16 to 0.29). On this model, then, an irreproducible spike is a question about samples, not about numerics. At scale the two mix: bf16 kernels that are not batch-invariant change log-probabilities by about 0.03 nats per token with the batch composition (Section 13.6), enough to flip sampled tokens early, after which two runs share nothing but their configuration.
+
+> **Problem: bisecting a regression between two code versions.** *Symptom:* the current code trains worse than last week's, and twenty commits lie between them. *Cause:* any of them. RL regressions rarely sit where the diff looks dangerous; a refactor of a helper or a changed default can flip a sign or shift a mask. *Options:* (a) read the diff; (b) bisect: test the midpoint commit, keep the half that contains the transition, and repeat, which needs $\lceil \log_2 n \rceil$ tests for $n$ commits; (c) bisect with the cheapest decisive test, the invariants when one fails, and otherwise a short run with matched seeds, which costs a run per probe and works only when the regression exceeds the seed spread ([Chapter 17](/tutorial/chapters/17-evaluation)). *Default:* (c). The block simulates a history of eight commits in which commit 3 introduced the sign error; the search sees only whether the invariants pass at each commit.
+
+```python
+COMMITS = ['cache eval tasks', 'log entropy per turn', 'vectorize collate', 'inline advantage helper',
+           'bf16 autocast in sampler', 'rename config fields', 'new task split', 'faster sampler']
+BAD = 3                                                # simulated history: commit 3 introduced a sign error
+def checks_pass(commit):
+    """Does the code at this commit pass every invariant? (The search below never reads BAD.)"""
+    bug = 'sign_flip' if commit >= BAD else None
+    return all(ok for _, ok in sanity_checks(base, probe(), tok, check_cfg, bug).values())
+
+good, bad = 0, len(COMMITS) - 1                         # commit 0 known good, the last one known bad
+while bad - good > 1:
+    mid = (good + bad) // 2
+    passed = checks_pass(mid)
+    print(f'test commit {mid} ({COMMITS[mid]}): {"pass" if passed else "fail"}')
+    good, bad = (mid, bad) if passed else (good, mid)
+print(f'first bad commit: {bad} ({COMMITS[bad]})')
+```
+
+Output:
+
+```text
+test commit 3 (inline advantage helper): fail
+test commit 1 (log entropy per turn): pass
+test commit 2 (vectorize collate): pass
+first bad commit: 3 (inline advantage helper)
+```
+
+Three tests located commit 3 among eight. With invariants as the test, bisection is fast and its answer is unambiguous. With a training run as the test, each probe costs a run, and a regression smaller than the seed spread cannot be bisected reliably. That is a reason to add an invariant once a bug is found, so that the next regression of its kind costs one batch to find. `git bisect run` automates the same search over a real history.
+
+## Summary
+
+- A useful dashboard has four groups of metrics: outcome, behavior, optimizer health, and consistency. Consistency metrics (the sampler–trainer log-prob gap, ratios and KLs that must be exactly 1 or 0) are the cheapest and most decisive; on TinyAgent the healthy gap is below $10^{-7}$.
+- An instrumented copy of the trainer reproduced `train_rl` bit for bit, and ten failures were reproduced on it. The training reward rose under the mask, stale-ratio, accumulation, and hacking faults; the mask fault cost 23 points of held-out pass rate while its reward rose, and reward hacking produced the best reward curve and a held-out pass rate of 0.
+- Each failure has a signature in one metric group: consistency for the mask, stale-ratio, temperature, and live-reference faults; optimizer and format metrics for the learning rate; behavior for entropy collapse, length bias, and hacking. The accumulation bug had none.
+- Nine step-0 invariants, saved as `sanity_checks`, caught every code fault, each through the checks that name it. They cannot catch objective or configuration failures, which need the dashboard, a healthy reference, and held-out evaluation.
+- Triage runs the invariants first, then the consistency metrics, then compares with a healthy reference and the seed spread, and always checks the outcome against an independent verifier. Make steps replayable and bisect regressions with an invariant when one exists. All runs here are tiny-scale mechanism demonstrations: the signatures transfer, the magnitudes do not.
+
+## Exercises
+
+1. Change an assumption: run the control that Section 18.3 leaves open. Train with `RLConfig(temperature=0.7)` and no fault, so that the sampler and trainer agree at 0.7. Does the policy learn to read? Then rerun the fault with `SAMPLER_TEMP = 0.9` and `0.5`. How do the clipped share of rare positive-advantage tokens and the final held-out pass rate change with the gap?
+2. The stale `old_logp` was harmless with one epoch and two minibatches. Rerun it and the healthy run with `epochs=4, minibatches=4`, and log `approx_kl` per minibatch. When does the missing clip begin to matter?
+3. Write an invariant that catches the entropy-penalty fault in one step. One candidate: with every advantage set to 0, a correct update leaves the policy unchanged unless a regularizer is intended. Implement it, and list the configurations in which it would raise a false alarm.
+4. Inject a fault the nine checks miss, for example advantages computed after the batch is shuffled out of its group layout. Which check comes closest, and what new invariant catches it?
+5. The `logp_gap` threshold of $10^{-4}$ assumes fp32 on both sides. Using Section 13.6's bf16 measurements, propose a threshold and a statistic (mean, p99, or max) that separates numerical mismatch from an off-by-one mask in a bf16 engine–trainer pair.
+6. Make a spike replayable: extend `train_logged` to save the batch and the model state whenever `grad_norm` exceeds three times its running median, and write `replay(step)` that reproduces the logged statistics of that step exactly.
+7. Design review: your SWE agent's training reward has risen steadily for 300 steps, its entropy is falling smoothly, and its held-out pass rate has been flat for the last 100 steps. A colleague proposes doubling the learning rate. Write the triage you would run first, in order, with the metric or test each step reads and the decision it supports.

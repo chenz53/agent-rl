@@ -1,0 +1,784 @@
+# 9. GRPO and the Critic-Free Family
+
+[Chapter 8](08-ppo.md) made sample reuse safe with a clipped ratio, and it paid for its advantages with a critic that explained a small share of the variance of the returns and doubled the trainer's memory. [Chapter 7](07-advantages-and-credit.md#75-critic-free-baselines-from-groups) had already shown the alternative: sample several attempts at the same task and let them serve as each other's baseline. **Group Relative Policy Optimization** (GRPO; Shao et al., 2024) combines the two ideas, PPO's clipped surrogate with a group baseline and no critic, and it and its descendants are the objectives of most public RL recipes for reasoning and coding models ([Chapter 20](20-frontier.md)).
+
+This chapter builds the book's main training loop, `train_rl`, around GRPO, and expresses each published variant (Dr. GRPO, DAPO, RLOO, GSPO) as a set of configuration fields of that one loop rather than as a separate program. Chapters 10 to 19 all train with it. We then run it on the BugFix gym and meet a problem that no choice of objective fixes: the agent learns to pass training tasks without reading the code. Diagnosing that problem with behavior statistics and fixing it in the *environment* is the core of Section 9.4, and it decides the task setting the rest of the book uses. The chapter ends with small controlled ablations of the variants, labeled for what they are: mechanism demonstrations on a 158k-parameter model, not benchmark evidence.
+
+```python
+#@save
+import copy
+import dataclasses
+import random
+from dataclasses import dataclass
+import torch
+import agentrl as arl
+```
+
+```python
+tok = arl.build_tokenizer(arl.make_tasks('all'))
+train_tasks, heldout_tasks = arl.make_tasks('train'), arl.make_tasks('heldout')
+base = arl.make_base_agent(tok)
+```
+
+## 9.1 GRPO as in DeepSeekMath
+
+DeepSeekMath (Shao et al., 2024) defines GRPO for a question $q$ with $G$ sampled outputs $o_1, \dots, o_G$ from $\pi_{\text{old}}$:
+
+$$
+J_{\text{GRPO}}(\theta) = \mathbb{E}\Big[\frac{1}{G}\sum_{i=1}^{G}\frac{1}{|o_i|}\sum_{t=1}^{|o_i|}\Big(\min\big(\rho_{i,t}\hat A_{i},\ \mathrm{clip}(\rho_{i,t}, 1-\epsilon, 1+\epsilon)\hat A_{i}\big) - \beta\, \hat{\mathbb{D}}_{\text{KL}}\big[\pi_\theta \,\|\, \pi_{\text{ref}}\big]_{i,t}\Big)\Big],
+$$
+
+with outcome advantages $\hat A_i = (r_i - \mathrm{mean}(\mathbf{r}))/\mathrm{std}(\mathbf{r})$ shared by every token of output $i$, and the per-token KL estimate $\frac{\pi_{\text{ref}}}{\pi_\theta} - \log\frac{\pi_{\text{ref}}}{\pi_\theta} - 1$, the $k_3$ estimator. Read against the earlier chapters, it is four choices:
+
+1. **Group sampling.** $G$ attempts per task in the same step (DeepSeekMath reports $G = 64$).
+2. **A critic-free advantage.** The group mean as the baseline and the group's standard deviation as the scale: `group_advantages` of Section 7.5.
+3. **PPO's clipped per-token ratio** (Section 8.2), aggregated by averaging each sequence's tokens and then the sequences: `seq_mean_token_mean` of Section 6.6.
+4. **A KL penalty to a frozen reference policy in the loss**, with coefficient $\beta$ (reported as 0.04), rather than as a per-token reward as in RLHF-style PPO.
+
+DeepSeekMath also reports that "the policy model only has a single update following each exploration stage". With a single update, $\pi_\theta = \pi_{\text{old}}$ at the moment of the gradient, every ratio is 1, and the clip is inactive; the objective is then a group-baseline policy gradient with a KL term. Many implementations instead split each batch into several minibatches, which makes all but the first slightly off-policy and gives the clip work to do. "GRPO" in practice therefore names a family of settings, and the book writes them down as fields.
+
+`RLConfig` collects every setting that `train_rl` reads. The defaults are the book's GRPO configuration on the version of the gym that Section 9.4 arrives at. Fields that belong to a variant are introduced in Section 9.5.
+
+```python
+#@save
+@dataclass
+class RLConfig:
+    """Settings of train_rl; defaults are the book's GRPO on the anonymized one-edit gym (Section 9.4)."""
+    # sampling
+    group_size: int = 8              # G attempts per task
+    prompts_per_step: int = 8        # tasks per step; a batch is G * prompts_per_step episodes
+    temperature: float = 1.0
+    max_turns: int = 6
+    # environment (Section 9.4)
+    rename: bool = True              # give every episode a random, uninformative function name
+    max_edits: object = 1            # edits applied per episode; None = unlimited (the Chapter 4 gym)
+    reward: object = 'hidden'        # 'hidden', 'public', or a callable(info) -> float
+    # advantages
+    adv_mode: str = 'grpo'           # 'grpo' (mean / std), 'mean' (Dr. GRPO), 'rloo'
+    overlong_buffer: int = 0         # DAPO-style linear penalty over the last turns of the budget; 0 = off
+    dynamic_sampling: bool = False   # DAPO: keep only groups whose rewards differ, resample to refill
+    max_sample_rounds: int = 4
+    # loss and update
+    ratio_level: str = 'token'       # 'token' (PPO, GRPO) or 'sequence' (GSPO)
+    clip_low: float = 0.2
+    clip_high: float = 0.2
+    loss_mode: str = 'token_mean'    # any arl.aggregate_loss mode
+    norm_const: object = None        # for loss_mode='constant'; None = rows * max_turns * MAX_CALL_TOKENS
+    kl_coef: float = 0.0             # beta of a KL penalty to a frozen reference policy
+    kl_kind: str = 'k3'              # 'k1', 'k2', or 'k3' (Chapter 10)
+    lr: float = 1e-3
+    epochs: int = 1
+    minibatches: int = 2
+    max_grad_norm: float = 1.0
+    seed: int = 0
+```
+
+Three defaults depart from DeepSeekMath and need a reason. `token_mean` replaces `seq_mean_token_mean`, for the length reasons of [Section 6.6](06-policy-gradient.md#66-loss-aggregation), revisited in Section 9.7. `kl_coef` is 0, as in DAPO and the public coding-agent recipes of Chapter 20; [Chapter 10](10-kl-entropy-regularization.md) studies the KL term. And each batch is split into 2 minibatches, so the clip is exercised but the update stays close to on-policy (Section 8.6).
+
+## 9.2 The training loop
+
+`train_rl` is assembled from five pieces, each saved separately so that later chapters can replace one: an environment factory and a group sampler, behavior statistics, advantages, the clipped update, and the loop itself.
+
+### Sampling groups
+
+`make_env` builds one environment as the configuration describes it. `EditBudgetEnv`, the environment it builds by default, is defined in Section 9.4; with `max_edits=None` it returns Chapter 4's `BugFixEnv` unchanged. `sample_groups` lays tasks out in consecutive groups of $G$, which is the layout `group_advantages` expects, and runs all episodes in lockstep with Chapter 5's `rollout_batch`. When `cfg.rename` is set, each episode's task passes through `randomize_names` (Section 9.4) with a Python random stream seeded from the torch generator, so the whole step is reproducible from one seed. The `env_factory` argument is the hook for custom environments and rewards ([Chapter 11](11-rewards-and-verifiers.md) uses it).
+
+```python
+#@save
+def make_env(cfg):
+    """One fresh environment as cfg describes it: budgets, reward, and edit limit."""
+    if cfg.max_edits is None:
+        return arl.BugFixEnv(cfg.max_turns, cfg.reward)
+    return EditBudgetEnv(cfg.max_turns, cfg.reward, cfg.max_edits)
+
+
+def sample_groups(model, env_factory, tasks, tok, cfg, generator):
+    """cfg.group_size consecutive episodes per task -> list of len(tasks) * G Trajectory."""
+    names = random.Random(int(torch.randint(2 ** 31, (1,), generator=generator)))   # renaming stream
+    batch_tasks = [task for task in tasks for _ in range(cfg.group_size)]
+    if cfg.rename:
+        batch_tasks = [randomize_names(task, names) for task in batch_tasks]
+    envs = [env_factory() for _ in batch_tasks]
+    return arl.rollout_batch(model, envs, batch_tasks, tok, cfg.max_turns, cfg.temperature, generator)
+```
+
+### What the agent did
+
+Reward alone cannot distinguish an agent that reads the code from one that guesses well, and Section 9.4 depends on telling them apart. `behavior_stats` reports, per episode: the hidden-test pass rate, the reward, the number of `read`, `test`, and applied edit calls, whether the first applied edit was the task's correct op, the number of turns, and the number of policy tokens. The correct op of each task comes from the family table of Chapter 4, so the renamed tasks of Section 9.4 are scored by their original identity.
+
+```python
+#@save
+FIX_OP = {f"{family}/{variant['f']}": spec['fix_op']
+          for family, spec in arl.FAMILIES.items() for variant in spec['variants']}
+
+
+def behavior_stats(trajs):
+    """Per-episode averages: pass_rate, reward, reads, tests, edits, first_edit_right, turns, length."""
+    n = len(trajs)
+    def per_episode(call):
+        return sum(t.info['actions'].count(call) for t in trajs) / n
+    return dict(pass_rate=sum(bool(t.info['submitted'] and t.info['hidden_pass']) for t in trajs) / n,
+                reward=sum(t.reward for t in trajs) / n,
+                reads=per_episode('<call> read </call>'), tests=per_episode('<call> test </call>'),
+                edits=sum(len(t.info['ops']) for t in trajs) / n,
+                first_edit_right=sum(t.info['ops'][:1] == [FIX_OP[t.info['task']]] for t in trajs) / n,
+                turns=sum(t.info['n_turns'] for t in trajs) / n,
+                length=sum(float(t.action_mask.sum()) for t in trajs) / n)
+```
+
+### Advantages and the KL term
+
+`compute_advantages` turns a collated batch into one advantage per episode. Rewards may first be shaped by DAPO's overlong penalty (Section 9.5); the three advantage modes are Chapter 7's estimators. `kl_penalty` is the per-token estimate of $\mathrm{KL}(\pi_\theta \,\|\, \pi_{\text{ref}})$ from tokens sampled by $\pi_\theta$, with the log-ratio $\log(\pi_{\text{ref}}/\pi_\theta)$ written as $\ell$: $k_1 = -\ell$, $k_2 = \ell^2/2$, $k_3 = e^{\ell} - 1 - \ell$. [Chapter 10](10-kl-entropy-regularization.md) derives their bias, variance, and the gradients they produce as losses.
+
+```python
+#@save
+def compute_advantages(batch, cfg):
+    """One advantage per episode [B] from batch['rewards'] laid out in groups of cfg.group_size."""
+    rewards = batch['rewards']
+    if cfg.overlong_buffer:                        # linear penalty from 0 to -1 over the last turns of the budget
+        over = (batch['n_turns'] - (cfg.max_turns - cfg.overlong_buffer)).clamp(min=0)
+        rewards = rewards - (over / cfg.overlong_buffer).clamp(max=1.0)
+    if cfg.adv_mode == 'rloo':
+        return arl.rloo_advantages(rewards, cfg.group_size)
+    if cfg.adv_mode in ('grpo', 'mean'):
+        return arl.group_advantages(rewards, cfg.group_size, normalize_std=cfg.adv_mode == 'grpo')
+    raise ValueError(f'unknown adv_mode {cfg.adv_mode!r}')
+
+
+def kl_penalty(logp, ref_logp, kind='k3'):
+    """Per-token estimate of KL(pi_theta || pi_ref) on tokens sampled from pi_theta: [B, T] -> [B, T]."""
+    log_ratio = ref_logp.detach() - logp                       # log pi_ref / pi_theta
+    if kind == 'k1':
+        return -log_ratio
+    if kind == 'k2':
+        return 0.5 * log_ratio ** 2
+    if kind == 'k3':
+        return log_ratio.exp() - 1 - log_ratio
+    raise ValueError(f'unknown KL estimator {kind!r}')
+```
+
+### The update
+
+`policy_loss` dispatches on the ratio level: per-token ratios go to Chapter 8's `ppo_policy_loss`, sequence-level ratios to `gspo_policy_loss` (Section 9.5). `rl_update` is Chapter 8's PPO phase without the critic. It freezes $\pi_{\text{old}}$ and, when a reference model is given, $\pi_{\text{ref}}$, by one no-grad forward pass over the batch (the trainer recomputes `old_logp`, as Section 8.6 recommends, at the sampling temperature), then runs `cfg.epochs` passes of `cfg.minibatches` clipped steps. The KL term is averaged over policy tokens. Entropy is computed from the logits the update already has, so logging it costs nothing.
+
+```python
+#@save
+def policy_loss(logp, old_logp, advantages, mask, cfg):
+    """The clipped surrogate at token or sequence level, as cfg says -> (loss, stats)."""
+    if cfg.ratio_level == 'token':
+        norm = cfg.norm_const or len(logp) * cfg.max_turns * arl.MAX_CALL_TOKENS
+        return arl.ppo_policy_loss(logp, old_logp, advantages, mask, cfg.clip_low, cfg.clip_high,
+                                   cfg.loss_mode, norm_const=norm)
+    if cfg.ratio_level == 'sequence':
+        return gspo_policy_loss(logp, old_logp, advantages, mask, cfg.clip_low, cfg.clip_high)
+    raise ValueError(f'unknown ratio_level {cfg.ratio_level!r}')
+
+
+def rl_update(model, optimizer, batch, advantages, cfg, ref_model=None, generator=None):
+    """cfg.epochs passes of cfg.minibatches clipped steps on one batch -> dict of mean stats."""
+    ids, mask = batch['ids'], batch['action_mask']                          # [B, T], [B, T-1]
+    with torch.no_grad():                                                   # pi_old (and pi_ref), frozen
+        old_logp = arl.selected_log_probs(model(ids)[:, :-1] / cfg.temperature, ids[:, 1:])
+        ref_logp = None if ref_model is None else \
+            arl.selected_log_probs(ref_model(ids)[:, :-1] / cfg.temperature, ids[:, 1:])
+    logs = []
+    for _ in range(cfg.epochs):
+        for rows in torch.randperm(len(ids), generator=generator).chunk(cfg.minibatches):
+            logits = model(ids[rows])[:, :-1] / cfg.temperature             # [b, T-1, V]
+            logp = arl.selected_log_probs(logits, ids[rows, 1:])
+            loss, stats = policy_loss(logp, old_logp[rows], advantages[rows], mask[rows], cfg)
+            if ref_logp is not None and cfg.kl_coef:
+                kl = arl.masked_mean(kl_penalty(logp, ref_logp[rows], cfg.kl_kind), mask[rows])
+                loss, stats['kl_ref'] = loss + cfg.kl_coef * kl, kl.item()
+            optimizer.zero_grad()
+            loss.backward()
+            stats['grad_norm'] = float(torch.nn.utils.clip_grad_norm_(model.parameters(), cfg.max_grad_norm))
+            optimizer.step()
+            stats['entropy'] = arl.masked_mean(arl.entropy_from_logits(logits.detach()), mask[rows]).item()
+            logs.append(stats)
+    return {k: sum(s[k] for s in logs) / len(logs) for k in logs[0]}
+```
+
+### The loop
+
+`sample_step` draws `prompts_per_step` distinct training tasks and samples their groups. With dynamic sampling it keeps only groups whose rewards differ and samples more tasks until the batch is full or the round limit is reached; Section 9.5 explains the choice. It returns the kept episodes and everything sampled, because the cost of a step is what was sampled.
+
+```python
+#@save
+def sample_step(model, env_factory, tasks, tok, cfg, generator):
+    """Sample one step's groups -> (kept episodes for the update, all sampled episodes)."""
+    want, kept, sampled = cfg.prompts_per_step * cfg.group_size, [], []
+    for _ in range(cfg.max_sample_rounds if cfg.dynamic_sampling else 1):
+        order = torch.randperm(len(tasks), generator=generator)[:cfg.prompts_per_step].tolist()
+        trajs = sample_groups(model, env_factory, [tasks[i] for i in order], tok, cfg, generator)
+        sampled += trajs
+        for g in range(0, len(trajs), cfg.group_size):
+            group = trajs[g:g + cfg.group_size]
+            if not cfg.dynamic_sampling or len({t.reward for t in group}) > 1:
+                kept += group
+        if len(kept) >= want:
+            break
+    return kept[:want], sampled
+```
+
+`train_rl` runs `steps` iterations of sample, advantage, update, and log. It trains `model` in place and returns a history with one dictionary per step: the behavior statistics of everything sampled, the update's statistics (`clip_frac`, `approx_kl`, ratio range, `entropy`, `grad_norm`, and `kl_ref` when a reference is used), the number of episodes sampled, the fraction of sampled groups whose rewards were all equal (`zero_adv_frac`), and, every `eval_every` steps, the pass rate on `eval_tasks` with 4 episodes per task. When `kl_coef > 0` and no reference is passed, the reference is a frozen copy of the starting model.
+
+```python
+#@save
+def train_rl(model, tasks, tok, cfg, steps, log_every=0, eval_tasks=None, eval_every=20, env_factory=None,
+             ref_model=None):
+    """Group-based RL on tasks; trains model in place -> history, one dict of statistics per step."""
+    torch.manual_seed(cfg.seed)
+    gen = torch.Generator().manual_seed(cfg.seed)
+    env_factory = env_factory or (lambda: make_env(cfg))
+    if cfg.kl_coef and ref_model is None:
+        ref_model = copy.deepcopy(model).eval()                     # frozen pi_ref = the starting policy
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
+    history = []
+    for step in range(steps):
+        kept, sampled = sample_step(model, env_factory, tasks, tok, cfg, gen)
+        G = cfg.group_size
+        flat = [len({t.reward for t in sampled[g:g + G]}) == 1 for g in range(0, len(sampled), G)]
+        record = dict(step=step, n_episodes=len(sampled), zero_adv_frac=sum(flat) / len(flat),
+                      **behavior_stats(sampled))
+        if kept:
+            batch = arl.collate(kept, tok.pad_id)
+            batch['n_turns'] = torch.tensor([float(t.info['n_turns']) for t in kept])
+            record.update(rl_update(model, optimizer, batch, compute_advantages(batch, cfg), cfg, ref_model, gen))
+        if eval_tasks is not None and (step % eval_every == 0 or step == steps - 1):
+            record['eval_pass'] = evaluate(model, eval_tasks, tok, 4, cfg.temperature,
+                                           torch.Generator().manual_seed(step), cfg, env_factory)['pass_rate']
+        history.append(record)
+        if log_every and (step % log_every == 0 or step == steps - 1):
+            held = f" | held-out {record['eval_pass']:.3f}" if 'eval_pass' in record else ''
+            print(f"step {step:3d} | reward {record['reward']:.3f} | reads {record['reads']:.2f} | edits"
+                  f" {record['edits']:.2f} | entropy {record.get('entropy', 0):.3f}{held}")
+    return history
+```
+
+`evaluate` samples `n_samples` episodes per task under the same environment settings as training and returns the behavior statistics. The default is sampled pass@1 at temperature 1; [Chapter 17](17-evaluation.md) treats evaluation properly.
+
+```python
+#@save
+def evaluate(model, tasks, tok, n_samples=1, temperature=1.0, generator=None, cfg=None, env_factory=None):
+    """n_samples episodes per task in cfg's environment -> behavior_stats dict (pass_rate, reads, ...)."""
+    cfg = dataclasses.replace(cfg or RLConfig(), group_size=n_samples, temperature=temperature)
+    generator = generator or torch.Generator().manual_seed(0)
+    trajs = sample_groups(model, env_factory or (lambda: make_env(cfg)), tasks, tok, cfg, generator)
+    return behavior_stats(trajs)
+```
+
+## 9.3 GRPO on the gym as built
+
+We first train exactly the setup of [Chapter 6](06-policy-gradient.md#67-training-tinyagent-with-reinforce): the base agent, the gym of Chapter 4 with its function names and unlimited edits. Only the update changes, to GRPO with groups of 8 on 8 tasks per step. `rename=False` and `max_edits=None` select the original gym.
+
+```python
+original = RLConfig(rename=False, max_edits=None)
+policy_a = copy.deepcopy(base)
+history_a = train_rl(policy_a, train_tasks, tok, original, steps=80, log_every=20)
+```
+
+Output:
+
+```text
+step   0 | reward 0.156 | reads 0.45 | edits 2.22 | entropy 0.533
+step  20 | reward 0.516 | reads 0.08 | edits 1.94 | entropy 0.373
+step  40 | reward 0.812 | reads 0.00 | edits 1.55 | entropy 0.208
+step  60 | reward 0.969 | reads 0.00 | edits 1.80 | entropy 0.125
+step  79 | reward 0.938 | reads 0.00 | edits 1.88 | entropy 0.099
+```
+
+```python
+def compare(name, model, cfg, n=16):
+    """Train vs held-out behavior of model in cfg's environment, 16 episodes per task."""
+    for split, tasks in [('train', train_tasks), ('held-out', heldout_tasks)]:
+        s = evaluate(model, tasks, tok, n, generator=torch.Generator().manual_seed(7), cfg=cfg)
+        print(f"{name:<20}{split:<9} pass {s['pass_rate']:.3f} | reads {s['reads']:.2f} | edits {s['edits']:.2f}"
+              f" | first edit right {s['first_edit_right']:.2f} | tests {s['tests']:.2f}")
+
+compare('base agent', base, original)
+compare('GRPO, original gym', policy_a, original)
+```
+
+Output:
+
+```text
+base agent          train     pass 0.144 | reads 0.27 | edits 1.96 | first edit right 0.19 | tests 0.29
+base agent          held-out  pass 0.150 | reads 0.21 | edits 1.73 | first edit right 0.16 | tests 0.21
+GRPO, original gym  train     pass 0.981 | reads 0.00 | edits 1.57 | first edit right 0.71 | tests 0.01
+GRPO, original gym  held-out  pass 0.400 | reads 0.00 | edits 2.64 | first edit right 0.13 | tests 0.00
+```
+
+
+The run converges quickly: the batch reward passes 0.9 by step 60, and the entropy of the policy tokens falls from 0.53 to 0.10. On the training tasks the trained policy passes 98% of episodes. On held-out tasks it passes 40%, against 15% for the base agent. A large gain on training tasks with a much smaller one on held-out tasks is the signature of memorization, and the behavior columns say what was memorized. The policy never reads and essentially never tests. Its first edit is the right op in 71% of training episodes and 13% of held-out ones, where a uniform guess among the five repair ops would score 20%. On the held-out tasks it falls back on stacking, 2.6 applied edits per episode. This is Chapter 6's finding reproduced with a different estimator: what was learned is a property of the environment and the starting policy, not of REINFORCE.
+
+## 9.4 Shortcut features in environment design
+
+A **shortcut feature** is an input that predicts the reward on the training distribution without carrying the information the task is meant to require. Optimizers find shortcuts because they are cheaper than the intended skill. The behavior statistics point at the BugFix gym's first one: the issue text.
+
+```python
+for task in [train_tasks[0], train_tasks[4], heldout_tasks[0]]:
+    print(f'{task.split:<8} {task.issue!r:<46} -> fix {task.fix_op}')
+```
+
+Output:
+
+```text
+train    'issue : clamp returns wrong results'          -> fix swap_minmax
+train    'issue : sum_to returns wrong results'         -> fix fix_range_end
+heldout  'issue : pin returns wrong results'            -> fix swap_minmax
+```
+
+The issue names the function, and within the training set each function name occurs in exactly one task, so the name identifies the task and therefore its fix op. A policy that maps the first word after `issue :` to an op needs no information from the environment at all. On held-out tasks the names are words it has never been trained on, and the map has nothing to say. Real benchmarks leak in the same way. SWE-Bench+ (Aleithan et al., 2024) reports that 32.67% of the successful patches it examined on SWE-bench had the solution "directly provided in the issue report", and SWE-Bench Illusion (Liang et al., 2025) reports that models identify the buggy file path from the issue text alone with up to 76% accuracy, dropping to up to 53% on repositories outside the benchmark, which the authors read as memorization ([Chapter 20](20-frontier.md)). In both cases the issue carries information that a real engineer would have to obtain by reading code.
+
+The fix belongs in the environment: make the shortcut carry no information. `randomize_names` renames the function in a task's issue and source to a name drawn at random from all 30 function names of the gym, excluding words already in the source. Every name stays in the Chapter 5 vocabulary, so no tokenizer change is needed. Applied independently to every episode, the name becomes noise: each name appears with every family equally often, and a policy can no longer predict the op from it.
+
+```python
+#@save
+FN_NAMES = sorted({variant['f'] for spec in arl.FAMILIES.values() for variant in spec['variants']})
+
+
+def randomize_names(task, rng):
+    """Copy of task whose function is renamed to a random gym function name not already in its source."""
+    taken = set(arl.compact_source(task.source).split())
+    new = rng.choice([name for name in FN_NAMES if name not in taken])
+    return dataclasses.replace(task, fn_name=new, issue=task.issue.replace(task.fn_name, new),
+                               source=task.source.replace(f'def {task.fn_name}(', f'def {new}('))
+```
+
+The task keeps its `name`, so logs and `FIX_OP` still identify it. We rename the `clamp` task twice and check that every renamed issue and source of every task encodes without unknown tokens.
+
+```python
+rng = random.Random(0)
+for _ in range(2):
+    renamed = randomize_names(train_tasks[0], rng)
+    print(renamed.issue, '|', arl.compact_source(renamed.source).split('\n')[0])
+unknown = sum(tok.unk_id in tok.encode(t.issue + ' ' + arl.compact_source(t.source))
+              for t in arl.make_tasks('all') for t in [randomize_names(t, rng) for _ in range(20)])
+print('renamed tasks with unknown tokens:', unknown)
+```
+
+Output:
+
+```text
+issue : tally returns wrong results | def tally ( value , lower , upper ) :
+issue : pin returns wrong results | def pin ( value , lower , upper ) :
+renamed tasks with unknown tokens: 0
+```
+
+We retrain from the same base agent with renaming on and everything else unchanged.
+
+```python
+renamed_cfg = RLConfig(max_edits=None)                       # rename=True is the default
+policy_b = copy.deepcopy(base)
+history_b = train_rl(policy_b, train_tasks, tok, renamed_cfg, steps=80)
+compare('GRPO, renamed', policy_b, renamed_cfg)
+```
+
+Output:
+
+```text
+GRPO, renamed       train     pass 0.591 | reads 0.01 | edits 2.54 | first edit right 0.22 | tests 0.00
+GRPO, renamed       held-out  pass 0.475 | reads 0.00 | edits 2.51 | first edit right 0.18 | tests 0.00
+```
+
+### The second shortcut
+
+Renaming shrank the gap between training and held-out pass rates from 0.58 to 0.12 (0.59 against 0.48), and it did not produce reading: 0.01 reads per episode. The first edit is now right in 22% and 18% of episodes, the rate of a uniform guess, and the policy applies about 2.5 edits per episode instead. It has switched to the other strategy Chapter 6 found: **stacking** edits. A wrong op usually leaves the source unchanged or changes it harmlessly, so applying several ops in a fixed order repairs several families without looking. How far can that go? `blind_pass_rate` applies a fixed sequence of ops to every task and runs the hidden tests.
+
+```python
+import itertools
+def blind_pass_rate(ops, tasks):
+    """Hidden pass rate of applying ops in order to every task without reading, then submitting."""
+    passed = 0
+    for task in tasks:
+        source = task.source
+        for op in ops:
+            source = arl.EDIT_OPS[op](source, task.public_tests)
+        passed += all(ok for ok, _ in arl.run_tests(source, task.hidden_tests, task.fn_name))
+    return passed / len(tasks)
+
+all_tasks = train_tasks + heldout_tasks
+for n_ops in [1, 2, 3]:
+    best = max((blind_pass_rate(ops, all_tasks), ops) for ops in itertools.product(arl.FIX_OPS, repeat=n_ops))
+    print(f'best blind sequence of {n_ops} edit(s): pass rate {best[0]:.2f} with {" -> ".join(best[1])}')
+```
+
+Output:
+
+```text
+best blind sequence of 1 edit(s): pass rate 0.20 with swap_minmax
+best blind sequence of 2 edit(s): pass rate 0.40 with swap_minmax -> fix_range_end
+best blind sequence of 3 edit(s): pass rate 0.60 with swap_minmax -> fix_range_end -> fix_comparison
+```
+
+A policy that never reads can pass 60% of all tasks with three edits and a submit, well inside the six-turn budget. Renaming removed the information in the issue, and the edit menu still lets the agent enumerate. This is the second shortcut feature, and it is a property of the action space rather than of the observation: wrong actions are free. Real environments are rarely this forgiving. A patch that touches the wrong code usually breaks other tests, and benchmarks grade one final patch. The gym models that by limiting the number of edits an episode can apply. `EditBudgetEnv` refuses edits beyond `max_edits`: the call uses a turn and returns `no change`, and the source is untouched.
+
+```python
+#@save
+class EditBudgetEnv(arl.BugFixEnv):
+    """BugFixEnv that applies at most max_edits edits per episode; later edits use a turn and change nothing."""
+    def __init__(self, max_turns=6, reward='hidden', max_edits=1):
+        super().__init__(max_turns, reward)
+        self.max_edits = max_edits
+
+    def step(self, action_text):
+        call = arl.parse_call(action_text)
+        refused = call is not None and call[0] == 'edit' and call[1] in arl.EDIT_OPS \
+            and len(self.ops) >= self.max_edits
+        if not refused:
+            return super().step(action_text)
+        self.turn += 1
+        self.done = self.turn >= self.max_turns
+        if not self.done:
+            return arl.MESSAGES['unchanged'], 0.0, False, {'turn': self.turn, 'event': 'refused'}
+        info = self.final_info(submitted=False)
+        return arl.MESSAGES['unchanged'], self.reward_fn(info), True, info
+```
+
+With one edit, the best blind policy is the best single op, 0.20 by the table above. Any pass rate above 0.2 now requires information from the environment: the `read` observation, or the `test` output before the edit. We retrain once more from the base agent, now with the book's default configuration: renamed functions and one edit.
+
+```python
+policy_c = copy.deepcopy(base)
+history_c = train_rl(policy_c, train_tasks, tok, RLConfig(), steps=80, log_every=20)
+compare('GRPO, one edit', policy_c, RLConfig())
+```
+
+Output:
+
+```text
+step   0 | reward 0.141 | reads 0.30 | edits 0.95 | entropy 0.510
+step  20 | reward 0.156 | reads 0.02 | edits 0.97 | entropy 0.316
+step  40 | reward 0.234 | reads 0.02 | edits 1.00 | entropy 0.288
+step  60 | reward 0.344 | reads 0.02 | edits 1.00 | entropy 0.195
+step  79 | reward 0.203 | reads 0.02 | edits 1.00 | entropy 0.228
+GRPO, one edit      train     pass 0.194 | reads 0.01 | edits 0.97 | first edit right 0.20 | tests 0.01
+GRPO, one edit      held-out  pass 0.150 | reads 0.03 | edits 0.97 | first edit right 0.15 | tests 0.01
+```
+
+### The exploration problem underneath
+
+With both shortcuts closed, the policy did not learn to read either. Its pass rate stays at the blind ceiling, 0.19 on training tasks and 0.15 held-out, and its reads fall from 0.30 per episode at the first step to 0.02. The batch reward wanders between 0.14 and 0.34 as the policy shifts its single guess from one op to another. The environment now *requires* reading, and the policy gradient still cannot find it. The reason is in the base agent's own samples. RL reweights what the policy already does: an action sequence gains probability only if it earns higher rewards than its group's other attempts. We measure how often the base agent reads before its first edit, and how often that edit is then right.
+
+```python
+def read_then_edit(model, n=16, seed=3):
+    """Share of episodes that read before their first edit, and the first-edit accuracy of those episodes."""
+    cfg = RLConfig(group_size=n)
+    trajs = sample_groups(model, lambda: make_env(cfg), train_tasks, tok, cfg, torch.Generator().manual_seed(seed))
+    readers = [t for t in trajs if t.info['ops'] and '<call> read </call>' in
+               t.info['actions'][:t.info['actions'].index(f"<call> edit {t.info['ops'][0]} </call>")]]
+    right = sum(t.info['ops'][0] == FIX_OP[t.info['task']] for t in readers) / max(len(readers), 1)
+    return len(readers) / len(trajs), right
+
+share, right = read_then_edit(base)
+print(f'base agent: reads before its first edit in {share:.2f} of episodes; that edit is right {right:.2f} of the time')
+```
+
+Output:
+
+```text
+base agent: reads before its first edit in 0.07 of episodes; that edit is right 0.25 of the time
+```
+
+The base agent reads before its first edit in only 7% of episodes, and that edit is then right 25% of the time, close to the 20% of a guess (on about 20 episodes), because its demonstrations came from `random` and `blind` play in which reading was never followed by an informed choice. Reading therefore earns the same reward as not reading, its advantage is zero in expectation, and noise and the faster-improving alternatives drive it out. This is an exploration failure, and closing shortcuts cannot fix it: an environment can make a skill *necessary*, but RL can only amplify a skill the policy already exhibits occasionally.
+
+A pretrained language model is in a better position than this base agent: it has seen code being read and used, and it sometimes does the right thing for the right reason. The book's analogue is a base agent whose demonstrations include a small share of informed play. `make_rl_base` adds one demonstration set from Chapter 4's `oracle` to every four `random` and four `blind` sets, so one demonstration in nine reads and then applies the right op.
+
+```python
+#@save
+def make_rl_base(tok, seed=0):
+    """The RL starting point from Chapter 9 on: the base agent with 1 demonstration set in 9 from the oracle."""
+    return arl.make_base_agent(tok, seed, kinds=('random', 'blind') * 4 + ('oracle',))
+```
+
+```python
+rl_base = make_rl_base(tok)
+share, right = read_then_edit(rl_base)
+print(f'RL base agent: reads before its first edit in {share:.2f} of episodes; that edit is right {right:.2f} of the time')
+compare('RL base agent', rl_base, RLConfig())
+```
+
+Output:
+
+```text
+RL base agent: reads before its first edit in 0.12 of episodes; that edit is right 0.41 of the time
+RL base agent       train     pass 0.169 | reads 0.21 | edits 0.91 | first edit right 0.19 | tests 0.27
+RL base agent       held-out  pass 0.156 | reads 0.24 | edits 0.93 | first edit right 0.19 | tests 0.32
+```
+
+The new starting point has the same pass rate as the old one, 0.17 on training tasks and 0.16 held-out, so it is not a stronger agent. The difference is in one conditional probability: it reads first in 12% of episodes, and its next edit is then right 41% of the time, twice the rate of a guess. That is enough signal for the group baseline to find. The main run of the chapter trains it with the default configuration and evaluates on held-out tasks every 20 steps.
+
+```python
+policy = copy.deepcopy(rl_base)
+history = train_rl(policy, train_tasks, tok, RLConfig(), steps=80, log_every=20, eval_tasks=heldout_tasks)
+compare('GRPO, default', policy, RLConfig())
+```
+
+Output:
+
+```text
+step   0 | reward 0.172 | reads 0.31 | edits 0.97 | entropy 0.565 | held-out 0.100
+step  20 | reward 0.844 | reads 1.02 | edits 0.98 | entropy 0.184 | held-out 0.625
+step  40 | reward 0.938 | reads 1.00 | edits 0.95 | entropy 0.107 | held-out 0.825
+step  60 | reward 0.844 | reads 1.00 | edits 1.00 | entropy 0.092 | held-out 0.825
+step  79 | reward 0.938 | reads 0.98 | edits 0.97 | entropy 0.079 | held-out 0.850
+GRPO, default       train     pass 0.922 | reads 1.00 | edits 0.98 | first edit right 0.92 | tests 0.83
+GRPO, default       held-out  pass 0.838 | reads 1.02 | edits 0.99 | first edit right 0.84 | tests 0.79
+```
+
+This time reading spreads through the batch within 20 steps, and the policy reads in essentially every episode. Its first edit is right in 92% of training episodes and 84% of held-out ones, and the held-out pass rate rises with the training one, from 0.10 at step 0 to 0.85 at step 79 in the periodic evaluation and 0.84 in the 160-episode one. The 80 steps took about 10 to 15 seconds on the check host. The most common held-out episodes show the learned procedure.
+
+```python
+from collections import Counter
+trajs = sample_groups(policy, lambda: make_env(RLConfig()), heldout_tasks, tok, RLConfig(group_size=16),
+                      torch.Generator().manual_seed(11))
+calls = Counter(' -> '.join(a.split()[1] if len(a.split()) == 3 else a.split()[2] for a in t.info['actions'])
+                for t in trajs)
+for sequence, count in calls.most_common(4):
+    print(f'{count:3d} x {sequence}')
+```
+
+Output:
+
+```text
+ 31 x read -> fix_init -> test -> submit
+ 30 x read -> fix_range_end -> test -> submit
+ 28 x read -> swap_minmax -> test -> submit
+ 28 x read -> fix_comparison -> test -> submit
+```
+
+Finally, a control: is the environment fix still needed once the base agent can explore? We train the RL base agent on the original gym, with function names and unlimited edits.
+
+```python
+policy_e = copy.deepcopy(rl_base)
+train_rl(policy_e, train_tasks, tok, original, steps=80)
+compare('RL base, original', policy_e, original)
+```
+
+Output:
+
+```text
+RL base, original   train     pass 0.978 | reads 1.00 | edits 1.05 | first edit right 0.99 | tests 0.98
+RL base, original   held-out  pass 0.838 | reads 1.02 | edits 1.21 | first edit right 0.78 | tests 0.88
+```
+
+![Figure 9.1: Held-out behavior after 80 GRPO steps in five settings: the base agent on the original gym, with renamed functions, with renaming and one edit; the RL base agent with renaming and one edit (the book's default) and on the original gym. Bars: held-out pass rate, reads per episode, and first-edit accuracy.](../figures/ch09-shortcuts.svg)
+
+Every frequent held-out episode is the oracle's procedure: read, apply the op that the source calls for, test, submit. The `test` call is not needed with one edit, since nothing can be done with its result, and the policy keeps it because nothing penalizes it, a reminder of Chapter 7's point that outcome advantages also credit useless steps.
+
+The control is informative in a way we did not expect when we designed it. The RL base agent learns to read on the original gym too, and reaches the same held-out pass rate, 0.838, with slightly more stacking (1.21 edits per held-out episode against 0.99). Once the starting policy explores, reading is the best strategy in either gym, and the shortcuts no longer win.
+
+Figure 9.1 collects the five runs. The two changes do different jobs. The starting policy decided *whether* the skill was learned: from the Chapter 6 base agent, no environment produced reading, and from the RL base agent, both did. The environment decides *what a pass rate means*. In the original gym, a pass rate of 0.6 can come from reading, from names, or from blind stacking, and only behavior statistics tell them apart. In the anonymized one-edit gym, anything above 0.2 must come from information gathered during the episode, so a later chapter whose change damages exploration (a strong KL penalty, an entropy collapse, a hackable reward) shows up as a drop toward 0.2 instead of a silent switch to a shortcut.
+
+> **Evidence.** Measured here, one seed per setting, 80 steps of 64 episodes. The qualitative pattern (memorize, then stack, then stall, then read) matched what we saw in exploratory runs with other learning rates and seeds while preparing the chapter; those runs are not reported. The numbers are tiny-model demonstrations of a mechanism. The general claims are about the mechanism: a policy gradient amplifies whatever features predict reward in the policy's own samples, so shortcut features must be removed from the environment, and the intended skill must be present, however rarely, in the starting policy.
+
+**The default setting for the rest of the book.** From here on, chapters train with `RLConfig()` defaults, which use the anonymized gym (`rename=True`) with one edit per episode (`max_edits=1`), starting from `make_rl_base(tok, seed)`, and evaluate with `evaluate(..., cfg=cfg)` on `heldout_tasks`. With these settings, a pass rate above 0.2 can only come from information gathered in the episode, and the behavior statistics in every history make that checkable. Chapters that study a shortcut on purpose, such as reward hacking in [Chapter 11](11-rewards-and-verifiers.md), change the reward or the environment through `RLConfig.reward` or `env_factory` and keep everything else.
+
+## 9.5 The variants as diffs
+
+Each public variant of GRPO changes a few of the choices listed in Section 9.1. The table states each as a diff against DeepSeekMath's GRPO and gives the `RLConfig` fields that implement it. The source column summarizes what each paper specifies, as recorded in [Chapter 20](20-frontier.md#rlvr-objectives-as-diffs-against-grpo); dates are first arXiv versions.
+
+| Variant | What changes relative to GRPO | Fields |
+| --- | --- | --- |
+| GRPO (DeepSeekMath, 2024-02) | baseline: mean/std advantage, per-sequence mean of token terms, KL in the loss ($\beta = 0.04$) | `adv_mode='grpo'`, `loss_mode='seq_mean_token_mean'`, `kl_coef=0.04` |
+| Dr. GRPO (2025-03) | no std division; a constant normalizer instead of $1/\lvert o_i \rvert$ | `adv_mode='mean'`, `loss_mode='constant'` |
+| DAPO (2025-03) | clip-higher ($\epsilon_{\text{high}} = 0.28$), dynamic sampling, token-level loss, overlong reward shaping, no KL | `clip_high=0.28`, `dynamic_sampling=True`, `loss_mode='token_mean'`, `overlong_buffer`, `kl_coef=0` |
+| RLOO (2024-02) | leave-one-out baseline; the whole output is one action, no ratio or clip | `adv_mode='rloo'`, `loss_mode='seq_mean_token_sum'`, `minibatches=1` |
+| GSPO (2025-07) | one length-normalized ratio per sequence, clipped with ranges near $10^{-4}$ | `ratio_level='sequence'`, `clip_low=3e-4`, `clip_high=4e-4` |
+
+**Dr. GRPO** removes the two normalizations whose biases Sections 6.6 and 7.5 measured: the division by each output's length, which reduces the per-token penalty on long failures, and the division by the group's standard deviation, which upweights tasks the policy almost always solves or almost always fails.
+
+**DAPO** makes four changes. *Clip-higher* raises $\epsilon_{\text{high}}$ so that rare tokens with positive advantages can grow faster (Section 8.6 measured that the upper clip binds mostly on them). *Dynamic sampling* drops groups whose rewards are all equal, whose advantages are exactly zero, and samples more tasks until the batch is full, so every kept episode carries gradient. *Token-level loss* is `token_mean`. *Overlong reward shaping* adds a penalty that grows linearly from 0 to $-1$ over a buffer before the maximum length. In the gym the length that matters is the turn budget, so `overlong_buffer=2` penalizes episodes that use the fifth or sixth turn by $-0.5$ and $-1$. DAPO also describes **overlong filtering**, masking truncated episodes out of the loss, which DeepSWE's "compact filtering" generalizes to timeouts and step limits.
+
+**RLOO** uses the leave-one-out baseline of Section 7.5 and treats the whole generation as one action, so it is REINFORCE with a per-task baseline. Its advantage is $\frac{G}{G-1}$ times Dr. GRPO's, an overall scale that Adam largely absorbs.
+
+**GSPO** replaces the per-token ratio by one ratio per sequence, the geometric mean of its token ratios, $s_i = \exp\big(\frac{1}{|o_i|}\sum_t \log \rho_{i,t}\big)$, and clips $s_i$. Every token of a sequence then shares one clip decision and one importance weight. Its authors motivate this by the mismatch between a sequence-level reward and token-level corrections, and report that it stabilized training of mixture-of-experts models. Because $s_i$ is an average of log-ratios, it moves much less than individual token ratios, which is why its reported clip ranges are three orders of magnitude smaller than PPO's.
+
+```python
+#@save
+def gspo_policy_loss(logp, old_logp, advantages, mask, clip_low=3e-4, clip_high=4e-4):
+    """Sequence-level clipped surrogate: logp, old_logp, mask [B, T]; advantages [B] -> (loss, stats)."""
+    token_log_ratio = logp - old_logp.detach()
+    seq_ratio = arl.masked_mean(token_log_ratio, mask, dim=-1).exp()      # s_i, [B]
+    adv = advantages.detach()
+    unclipped, clipped = seq_ratio * adv, seq_ratio.clamp(1 - clip_low, 1 + clip_high) * adv
+    loss = -torch.minimum(unclipped, clipped).mean()                        # mean over sequences
+    with torch.no_grad():
+        stats = dict(clip_frac=(clipped < unclipped).float().mean().item(),
+                     approx_kl=arl.masked_mean(token_log_ratio.exp() - 1 - token_log_ratio, mask).item(),
+                     ratio_min=seq_ratio.min().item(), ratio_max=seq_ratio.max().item())
+    return loss, stats
+
+
+VARIANTS = {
+    'grpo': dict(adv_mode='grpo', loss_mode='seq_mean_token_mean', kl_coef=0.04),
+    'dr_grpo': dict(adv_mode='mean', loss_mode='constant'),
+    'dapo': dict(adv_mode='grpo', loss_mode='token_mean', clip_high=0.28, dynamic_sampling=True, overlong_buffer=2),
+    'rloo': dict(adv_mode='rloo', loss_mode='seq_mean_token_sum', minibatches=1),
+    'gspo': dict(ratio_level='sequence', clip_low=3e-4, clip_high=4e-4),
+}
+```
+
+`VARIANTS` is a starting point for experiments, not a reproduction of any paper: learning rates, group sizes, batch sizes, and models differ from the papers', and only the listed fields change. Each preset runs for 40 steps from the RL base agent.
+
+```python
+print(f'{"variant":<8} | reward, last 10 steps | held-out pass | clip_frac | kl_ref | episodes sampled')
+for name, fields in VARIANTS.items():
+    cfg, model = RLConfig(**fields), copy.deepcopy(rl_base)
+    hist = train_rl(model, train_tasks, tok, cfg, steps=40)
+    held = evaluate(model, heldout_tasks, tok, 8, generator=torch.Generator().manual_seed(0), cfg=cfg)
+    mean = lambda key: sum(h.get(key, 0.0) for h in hist) / len(hist)
+    print(f'{name:<8} | {sum(h["reward"] for h in hist[-10:]) / 10:21.3f} | {held["pass_rate"]:13.3f} |'
+          f' {mean("clip_frac"):9.4f} | {mean("kl_ref"):6.4f} | {sum(h["n_episodes"] for h in hist):6d}')
+```
+
+Output:
+
+```text
+variant  | reward, last 10 steps | held-out pass | clip_frac | kl_ref | episodes sampled
+grpo     |                 0.745 |         0.775 |    0.0010 | 0.1656 |   2560
+dr_grpo  |                 0.795 |         0.825 |    0.0018 | 0.0000 |   2560
+dapo     |                 0.847 |         0.850 |    0.0018 | 0.0000 |   5184
+rloo     |                 0.728 |         0.738 |    0.0000 | 0.0000 |   2560
+gspo     |                 0.673 |         0.713 |    0.3137 | 0.0000 |   2560
+```
+
+Every preset learns to read within 40 steps; the differences in reward and held-out pass rate are single-seed numbers on 80 held-out episodes, about 0.04 standard error, and Section 9.6 measures the seed spread. Three columns say something about mechanisms rather than about which variant is best. DeepSeekMath's GRPO is the only preset with a reference model, and its KL estimate from the starting policy reached 0.17 on average, which at $\beta = 0.04$ is a small term next to the advantages; [Chapter 10](10-kl-entropy-regularization.md) studies when it is not. DAPO sampled about twice as many episodes as the others, the price of dynamic sampling. And GSPO's clip fraction is 0.31 against about 0.002 for the token-level presets: with the paper's ranges, chosen for outputs thousands of tokens long, the sequence ratio of a 12-token episode leaves the band after a single minibatch step, so most of every second minibatch is clipped away. RLOO, with one minibatch, never clips at all, as Section 9.1 predicted.
+
+## 9.6 Controlled ablations at tiny scale
+
+The presets change several fields at once. A controlled ablation changes one field of the default configuration and holds everything else fixed, including the seeds: each arm below runs 40 steps from the same RL base agent with seeds 0, 1, and 2, and is evaluated on the held-out tasks with 8 episodes per task. Five arms make 15 runs.
+
+```python
+ARMS = {'default': {}, 'no std': dict(adv_mode='mean'), 'seq_mean_token_mean': dict(loss_mode='seq_mean_token_mean'),
+        'clip-higher 0.28': dict(clip_high=0.28), 'dynamic sampling': dict(dynamic_sampling=True)}
+runs = {}
+for arm, fields in ARMS.items():
+    for seed in [0, 1, 2]:
+        cfg, model = RLConfig(seed=seed, **fields), copy.deepcopy(rl_base)
+        hist = train_rl(model, train_tasks, tok, cfg, steps=40)
+        held = evaluate(model, heldout_tasks, tok, 8, generator=torch.Generator().manual_seed(seed), cfg=cfg)
+        runs[arm, seed] = dict(history=hist, held=held['pass_rate'])
+```
+
+```python
+print(f'{"arm":<20} | reward 30-39 (seeds)  | held-out (seeds)      | length | clip_frac | episodes/step')
+for arm in ARMS:
+    rs = [runs[arm, s] for s in range(3)]
+    late = [sum(h['reward'] for h in r['history'][30:]) / 10 for r in rs]
+    held = [r['held'] for r in rs]
+    flat = [h for r in rs for h in r['history']]
+    avg = lambda key: sum(h.get(key, 0.0) for h in flat) / len(flat)
+    print(f'{arm:<20} | {" ".join(f"{x:.2f}" for x in late):<21} | {" ".join(f"{x:.2f}" for x in held):<21} |'
+          f' {avg("length"):6.1f} | {avg("clip_frac"):9.4f} | {avg("n_episodes"):5.0f}')
+```
+
+Output:
+
+```text
+arm                  | reward 30-39 (seeds)  | held-out (seeds)      | length | clip_frac | episodes/step
+default              | 0.83 0.85 0.71        | 0.80 0.76 0.81        |   12.9 |    0.0013 |    64
+no std               | 0.78 0.77 0.73        | 0.79 0.71 0.80        |   12.5 |    0.0011 |    64
+seq_mean_token_mean  | 0.80 0.81 0.80        | 0.79 0.71 0.78        |   14.9 |    0.0013 |    64
+clip-higher 0.28     | 0.83 0.83 0.74        | 0.78 0.76 0.72        |   12.9 |    0.0015 |    64
+dynamic sampling     | 0.83 0.87 0.85        | 0.81 0.85 0.84        |   12.7 |    0.0020 |   123
+```
+
+Read the table against its own noise. The three seeds of the default arm span 0.71 to 0.85 in late training reward and 0.76 to 0.81 held-out. Removing the standard-deviation normalization, switching to `seq_mean_token_mean`, and raising $\epsilon_{\text{high}}$ to 0.28 all land inside that spread. Clip-higher could not have done anything else: the clip binds on 0.15% of tokens in this configuration, so the bound it relaxes is almost never reached. The two effects that stand out are mechanisms, not rankings. `seq_mean_token_mean` produced the longest episodes, 14.9 policy tokens against 12.9 (Section 9.7 follows this up). Dynamic sampling had the highest late reward and held-out pass rate in all three seeds, 0.81 to 0.85, and it sampled 123 episodes per step instead of 64 to get there.
+
+![Figure 9.2: Training batch reward over 40 GRPO steps for each ablation arm against the default, with the band spanning three seeds (min to max) and the line their mean. RL base agent, anonymized one-edit gym, 64 episodes per step.](../figures/ch09-ablations.svg)
+
+Figure 9.2 shows the learning curves with their seed bands. The bands of the default and of each single-field change overlap over the whole run; the curves differ by less than seeds do. A real ablation of these choices needs more seeds than this chapter can afford, which [Chapter 17](17-evaluation.md) quantifies with paired comparisons.
+
+![Figure 9.3: Dynamic sampling. Left: fraction of sampled groups whose rewards were all equal, per step, for the default arm (mean of three seeds). Right: training batch reward against the cumulative number of episodes sampled, for the default and dynamic-sampling arms.](../figures/ch09-dynamic-sampling.svg)
+
+Figure 9.3 puts dynamic sampling on the axis that matters for its cost. As the policy improves, more groups pass in every attempt, so the share of zero-advantage groups rises and dynamic sampling has to sample more to fill its batch. Against the number of episodes sampled, its curve falls clearly behind the default's: the default reaches a batch reward of 0.8 after about 2,000 episodes, and dynamic sampling needs about 3,500. It learns more per update and less per rollout. For agents, where a rollout costs far more than an update, rollouts are the axis to compare on.
+
+> **Evidence.** Measured here: three seeds, 40 steps, one 158k-parameter model on 20 training tasks. These are mechanism demonstrations. Differences smaller than the spread across seeds are not differences, and none of these results predicts the effect of the same change on a large model, a long-horizon agent, or a different reward. The reported benefits of these choices in the source papers come from math reasoning at much larger scale ([Chapter 20](20-frontier.md)).
+
+## 9.7 Design problems in practice
+
+> **Problem: group size versus number of prompts at a fixed sample budget.** *Symptom:* at the same number of episodes per step, one configuration learns hard tasks and another stalls on them, or most of each batch carries zero advantage. *Cause:* a group of $G$ attempts at a task with pass rate $p$ has zero variance with probability $p^G + (1 - p)^G$. Small groups waste attempts on degenerate groups for tasks that are nearly always solved or failed, and they give noisier baselines. Large groups cover fewer distinct tasks per step, so each step's gradient is about fewer tasks. *Options:* (a) large $G$ for hard, sparse-reward tasks, where a success is rare and must be sampled to be learned from. (b) Many prompts with small $G$ for broad task distributions with medium pass rates. (c) Adaptive $G$ per task from its running pass rate. *Default:* $G = 8$ with 8 prompts at this scale; measure the zero-variance fraction and the number of distinct tasks per step before changing it. The block below fixes the budget at 64 episodes and measures both quantities for the RL base agent and the trained policy.
+
+```python
+for name, model in [('RL base agent', rl_base), ('trained (default run)', policy)]:
+    cells = []
+    for G in [4, 8, 16]:
+        cfg = RLConfig(group_size=G)
+        tasks = train_tasks[:64 // G]
+        trajs = sample_groups(model, lambda: make_env(cfg), tasks, tok, cfg, torch.Generator().manual_seed(5))
+        rewards = torch.tensor([t.reward for t in trajs]).view(-1, G)
+        informative = (rewards.std(-1) > 0).float().mean().item()
+        cells.append(f'G={G:2d}: {64 // G:2d} tasks, informative groups {informative:.2f}')
+    print(f'{name:<22}', ' | '.join(cells))
+```
+
+Output:
+
+```text
+RL base agent          G= 4: 16 tasks, informative groups 0.62 | G= 8:  8 tasks, informative groups 0.88 | G=16:  4 tasks, informative groups 1.00
+trained (default run)  G= 4: 16 tasks, informative groups 0.00 | G= 8:  8 tasks, informative groups 0.00 | G=16:  4 tasks, informative groups 0.25
+```
+
+For the RL base agent, larger groups make more groups informative, from 62% at $G = 4$ to all of them at $G = 16$, at the price of covering a quarter as many tasks. For the trained policy, the measurement shows a different regime: its pass rate is above 0.9 and its entropy below 0.1, so its attempts at a given task almost always agree, and almost no group carries gradient whatever $G$ is. At that point, the lever is the task distribution (harder tasks, or dropping solved ones), not the group size.
+
+> **Problem: zero-advantage groups and filtering.** *Symptom:* as training succeeds, the share of all-pass groups rises, the effective batch shrinks, and progress slows; with `token_mean`, the zero-advantage episodes still count in the normalizer and dilute every other token's weight. *Cause:* a zero-variance group has exactly zero advantage under every baseline of Chapter 7, so its episodes cost rollouts and contribute nothing but tokens to the denominator. *Options:* (a) dynamic sampling, which keeps the effective batch full and pays in extra rollouts. (b) Filter the zero-advantage groups without resampling, which keeps the cost and shrinks the batch. (c) A curriculum that drops tasks the policy always solves or never solves ([Chapter 14](14-scaling-and-efficiency.md)). *Default:* log `zero_adv_frac` every step; filter without resampling when it is moderate, and add a curriculum when whole tasks saturate. Dynamic sampling pays off when rollouts are cheap relative to updates, which is the opposite of agent RL. The default run's history shows the trend.
+
+```python
+zero = [h['zero_adv_frac'] for h in history]
+print('zero-advantage groups by 10-step window:', [round(sum(zero[i:i + 10]) / 10, 2) for i in range(0, 80, 10)])
+ds = [runs['dynamic sampling', s]['history'] for s in range(3)]
+per_step = [sum(h[i]['n_episodes'] for h in ds) / 3 for i in range(40)]
+print('dynamic sampling, episodes sampled per step by 10-step window:',
+      [round(sum(per_step[i:i + 10]) / 10) for i in range(0, 40, 10)])
+```
+
+Output:
+
+```text
+zero-advantage groups by 10-step window: [0.19, 0.12, 0.34, 0.45, 0.5, 0.62, 0.82, 0.75]
+dynamic sampling, episodes sampled per step by 10-step window: [111, 98, 128, 154]
+```
+
+In the default run, the share of zero-advantage groups rises from 0.19 in the first ten steps to about 0.8 in the last twenty. By the end, four of every five groups sampled were all-pass or all-fail, and `token_mean` still counted their tokens in its denominator. Dynamic sampling refills the batch, and its cost rises with the same trend, from about 110 episodes per step early to about 150 late, more than twice the nominal 64.
+
+> **Problem: length growth.** *Symptom:* the mean number of policy tokens or turns per episode rises over training without a matching rise in pass rate, often in failing episodes. *Cause:* the aggregation sets each token's weight ([Section 6.6](06-policy-gradient.md#66-loss-aggregation)). Under `seq_mean_token_mean`, a failing episode's total penalty is fixed, so each of its tokens is penalized less when it is longer, and extra calls in failures are cheap. A reward that does not cost turns adds nothing against it. *Options:* (a) a length-proportional aggregation (`token_mean`, `constant`, or `seq_mean_token_sum`). (b) Overlong shaping or a step cost, which change the task and must leave room for useful information gathering ([Chapter 12](12-multi-turn-and-long-horizons.md)). (c) Masking truncated episodes. *Default:* (a), with the lengths of successes and failures logged separately. The ablation histories compare the two aggregations directly.
+
+```python
+for arm in ['default', 'seq_mean_token_mean']:
+    hist = [runs[arm, s]['history'] for s in range(3)]
+    length = [sum(h[i]['length'] for h in hist) / 3 for i in range(40)]
+    turns = [sum(h[i]['turns'] for h in hist) / 3 for i in range(40)]
+    reads = sum(h[i]['reads'] for h in hist for i in range(30, 40)) / 30
+    print(f'{arm:<20} policy tokens per episode, steps 0-9 {sum(length[:10]) / 10:.1f} -> steps 30-39'
+          f' {sum(length[30:]) / 10:.1f} | turns {sum(turns[30:]) / 10:.2f} | reads {reads:.2f}')
+```
+
+Output:
+
+```text
+default              policy tokens per episode, steps 0-9 11.6 -> steps 30-39 13.4 | turns 4.07 | reads 1.00
+seq_mean_token_mean  policy tokens per episode, steps 0-9 14.0 -> steps 30-39 14.6 | turns 4.36 | reads 1.06
+```
+
+Under `seq_mean_token_mean`, episodes had about 14 policy tokens from the first ten steps on, against 11.6 rising to 13.4 under `token_mean`, with more turns (4.36 against 4.07) and slightly more reads (1.06 against 1.00 per episode). The difference appears early because the base agent's failures are long and per-sequence normalization charges each of their tokens less. In 40 steps on a six-turn budget the effect is small; in agent episodes with hundreds of turns, it is the mechanism Dr. GRPO identifies as response-length bias.
+
+> **Problem: choosing the loss aggregation.** *Symptom:* two runs that differ only in a "normalization detail" learn at different speeds or drift in length, and a change of batch composition changes the effective learning rate. *Cause:* `token_mean` couples the per-token weight to the batch's total length; `seq_mean_token_mean` weights trajectories equally and tokens of long ones less; `constant` and `seq_mean_token_sum` keep per-token weights fixed and need the learning rate tuned for their scale. *Options:* the four modes of `aggregate_loss`. *Default:* `token_mean` for this book, because it is length-neutral within a batch, widely used (DAPO), and its batch-dependent scale is easy to monitor through the logged length; `constant` (Dr. GRPO) when lengths change a lot during training, since it removes even the batch coupling. Avoid `seq_mean_token_mean` for multi-turn agents, whose episode lengths vary by an order of magnitude and correlate with success; the previous block measured its effect on this gym.
+
+## Summary
+
+- GRPO is PPO's clipped surrogate with a group baseline instead of a critic and, in DeepSeekMath's form, a per-sequence token mean and a KL penalty in the loss. Its published variants are diffs in a handful of fields; `RLConfig` and `train_rl` implement them as options of one loop.
+- On the gym as built, GRPO reproduced Chapter 6's memorization: 0.98 on training tasks, 0.40 held-out, zero reads, a first edit chosen from the function name.
+- Shortcut features live in the environment. Renaming functions per episode removed the name shortcut and most of the train/held-out gap, and the policy switched to stacking edits, which a blind sequence can push to 0.60. Limiting episodes to one edit removed that shortcut and exposed an exploration failure: the base agent almost never followed a read with an informed edit, so there was nothing to amplify.
+- A base agent with one informed demonstration in nine, at the same pass rate, learned read, edit, test, submit within 80 steps and reached 0.84 on held-out tasks, on the anonymized gym and, as a control, on the original one. The starting policy decides whether a skill is learned; the environment decides whether a pass rate certifies it. The anonymized one-edit gym with `make_rl_base` is the book's default from here on.
+- At tiny scale, the single-field ablations of std normalization, aggregation, and clip-higher were within seed noise, and clip-higher had nothing to act on with a clip fraction of 0.15%. Two mechanisms were visible: `seq_mean_token_mean` lengthened episodes, and dynamic sampling learned more per update while sampling 1.9 times as many episodes, a cost that grew as zero-advantage groups rose to 80% of the batch. GSPO with its paper's ranges clipped 31% of sequences on 12-token episodes. These are mechanism demonstrations, not benchmark evidence.
+
+## Exercises
+
+1. Show that with one minibatch and one epoch, GRPO's update equals the REINFORCE update of Chapter 6 with a group-normalized advantage. Then show what changes with two minibatches. Which tokens of the second minibatch can be clipped?
+2. Change an assumption: rerun Section 9.4's default with `make_base_agent(tok, kinds=('random', 'blind') * 8 + ('oracle',))`, one informed demonstration in 17. Does the policy still learn to read? Find the smallest informed share at which it does within 80 steps, and relate it to the measured read-then-right probability of the starting policy.
+3. The renaming draws names from all 30 gym functions, including the held-out ones. Restrict the pool to training-task names and re-measure the held-out pass rate of the default run. What does the difference tell you about the role of the held-out names' embeddings?
+4. Implement CISPO ([Chapter 20](20-frontier.md)) as `ratio_level='cispo'`: the loss $-\mathrm{sg}(\min(\rho, 1 + \epsilon_{\text{high}}))\, \hat A \log \pi_\theta$ per token. Which tokens keep a gradient that PPO's clip would remove? Compare its clip-related statistics with the default on the run of Section 9.6.
+5. Make the KL term matter: train the default configuration with `kl_coef` in {0.01, 0.1, 1.0} and log `kl_ref` and the pass rate. At what coefficient does the policy stop learning to read? [Chapter 10](10-kl-entropy-regularization.md) explains why the answer depends on `kl_kind`.
+6. Measure the GSPO preset's clip fraction and the spread of its sequence ratios. Are the paper's ranges, chosen for long math outputs, appropriate for 12-token episodes? Derive how the standard deviation of $\log s_i$ scales with the number of policy tokens if the token log-ratios were independent.
+7. Design review: a team's SWE agent reaches 70% on its training repositories and 35% on a held-out set, and its trajectories rarely open files before editing. Using Section 9.4, list the shortcut features you would look for in the task data and the environment, the behavior statistics you would ask for, and the two kinds of fix you would consider.

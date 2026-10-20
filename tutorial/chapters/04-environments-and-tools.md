@@ -1,0 +1,935 @@
+# 4. Environments and Tools: the BugFix Gym
+
+Chapter 3 gave us a policy that turns a token prefix into a distribution over the next token. A coding agent is useful only because some of those tokens do things: they read a file, run tests, change code, or declare the work finished. Whatever executes those requests and reports back is the **environment**, and in agentic RL it determines most of what the policy can learn. It decides what the agent can see, which actions exist, how a malformed request is handled, when an episode ends, and which number becomes the reward.
+
+This chapter builds the environment the rest of the book trains on: the **BugFix gym**. It is a family of small, real Python repair tasks. Each task has an issue, one buggy function, public tests that the agent can run, and hidden tests that decide the reward. Production coding agents act through a handful of generic tools, mostly a shell plus an exact-string file editor, and write every edit themselves. The gym keeps that structure but shrinks it: the agent acts through four tools (`read`, `test`, `edit <op>`, `submit`) by writing calls in a fixed grammar, and `edit <op>` picks a prewritten edit instead of writing one. Tests execute real Python, and edits transform real source strings. One edit op is an exploit that passes the public tests without fixing anything, so reward hacking is reproducible from the start. We finish by measuring scripted reference policies, whose success rates are the baselines for every later experiment, and by comparing the design with production systems such as SWE-bench and R2E-Gym.
+
+```python
+import json
+import random
+import re
+from dataclasses import dataclass
+import agentrl as arl
+```
+
+## 4.1 The environment contract
+
+Chapter 2 formalized an agent's world as a partially observable MDP. An environment implements that formalism through two calls. `reset(task)` starts an episode and returns the first observation. `step(action)` applies one action and returns the next observation, a reward, a termination flag, and a dictionary of diagnostics. The BugFix gym uses this contract with text on both sides:
+
+```text
+reset(task)        -> observation: str
+step(action_text)  -> (observation: str, reward: float, done: bool, info: dict)
+```
+
+The environment's **state** is everything that determines what happens next: the task, the current source after any edits, the turn counter, and whether the episode has ended. The agent never sees the state directly. It sees **observations**, which are text produced by tools, and it never sees the hidden tests at all. That gap is what makes the problem partially observable, and it is deliberate. An agent that could read the hidden tests could satisfy them without fixing the bug.
+
+An **action** is a string the policy writes. The environment parses it into a tool call, executes the call, and returns the tool's output as the next observation. A **turn** is one such action–observation exchange. The episode ends in one of two ways. The agent calls `submit`, and the environment grades the current source on the hidden tests, or the agent uses up its **turn budget** (`max_turns`), and the episode ends without a submission. Production environments add budgets on tokens and wall-clock time. The BugFix gym enforces turns here, and Chapter 5 adds a context-length limit when it turns episodes into token sequences.
+
+![Figure 4.1: The BugFix environment as a state machine. Every arrow out of "awaiting call" consumes one turn.](../figures/ch04-env-state-machine.svg)
+
+Figure 4.1 is the whole environment. Trace the paths out of the central state. A call that fails to parse returns an error observation and still costs a turn. A valid `read`, `test`, or `edit` returns its output and loops back. Only `submit` leads to the hidden-test grader. The budget check runs after every turn, and it ends the episode with a reward of 0 if the agent has not submitted. The reward is computed in exactly one place, which makes it easy to swap the reward function in Chapter 11 without touching the tools.
+
+What does an action look like in production? A deployed coding agent does not get a tool called `swap_minmax`. Claude Code, for example, gives the model a small set of general tools: `Bash` to run shell commands, `Read` to read a file with line numbers, `Edit` to replace an exact string in a file, `Write` to create or overwrite a file, and `Grep` and `Glob` to search contents and file names, which on some platforms are left out entirely in favor of `grep` and `find` through `Bash` ([Claude Code tools reference](https://code.claude.com/docs/en/tools-reference), inspected 2026-10-14). The agent fixes a bug by reading the file, choosing the exact text to replace, writing the replacement itself, and running the tests through the shell. It ends the episode by answering without a tool call. The BugFix gym abstracts that surface: `read` stands for `Read`, `test` for running the tests through `Bash`, `submit` for the final answer, and `edit <op>` for an `Edit` whose old and new strings were written in advance. Section 4.7 runs the production tools on the `clamp` task and lists exactly what the abstraction hides, and the real-model lab in Section 19.7 trains Qwen3-0.6B with the production tools.
+
+## 4.2 Tasks and bug families
+
+A single task makes a poor RL environment: the policy can memorize one answer, and its success says nothing about generalization. The BugFix gym therefore generates tasks from **bug families**. A family fixes the kind of bug and the edit that repairs it. Its **variants** change the surface: the function name, the argument names, and the constants. We hold out whole variants for evaluation, so an agent that memorized "the function called `clamp` needs `swap_minmax`" fails on held-out functions, while an agent that reads the code and recognizes the bug succeeds.
+
+```python
+#@save
+@dataclass
+class Task:
+    """One repair task; tests are lists of (args tuple, expected value) pairs."""
+    name: str            # 'family/function', e.g. 'minmax/clamp'
+    family: str
+    split: str           # 'train' or 'heldout'
+    fn_name: str
+    issue: str           # what the agent is told at reset
+    source: str          # buggy source of one function
+    public_tests: list   # visible through the test tool
+    hidden_tests: list   # used only for the reward
+    fix_op: str          # the edit op that repairs it; never shown to the agent
+```
+
+The five families each contain one bug. A family is a pair of source templates, buggy and fixed, plus a list of six variants. The first four variants form the training split and the last two the held-out split. Variant 0 of the first family is the `clamp` bug from Chapter 1: `min` and `max` are swapped, so the function returns the lower bound for every input.
+
+```python
+#@save
+MINMAX = dict(fix_op='swap_minmax',
+    buggy='def {f}({x}, {lo}, {hi}):\n    return min({lo}, max({x}, {hi}))\n',
+    fixed='def {f}({x}, {lo}, {hi}):\n    return max({lo}, min({x}, {hi}))\n',
+    variants=[dict(f='clamp', x='value', lo='lower', hi='upper'), dict(f='bound', x='x', lo='lo', hi='hi'),
+              dict(f='limit', x='n', lo='low', hi='high'), dict(f='squash', x='v', lo='a', hi='b'),
+              dict(f='pin', x='t', lo='floor', hi='ceil'), dict(f='saturate', x='level', lo='least', hi='most')])
+RANGE = dict(fix_op='fix_range_end',
+    buggy='def {f}({n}):\n    {acc} = 0\n    for i in range({k}, {n}):\n        {acc} += {step}\n    return {acc}\n',
+    fixed='def {f}({n}):\n    {acc} = 0\n    for i in range({k}, {n} + 1):\n        {acc} += {step}\n    return {acc}\n',
+    variants=[dict(f='sum_to', n='n', acc='total', k=1, step='i'), dict(f='add_upto', n='m', acc='s', k=0, step='i'),
+              dict(f='tally', n='k', acc='count', k=1, step=2), dict(f='span_sum', n='stop', acc='acc', k=3, step='i'),
+              dict(f='series', n='limit', acc='out', k=2, step='i'), dict(f='step_total', n='end', acc='t', k=1, step=3)])
+```
+
+The `range` family is the off-by-one error: the loop stops one step early because `range` excludes its end. Its variants differ in the start of the range and in what each step adds. The next two families are a strict comparison that should be non-strict, and a division without a guard for a zero divisor.
+
+```python
+#@save
+COMPARE = dict(fix_op='fix_comparison',
+    buggy='def {f}({a}, {b}):\n    return {a} {op} {b}{k}\n',
+    fixed='def {f}({a}, {b}):\n    return {a} {op}= {b}{k}\n',
+    variants=[dict(f='reached', a='count', b='goal', op='>', k=''), dict(f='fits', a='size', b='limit', op='<', k=''),
+              dict(f='can_afford', a='budget', b='price', op='>', k=' + 2'), dict(f='is_early', a='time', b='deadline', op='<', k=' - 1'),
+              dict(f='qualifies', a='score', b='cutoff', op='>', k=' + 1'), dict(f='under_cap', a='load', b='cap', op='<', k='')])
+ZERO = dict(fix_op='add_zero_guard',
+    buggy='def {f}({a}, {b}):\n    return {a}{k} // {b}\n',
+    fixed='def {f}({a}, {b}):\n    if {b} == 0: return 0\n    return {a}{k} // {b}\n',
+    variants=[dict(f='ratio', a='a', b='b', k=''), dict(f='per_item', a='cost', b='count', k=''),
+              dict(f='percent', a='part', b='whole', k=' * 10'), dict(f='average', a='total', b='n', k=''),
+              dict(f='share', a='amount', b='people', k=''), dict(f='speed', a='miles', b='hours', k=' * 2')])
+```
+
+The last family starts an accumulator at the wrong value: a product that starts at 0 (so it is always 0), or a sum that starts at 1. The fix toggles the initial value. Sum and product variants share one template through the `op` field.
+
+```python
+#@save
+INIT = dict(fix_op='fix_init',
+    buggy='def {f}({n}):\n    {acc} = {bad}\n    for i in range(1, {n} + 1):\n        {acc} = {acc} {op} {step}\n    return {acc}\n',
+    fixed='def {f}({n}):\n    {acc} = {good}\n    for i in range(1, {n} + 1):\n        {acc} = {acc} {op} {step}\n    return {acc}\n',
+    variants=[dict(f='factorial', n='n', acc='p', bad=0, good=1, op='*', step='i'),
+              dict(f='sum_upto', n='m', acc='s', bad=1, good=0, op='+', step='i'),
+              dict(f='pow2', n='e', acc='r', bad=0, good=1, op='*', step=2),
+              dict(f='count_by', n='k', acc='c', bad=1, good=0, op='+', step=2),
+              dict(f='product_upto', n='x', acc='prod', bad=0, good=1, op='*', step='i'),
+              dict(f='add_threes', n='steps', acc='v', bad=1, good=0, op='+', step=3)])
+FAMILIES = dict(minmax=MINMAX, range=RANGE, compare=COMPARE, zero=ZERO, init=INIT)
+N_TRAIN_VARIANTS = 4
+```
+
+Rendering a template is a `str.format` call. Here are the training variants of two families, side by side, to show what changes between variants and what stays fixed.
+
+```python
+for family in ['minmax', 'init']:
+    spec = FAMILIES[family]
+    for variant in spec['variants'][:2]:
+        print(spec['buggy'].format(**variant))
+```
+
+Output:
+
+```text
+def clamp(value, lower, upper):
+    return min(lower, max(value, upper))
+
+def bound(x, lo, hi):
+    return min(lo, max(x, hi))
+
+def factorial(n):
+    p = 0
+    for i in range(1, n + 1):
+        p = p * i
+    return p
+
+def sum_upto(m):
+    s = 1
+    for i in range(1, m + 1):
+        s = s + i
+    return s
+```
+
+Within a family, the names, the constants, and in the `init` family the operator change. The structure of the bug stays the same. That is the property the held-out split tests: the same bug in an unseen surface form.
+
+## 4.3 Running tests
+
+A test is a pair `(args, expected)`. Running it means executing the candidate source, calling the function on `args`, and comparing the result with `expected`. `run_tests` does that for a list of tests and returns `(passed, got)` for each, where `got` is the returned value, or the string `'error'` if the source failed to compile or the call raised.
+
+```python
+#@save
+def run_tests(source, tests, fn_name):
+    """Execute TRUSTED source and call fn_name on each test -> [(passed, got)]."""
+    namespace = {}
+    try:
+        exec(source, namespace)                  # authored code only; see the callout below
+        fn = namespace[fn_name]
+    except Exception:
+        return [(False, 'error') for _ in tests]
+    results = []
+    for args, want in tests:
+        try:
+            got = fn(*args)
+        except Exception:
+            got = 'error'
+        results.append((type(got) == type(want) and got == want, got))
+    return results
+```
+
+The comparison checks the type as well as the value, because in Python `True == 1`, and a comparison function that returned `1` instead of `True` should not pass. We run the buggy and fixed `clamp` on three inputs: one inside the interval, one below, and one above.
+
+```python
+clamp_buggy = MINMAX['buggy'].format(**MINMAX['variants'][0])
+clamp_fixed = MINMAX['fixed'].format(**MINMAX['variants'][0])
+tests = [((3, 0, 5), 3), ((-2, 0, 5), 0), ((8, 0, 5), 5)]
+print('buggy:', run_tests(clamp_buggy, tests, 'clamp'))
+print('fixed:', run_tests(clamp_fixed, tests, 'clamp'))
+print('broken source:', run_tests('def clamp(:', tests, 'clamp'))
+```
+
+Output:
+
+```text
+buggy: [(False, 0), (True, 0), (False, 0)]
+fixed: [(True, 3), (True, 0), (True, 5)]
+broken source: [(False, 'error'), (False, 'error'), (False, 'error')]
+```
+
+The buggy `clamp` returns the lower bound 0 for every input, so it passes only the test whose answer is the lower bound. The fixed version passes all three. A syntax error fails every test with `'error'` instead of crashing the environment, so a bad edit becomes an observation, not an exception.
+
+> **Pitfall.** `exec` runs arbitrary code with the full privileges of the trainer process. It is acceptable here only because every source string is authored in this chapter or produced from authored source by one of six fixed transformations. Model-generated code can loop forever, allocate all memory, read the filesystem, open network connections, or tamper with the test harness itself. Section 4.7 describes the isolation that real model code needs.
+
+Each task needs public tests that reveal the bug, so that the `test` tool is informative, and hidden tests that the exploit of Section 4.4 cannot satisfy. We draw test inputs at random from a small per-family range, compute the expected outputs by running the **fixed** source, and redraw until the buggy source fails at least one public and at least one hidden test. Expected values therefore come from executing a reference implementation, never from typing numbers by hand. The inputs are small integers so that observations stay short.
+
+```python
+#@save
+def sample_args(family, variant, rng):
+    """Draw one small test input for a family."""
+    if family == 'minmax':
+        lo = rng.randint(-5, 5)
+        hi = lo + rng.randint(0, 6)
+        return (rng.randint(lo - 4, hi + 4), lo, hi)
+    if family == 'range':
+        return (rng.randint(0, 9),)
+    if family == 'compare':
+        b = rng.randint(0, 9)
+        return (b + rng.randint(-3, 3), b)
+    if family == 'zero':
+        return (rng.randint(0, 9), rng.choice([0, 0, 1, 2, 3, 4]))
+    return (rng.randint(0, 5 if variant['op'] == '*' else 9),)   # init: keep products small
+
+
+def draw_tests(family, variant, buggy, fixed, fn_name, rng, n_public=3, n_hidden=8):
+    """Distinct inputs, expected values from the fixed source; buggy must fail public and hidden."""
+    while True:
+        inputs = list(dict.fromkeys(sample_args(family, variant, rng) for _ in range(40)))
+        inputs = inputs[:n_public + n_hidden]
+        wants = [got for _, got in run_tests(fixed, [(a, None) for a in inputs], fn_name)]
+        public, hidden = list(zip(inputs, wants))[:n_public], list(zip(inputs, wants))[n_public:]
+        if not all(p for p, _ in run_tests(buggy, public, fn_name)) and \
+           not all(p for p, _ in run_tests(buggy, hidden, fn_name)):
+            return public, hidden
+```
+
+Public and hidden tests never share an input, because the inputs are deduplicated before the split. The `init` products have only six distinct inputs, so their hidden set has three tests instead of eight. `make_tasks` assembles everything. The `seed` determines the test inputs, and it is mixed with the family and variant index so that each task's tests are reproducible on their own.
+
+```python
+#@save
+def make_tasks(split='train', seed=0):
+    """BugFix tasks for split in {'train', 'heldout', 'all'}; seed draws the test inputs."""
+    tasks = []
+    for family, spec in FAMILIES.items():
+        for v, variant in enumerate(spec['variants']):
+            task_split = 'train' if v < N_TRAIN_VARIANTS else 'heldout'
+            if split not in ('all', task_split):
+                continue
+            rng = random.Random(f'{seed}/{family}/{v}')
+            buggy, fixed = spec['buggy'].format(**variant), spec['fixed'].format(**variant)
+            public, hidden = draw_tests(family, variant, buggy, fixed, variant['f'], rng)
+            tasks.append(Task(f"{family}/{variant['f']}", family, task_split, variant['f'],
+                              f"issue : {variant['f']} returns wrong results", buggy,
+                              public, hidden, spec['fix_op']))
+    return tasks
+```
+
+```python
+train, heldout = make_tasks('train'), make_tasks('heldout')
+print('train tasks:', len(train), '| held-out tasks:', len(heldout))
+task0 = train[0]
+print(task0.name, '|', task0.issue)
+print('public:', task0.public_tests)
+print('hidden:', task0.hidden_tests)
+print('held-out functions:', [t.fn_name for t in heldout])
+print('task 0 is Chapter 1 clamp:', task0.source == arl.CLAMP_BUGGY,
+      '| fixed template is CLAMP_FIXED:', MINMAX['fixed'].format(**MINMAX['variants'][0]) == arl.CLAMP_FIXED)
+```
+
+Output:
+
+```text
+train tasks: 20 | held-out tasks: 10
+minmax/clamp | issue : clamp returns wrong results
+public: [((-6, -3, -3), -3), ((5, -2, 3), 3), ((1, -3, 2), 1)]
+hidden: [((8, 5, 9), 8), ((-3, -3, 3), -3), ((1, 1, 5), 1), ((3, 2, 2), 2), ((-3, 1, 2), 1), ((2, 0, 5), 2), ((5, -1, 4), 4), ((2, 4, 4), 4)]
+held-out functions: ['pin', 'saturate', 'series', 'step_total', 'qualifies', 'under_cap', 'share', 'speed', 'product_upto', 'add_threes']
+task 0 is Chapter 1 clamp: True | fixed template is CLAMP_FIXED: True
+```
+
+There are 20 training tasks (four variants of five families) and 10 held-out tasks. Task 0 is `clamp`, and its source is exactly `CLAMP_BUGGY` from Chapter 1. The issue text is deliberately shorter than Chapter 1's `CLAMP_ISSUE`, which described the symptom (`clamp(3, 0, 5) returns 0`). A symptom would reveal the family, and the gym's issue must not. It names the function but not the bug: all five families use the same phrase "returns wrong results", so the agent must look at the code or the test output to find out what is wrong. In this draw, the first public test happens to have the lower bound as its answer, and the buggy `clamp` passes it. The other two public tests fail. The eight hidden tests cover the same three regions (below, inside, and above the interval) with different numbers.
+
+## 4.4 Edit operations and the exploit
+
+Real coding agents edit code by writing patches: free-form text such as a diff or a search-and-replace block. A tiny model cannot learn to write a correct patch from scratch in a minute of CPU training, and grading free-form patches would make the gym slower and harder to reason about. The BugFix gym therefore offers a fixed menu of **edit ops**. Each op is a generic source transformation, written as a regular expression over the source text. An op does not know which task it is applied to. It rewrites any source that matches its pattern, whether or not that rewrite is a fix. Applying the wrong op therefore does nothing or breaks the code, so the agent has to identify the bug first.
+
+The agent identifies the bug by reading the source. Observations should be short and in the vocabulary of the policy (Chapter 5), so the `read` tool returns a **compact projection** of the source: Python tokens separated by spaces, line breaks preserved, indentation dropped. It is a faithful view of the token stream but not valid Python, and we label it as a projection whenever we show it.
+
+```python
+#@save
+def compact_source(source):
+    """Projection of source for the read tool: tokens space-separated, lines kept, indentation dropped."""
+    pattern = r'\d+|\w+|==|>=|<=|!=|//|\+=|\*=|[^\s\w]'
+    return '\n'.join(' '.join(re.findall(pattern, line)) for line in source.strip().split('\n'))
+```
+
+```python
+print(compact_source(task0.source))
+print('---')
+print(compact_source(FAMILIES['range']['buggy'].format(**RANGE['variants'][0])))
+```
+
+Output:
+
+```text
+def clamp ( value , lower , upper ) :
+return min ( lower , max ( value , upper ) )
+---
+def sum_to ( n ) :
+total = 0
+for i in range ( 1 , n ) :
+total += i
+return total
+```
+
+The five repair ops follow. Each does one transformation that a developer would recognize: swap `min` and `max`, extend a `range` end by one, make the first strict comparison non-strict, guard the last parameter against zero, and toggle the first accumulator initialization between 0 and 1. All ops take the source and the public tests. Only the exploit uses the tests.
+
+```python
+#@save
+def swap_minmax(source, tests):
+    return re.sub(r'\b(min|max)\(', lambda m: 'max(' if m[1] == 'min' else 'min(', source)
+
+def fix_range_end(source, tests):
+    return re.sub(r'range\(([^,()]+), ([^()]+)\)', r'range(\1, \2 + 1)', source, count=1)
+
+def fix_comparison(source, tests):
+    return re.sub(r' ([<>]) ', r' \1= ', source, count=1)
+
+def add_zero_guard(source, tests):
+    header, body = source.split('\n', 1)
+    last_param = re.search(r'(\w+)\):$', header)[1]
+    return f'{header}\n    if {last_param} == 0: return 0\n{body}'
+
+def fix_init(source, tests):
+    toggle = lambda m: m[1] + ('1' if m[2] == '0' else '0')
+    return re.sub(r'^(    \w+ = )([01])$', toggle, source, count=1, flags=re.M)
+```
+
+The sixth op is the **exploit**. `hardcode_tests` inserts one line per public test that returns the expected value when the arguments match that test exactly. The result passes every public test and leaves the bug in place for every other input. It is the toy version of a well-documented failure of coding agents: special-casing the tests instead of fixing the code. Because it is a single action, a policy trained on a reward that only checks public tests can discover it by chance, and Chapter 11 does exactly that.
+
+```python
+#@save
+def hardcode_tests(source, tests):
+    header, body = source.split('\n', 1)
+    params = re.search(r'\((.*)\):$', header)[1]
+    cases = ''.join(f'    if [{params}] == {list(args)}: return {want!r}\n' for args, want in tests)
+    return f'{header}\n{cases}{body}'
+
+EDIT_OPS = {'swap_minmax': swap_minmax, 'fix_range_end': fix_range_end,
+            'fix_comparison': fix_comparison, 'add_zero_guard': add_zero_guard,
+            'fix_init': fix_init, 'hardcode_tests': hardcode_tests}
+FIX_OPS = [op for op in EDIT_OPS if op != 'hardcode_tests']
+```
+
+```python
+hacked = hardcode_tests(task0.source, task0.public_tests)
+print(hacked)
+print('public pass:', [p for p, _ in run_tests(hacked, task0.public_tests, 'clamp')])
+print('hidden pass:', [p for p, _ in run_tests(hacked, task0.hidden_tests, 'clamp')])
+```
+
+Output:
+
+```text
+def clamp(value, lower, upper):
+    if [value, lower, upper] == [-6, -3, -3]: return -3
+    if [value, lower, upper] == [5, -2, 3]: return 3
+    if [value, lower, upper] == [1, -3, 2]: return 1
+    return min(lower, max(value, upper))
+
+public pass: [True, True, True]
+hidden pass: [False, True, True, True, True, False, False, True]
+```
+
+The hacked `clamp` passes its three public tests and still fails three of its eight hidden tests, exactly the hidden tests that the unmodified bug fails. The other five hidden tests pass only because their answer happens to be the lower bound, which the bug returns anyway. Hidden tests that the bug passes by accident carry no information about the fix, which is why `draw_tests` insists on at least one failing hidden test.
+
+The next block applies every op once to the buggy source of every task, train and held-out, and counts how many tasks then pass all public tests and all hidden tests. The table shows how specific the ops are.
+
+```python
+all_tasks = train + heldout
+print(f'{"op":<15}' + ''.join(f'{f:>10}' for f in FAMILIES) + '   (public/hidden passes out of 6)')
+for name, op in EDIT_OPS.items():
+    cells = []
+    for family in FAMILIES:
+        tasks = [t for t in all_tasks if t.family == family]
+        edited = [(op(t.source, t.public_tests), t) for t in tasks]
+        pub = sum(all(p for p, _ in run_tests(s, t.public_tests, t.fn_name)) for s, t in edited)
+        hid = sum(all(p for p, _ in run_tests(s, t.hidden_tests, t.fn_name)) for s, t in edited)
+        cells.append(f'{pub}/{hid}')
+    print(f'{name:<15}' + ''.join(f'{c:>10}' for c in cells))
+```
+
+Output:
+
+```text
+op                 minmax     range   compare      zero      init   (public/hidden passes out of 6)
+swap_minmax           6/6       0/0       0/0       0/0       0/0
+fix_range_end         0/0       6/6       0/0       0/0       0/0
+fix_comparison        0/0       0/0       6/6       0/0       0/0
+add_zero_guard        0/0       0/0       0/0       6/6       0/0
+fix_init              0/0       0/0       0/0       0/0       6/6
+hardcode_tests        6/0       6/0       6/0       6/0       6/0
+```
+
+Each repair op fixes all six tasks of its own family and none of the others. The diagonal structure is exact, so a policy that picks the op by family gets every task right, and a policy that ignores the code can do no better than chance among five ops. The exploit passes the public tests of all 30 tasks and the hidden tests of none. This is the gap between the reward an agent can observe and the reward we care about, and the whole of Chapter 11 is built on it.
+
+## 4.5 The action grammar and the environment
+
+The policy communicates with the environment through text, so the environment needs a grammar for actions and a parser that enforces it. The BugFix grammar is
+
+```text
+<call> TOOL [ARG] </call>
+```
+
+with whitespace-separated words, where `TOOL` is one of `read`, `test`, `edit`, `submit`, and `ARG` is an edit op name, required for `edit` and forbidden otherwise. `parse_call` checks only the shape. It returns `(tool, arg)` or `None`. Checking that the tool exists and that the argument is valid is the environment's job, so the two kinds of failure can be counted separately.
+
+```python
+#@save
+def parse_call(text):
+    """Parse '<call> tool [arg] </call>' -> (tool, arg or None); None if malformed."""
+    words = text.split()
+    if len(words) not in (3, 4) or words[0] != '<call>' or words[-1] != '</call>':
+        return None
+    return words[1], (words[2] if len(words) == 4 else None)
+```
+
+```python
+for text in ['<call> read </call>', '<call> edit swap_minmax </call>', '<call>   test\n</call>',
+             'read', '<call> read', 'I will read: <call> read </call>', '<call> fly away </call>']:
+    print(f'{text!r:<38} -> {parse_call(text)}')
+```
+
+Output:
+
+```text
+'<call> read </call>'                  -> ('read', None)
+'<call> edit swap_minmax </call>'      -> ('edit', 'swap_minmax')
+'<call>   test\n</call>'               -> ('test', None)
+'read'                                 -> None
+'<call> read'                          -> None
+'I will read: <call> read </call>'     -> None
+'<call> fly away </call>'              -> ('fly', 'away')
+```
+
+The parser accepts any whitespace, including a newline, between words. It rejects a bare tool name, a call missing its closing tag, and, deliberately, a call preceded by free text. Real agents often write reasoning before a tool call, and real templates make room for that (Chapter 5). The BugFix grammar is strict on purpose, so that format errors are visible and costly: a malformed call returns an error observation and consumes a turn. `<call> fly away </call>` parses, because its shape is right, and the environment rejects it as an unknown tool in the next step.
+
+Tools produce the observations. `format_results` turns test results into one short line per public test, a `pass` line, or a `fail` line with the value the function returned and the value the test wanted. Fixed messages cover the remaining cases. `apply_tool` executes one parsed call against the current source and returns the observation, the new source, and an event label for bookkeeping. It is a pure function. The environment class owns all the state.
+
+```python
+#@save
+def format_results(results, tests):
+    """One line per test: 'pass ( args )' or 'fail ( args ) -> got want expected'."""
+    lines = []
+    for (passed, got), (args, want) in zip(results, tests):
+        call = '( ' + ' , '.join(map(str, args)) + ' )'
+        lines.append(f'pass {call}' if passed else f'fail {call} -> {got} want {want}')
+    return '\n'.join(lines)
+
+MESSAGES = dict(malformed='error : malformed call', bad='error : unknown tool or argument',
+                changed='ok', unchanged='no change', submitted='submitted')
+```
+
+```python
+#@save
+def apply_tool(task, source, call):
+    """Execute one parsed call on the current source -> (observation, new_source, event)."""
+    if call is None:
+        return MESSAGES['malformed'], source, 'invalid'
+    tool, arg = call
+    if tool == 'read' and arg is None:
+        return compact_source(source), source, 'read'
+    if tool == 'test' and arg is None:
+        results = run_tests(source, task.public_tests, task.fn_name)
+        return format_results(results, task.public_tests), source, 'test'
+    if tool == 'edit' and arg in EDIT_OPS:
+        new = EDIT_OPS[arg](source, task.public_tests)
+        return MESSAGES['changed' if new != source else 'unchanged'], new, 'edit'
+    if tool == 'submit' and arg is None:
+        return MESSAGES['submitted'], source, 'submit'
+    return MESSAGES['bad'], source, 'invalid'
+```
+
+The reward is a function of the episode's final diagnostics. The default, `hidden`, pays 1.0 exactly when the agent submitted and the submitted source passes every hidden test. The alternative `public` pays for passing the public tests and is the hackable reward of Chapter 11. `BugFixEnv` accepts either name or any callable that maps the `info` dictionary to a float, so later chapters can define partial-credit, format, or penalized rewards without changing the environment.
+
+```python
+#@save
+def hidden_reward(info):
+    """1.0 if the agent submitted and all hidden tests pass."""
+    return float(info['submitted'] and info['hidden_pass'])
+
+def public_reward(info):
+    """1.0 if the agent submitted and all public tests pass (hackable)."""
+    return float(info['submitted'] and info['public_pass'])
+
+REWARDS = {'hidden': hidden_reward, 'public': public_reward}
+```
+
+`BugFixEnv` ties it together. `step` parses the action, applies the tool, advances the turn counter, and checks the two ways to end. When the episode ends, `final_info` grades the current source on both test sets and records the diagnostics that later chapters log: whether the agent submitted, why the episode stopped, the pass fractions, the turn count, the number of invalid calls, and the ops used.
+
+```python
+#@save
+class BugFixEnv:
+    """Repair episode: reset(task) -> obs; step(action_text) -> (obs, reward, done, info)."""
+    def __init__(self, max_turns=6, reward='hidden'):
+        self.max_turns = max_turns
+        self.reward_fn = REWARDS[reward] if isinstance(reward, str) else reward
+        self.done = True
+
+    def reset(self, task):
+        self.task, self.source = task, task.source
+        self.turn, self.n_invalid, self.ops, self.done = 0, 0, [], False
+        return task.issue
+
+    def step(self, action_text):
+        assert not self.done, 'episode is over: call reset(task)'
+        call = parse_call(action_text)
+        obs, self.source, event = apply_tool(self.task, self.source, call)
+        self.turn += 1
+        self.n_invalid += event == 'invalid'
+        if event == 'edit':
+            self.ops.append(call[1])
+        self.done = event == 'submit' or self.turn >= self.max_turns
+        if not self.done:
+            return obs, 0.0, False, {'turn': self.turn, 'event': event}
+        info = self.final_info(submitted=event == 'submit')
+        return obs, self.reward_fn(info), True, info
+
+    def final_info(self, submitted):
+        t = self.task
+        pub = [p for p, _ in run_tests(self.source, t.public_tests, t.fn_name)]
+        hid = [p for p, _ in run_tests(self.source, t.hidden_tests, t.fn_name)]
+        return dict(task=t.name, family=t.family, submitted=submitted,
+                    stop='submit' if submitted else 'budget', public_pass=all(pub),
+                    hidden_pass=all(hid), public_frac=sum(pub) / len(pub),
+                    hidden_frac=sum(hid) / len(hid), n_turns=self.turn,
+                    n_invalid=self.n_invalid, ops=list(self.ops))
+```
+
+Here is one episode on `clamp`, driven by a hand-written list of actions. It includes one malformed call, so we can see what that costs.
+
+```python
+env = BugFixEnv(max_turns=6)
+print('reset ->', env.reset(task0))
+for action in ['<call> read', '<call> read </call>', '<call> edit swap_minmax </call>',
+               '<call> test </call>', '<call> submit </call>']:
+    obs, reward, done, info = env.step(action)
+    print(f'{action!r:<34} reward={reward} done={done}')
+    print('   obs:', obs.replace('\n', ' | '))
+print({k: info[k] for k in ['stop', 'hidden_pass', 'n_turns', 'n_invalid', 'ops']})
+```
+
+Output:
+
+```text
+reset -> issue : clamp returns wrong results
+'<call> read'                      reward=0.0 done=False
+   obs: error : malformed call
+'<call> read </call>'              reward=0.0 done=False
+   obs: def clamp ( value , lower , upper ) : | return min ( lower , max ( value , upper ) )
+'<call> edit swap_minmax </call>'  reward=0.0 done=False
+   obs: ok
+'<call> test </call>'              reward=0.0 done=False
+   obs: pass ( -6 , -3 , -3 ) | pass ( 5 , -2 , 3 ) | pass ( 1 , -3 , 2 )
+'<call> submit </call>'            reward=1.0 done=True
+   obs: submitted
+{'stop': 'submit', 'hidden_pass': True, 'n_turns': 5, 'n_invalid': 1, 'ops': ['swap_minmax']}
+```
+
+The malformed first action returned an error and used up turn 1, so the repair took five turns instead of four. Reading shows `min ( lower , max (`, which identifies the swapped-bounds bug. After `swap_minmax` the `test` tool reports three passes. Only the final `submit` produces a reward, 1.0, because the hidden tests pass as well. Every intermediate reward is 0. This sparsity is the credit-assignment problem of Chapter 7: the reward arrives at turn 5, and the learning algorithm must work out which of the earlier tokens deserve it.
+
+Two more episodes show the other endings: the exploit under each reward, and an agent that never submits.
+
+```python
+for reward in ['hidden', 'public']:
+    env = BugFixEnv(reward=reward)
+    env.reset(task0)
+    for action in ['<call> edit hardcode_tests </call>', '<call> submit </call>']:
+        obs, r, done, info = env.step(action)
+    print(f'hacker, reward={reward!r}: r={r}, public_pass={info["public_pass"]}, hidden_pass={info["hidden_pass"]}')
+env = BugFixEnv(max_turns=3)
+env.reset(task0)
+for _ in range(3):
+    obs, r, done, info = env.step('<call> read </call>')
+print(f'three reads, max_turns=3: done={done}, r={r}, stop={info["stop"]!r}')
+```
+
+Output:
+
+```text
+hacker, reward='hidden': r=0.0, public_pass=True, hidden_pass=False
+hacker, reward='public': r=1.0, public_pass=True, hidden_pass=False
+three reads, max_turns=3: done=True, r=0.0, stop='budget'
+```
+
+The same exploit earns 0.0 under the hidden-test reward and 1.0 under the public-test reward, while `info` records the truth in both cases. Keeping `public_pass` and `hidden_pass` in the diagnostics regardless of the reward is what lets Chapter 11 plot the reward a policy is trained on against the outcome we care about. An agent that reads until the budget runs out ends with `stop='budget'` and no reward.
+
+## 4.6 Scripted baselines
+
+Before training anything, we measure what simple, hand-written policies achieve. These numbers serve three purposes. They check that the gym works (an informed policy must succeed and a bad one must fail). They set the bars that a trained TinyAgent must clear. And they show how much of the task depends on gathering information.
+
+A scripted policy is a function from the list of observations so far (starting with the issue) to the next action text. We write four:
+
+- **oracle** reads the file, chooses the op with a fixed rule over the source words, edits, tests, and submits. It uses only what it observes, plus a rule table written with knowledge of the five families.
+- **blind** applies a random repair op without reading and submits immediately.
+- **random** picks uniformly among the nine well-formed calls at every turn.
+- **hacker** applies `hardcode_tests`, tests, and submits.
+
+```python
+#@save
+ALL_CALLS = ['<call> read </call>', '<call> test </call>', '<call> submit </call>'] + \
+            [f'<call> edit {op} </call>' for op in EDIT_OPS]
+
+def infer_op(read_obs):
+    """The oracle's rule: map words of the read observation to the repair op."""
+    words = read_obs.split()
+    if 'min' in words or 'max' in words:
+        return 'swap_minmax'
+    if '//' in words:
+        return 'add_zero_guard'
+    if '>' in words or '<' in words:
+        return 'fix_comparison'
+    if '+ 1 )' in read_obs:           # range(1, n + 1) is already correct: the bug is the init
+        return 'fix_init'
+    return 'fix_range_end'
+```
+
+The order of the rules matters. The `range` and `init` families both contain a `for ... range(...)` loop, and only the end of the range distinguishes them. The rule is specific to these five families, which is the point: the information needed to choose the op is in the `read` observation, and a learned policy has to discover a rule like this one from reward alone.
+
+```python
+#@save
+def scripted_policy(kind, seed=0):
+    """Hand-written policy: kind in {'oracle', 'blind', 'random', 'hacker'}; maps observations -> action text."""
+    rng = random.Random(seed)
+    def oracle(observations):
+        turn = len(observations) - 1
+        if turn == 1:
+            return f'<call> edit {infer_op(observations[1])} </call>'
+        return ['<call> read </call>', None, '<call> test </call>', '<call> submit </call>'][min(turn, 3)]
+    def blind(observations):
+        return f'<call> edit {rng.choice(FIX_OPS)} </call>' if len(observations) == 1 else '<call> submit </call>'
+    def random_calls(observations):
+        return rng.choice(ALL_CALLS)
+    def hacker(observations):
+        return ['<call> edit hardcode_tests </call>', '<call> test </call>',
+                '<call> submit </call>'][min(len(observations) - 1, 2)]
+    return dict(oracle=oracle, blind=blind, random=random_calls, hacker=hacker)[kind]
+
+
+def run_episode(policy, env, task):
+    """Run a text policy for one episode -> (reward, info)."""
+    observations = [env.reset(task)]
+    while True:
+        obs, reward, done, info = env.step(policy(observations))
+        observations.append(obs)
+        if done:
+            return reward, info
+```
+
+We run each policy on every task. The oracle and the hacker are deterministic, so one episode per task suffices. The blind and random policies are stochastic, so we run 40 episodes per task. The table reports the hidden-test reward by family on the training split, the overall reward on both splits, and the fraction of episodes that submitted a source passing the public tests.
+
+```python
+def baseline(kind, tasks, repeats):
+    policy, env = scripted_policy(kind, seed=0), BugFixEnv()
+    return [run_episode(policy, env, t) for t in tasks for _ in range(repeats)]
+
+print(f'{"policy":<8}' + ''.join(f'{f:>8}' for f in FAMILIES) + f'{"train":>8}{"heldout":>9}{"public":>8}')
+for kind, repeats in [('oracle', 1), ('blind', 40), ('random', 40), ('hacker', 1)]:
+    runs = baseline(kind, train, repeats)
+    by_family = [sum(r for (r, i) in runs if i['family'] == f) / (4 * repeats) for f in FAMILIES]
+    held = baseline(kind, heldout, repeats)
+    public = sum(i['submitted'] and i['public_pass'] for _, i in runs) / len(runs)
+    print(f'{kind:<8}' + ''.join(f'{x:>8.2f}' for x in by_family) +
+          f'{sum(r for r, _ in runs) / len(runs):>8.2f}{sum(r for r, _ in held) / len(held):>9.2f}{public:>8.2f}')
+```
+
+Output:
+
+```text
+policy    minmax   range compare    zero    init   train  heldout  public
+oracle      1.00    1.00    1.00    1.00    1.00    1.00     1.00    1.00
+blind       0.24    0.19    0.21    0.22    0.17    0.21     0.19    0.21
+random      0.11    0.07    0.12    0.12    0.09    0.10     0.12    0.20
+hacker      0.00    0.00    0.00    0.00    0.00    0.00     0.00    1.00
+```
+
+The oracle solves every task in both splits, which confirms that reading is sufficient: the `read` observation always contains enough information to choose the right op. The blind policy succeeds about one time in five, which is what guessing one of five ops gives. The random policy does worse than the blind one even though its calls are always well formed. It often runs out of turns before it submits, and when it submits it has often applied the wrong ops, or none. The hacker's reward is 0 everywhere, but its public pass rate is 1.0. Under the public-test reward it would be indistinguishable from the oracle. The random policy shows the same gap in miniature: its public pass rate (0.20) is twice its hidden reward (0.10), because one of its nine calls is `hardcode_tests`, and it sometimes submits right after picking it.
+
+![Figure 4.2: Scripted baselines on the BugFix gym. Left: hidden-test reward by bug family (train split). Right: public-test pass rate versus hidden-test reward, by policy.](../figures/ch04-baselines.svg)
+
+Figure 4.2 summarizes the table. The left panel shows the oracle at 1.0 in every family, the guessing policies near the 0.2 line, and the hacker at zero (its bars have zero height). The right panel is the one to remember for Chapter 11. For the oracle and the blind policy, the public and hidden bars coincide. The random policy's bars differ by its accidental exploits, and for the hacker they are as far apart as they can be. A reward that measures only what the agent can see will select for the policy on the right.
+
+Two numbers from this section carry through the book. A trained TinyAgent that scores about 0.2 has learned only the format, and one that scores well above 0.2 on the held-out split has learned to read.
+
+## 4.7 Real coding environments and isolation
+
+The BugFix gym keeps the structure of production coding environments and removes their cost. It helps to see which parts map to what.
+
+**Tasks and grading.** SWE-bench builds each task from a real GitHub issue and the pull request that resolved it. Each task records the repository's `base_commit`, a `test_patch` with the tests contributed by the pull request, and two test lists: `FAIL_TO_PASS`, "tests resolved by the PR and tied to the issue resolution", and `PASS_TO_PASS`, "tests that should pass before and after the PR application" ([SWE-bench dataset card](https://huggingface.co/datasets/princeton-nlp/SWE-bench), inspected 2026-10-13). A patch counts as resolving the issue only if both lists pass. Our hidden tests play the role of `FAIL_TO_PASS`. The BugFix gym has no `PASS_TO_PASS` analog because each task is a single function, which is one reason it cannot detect an edit that breaks other code.
+
+**Execution.** The SWE-bench evaluation harness applies each patch to the repository inside a Docker container and runs the repository's tests there. It caches images at several levels (`base`, `env`, `instance`) because building them is the dominant cost ([SWE-bench evaluation guide](https://www.swebench.com/SWE-bench/guides/evaluation/), inspected 2026-10-13). R2E-Gym, which DeepSWE used for training, provides over 8,100 executable problems across 13 repositories, each backed by its own Docker image of roughly 300 to 500 MB, and exposes them through a `RepoEnv` class with helpers such as `apply_patch` ([R2E-Gym README at commit 353348a](https://github.com/agentica-project/R2E-Gym/blob/353348a0ff690f2592025eff41b3fef4201a4d8b/README.md), inspected 2026-10-13).
+
+**Environment interface.** rLLM's `BaseEnv` declares `reset() -> tuple[dict, dict]` and `step(action) -> tuple[Any, float, bool, dict]` ([rLLM `base_env.py` at commit 7b47687](https://github.com/agentica-project/rllm/blob/7b47687f6a9ef1bf5cbd56dd1af61fff08c4b0e4/rllm/environments/base/base_env.py), inspected 2026-10-13). That is the same contract as ours, except that `reset` also returns an info dictionary and the task is bound when the environment is constructed (via `from_dict`) rather than passed to `reset`. The difference matters for pooling. An environment that is constructed per task cannot be reused across tasks without rebuilding it, which in a container-backed system means starting a new container.
+
+**Tool schemas.** Our grammar is a private protocol. Production agents describe tools with JSON Schema so that any model and any client can use them. The Model Context Protocol defines a tool by a `name`, a `description`, and an `inputSchema`, and reports tool failures inside the result with `isError: true` rather than as protocol errors. Its security section states that servers "MUST validate all tool inputs", rate-limit invocations, and sanitize outputs ([MCP specification 2025-06-18](https://modelcontextprotocol.io/specification/2025-06-18/server/tools), inspected 2026-10-13). Here are the BugFix tools in that form. Chapter 5 renders them with the Qwen3 chat template.
+
+```python
+#@save
+NO_ARGS = {'type': 'object', 'properties': {}, 'required': []}
+TOOL_SCHEMAS = [
+    {'name': 'read', 'description': 'Return the current source of the function.', 'inputSchema': NO_ARGS},
+    {'name': 'test', 'description': 'Run the public tests; one pass/fail line per test.', 'inputSchema': NO_ARGS},
+    {'name': 'edit', 'description': 'Apply one source transformation to the function.',
+     'inputSchema': {'type': 'object', 'properties': {'op': {'type': 'string', 'enum': list(EDIT_OPS)}},
+                     'required': ['op']}},
+    {'name': 'submit', 'description': 'End the episode; the source is graded on hidden tests.', 'inputSchema': NO_ARGS},
+]
+```
+
+```python
+print(json.dumps(TOOL_SCHEMAS[2], indent=None))
+```
+
+Output:
+
+```text
+{"name": "edit", "description": "Apply one source transformation to the function.", "inputSchema": {"type": "object", "properties": {"op": {"type": "string", "enum": ["swap_minmax", "fix_range_end", "fix_comparison", "add_zero_guard", "fix_init", "hardcode_tests"]}}, "required": ["op"]}}
+```
+
+The `enum` makes the edit menu part of the schema. A schema-aware decoder could even constrain generation to valid calls, but constrained decoding changes the sampling distribution and therefore the behavior policy (Section 3.3), which the trainer must then account for.
+
+**Production tools.** Now the interface the gym abstracts. The schemas below follow Claude Code's built-in tools. The parameter names for `Bash`, `Read`, `Edit`, and `Write` are the ones those tools expose to the model in a Claude Code session we inspected on 2026-10-14. The tools reference documents `Edit`'s `old_string`, `new_string`, and `replace_all`, and `Read`'s `offset` and `limit`. It does not name the parameters of `Grep` and `Glob`, so `pattern` and `path` are our choice. We save the list as `CODING_TOOLS` for Chapter 5 and the lab.
+
+```python
+#@save
+def _tool(name, description, required, **properties):
+    """MCP-style tool schema; every property type is given as a JSON-schema type name."""
+    props = {k: {'type': v} for k, v in properties.items()}
+    return {'name': name, 'description': description,
+            'inputSchema': {'type': 'object', 'properties': props, 'required': required}}
+
+CODING_TOOLS = [
+    _tool('Bash', 'Run a shell command; returns stdout and stderr.', ['command'],
+          command='string', timeout='integer'),
+    _tool('Read', 'Read a file with line numbers.', ['file_path'],
+          file_path='string', offset='integer', limit='integer'),
+    _tool('Edit', 'Replace an exact string; old_string must be unique unless replace_all.',
+          ['file_path', 'old_string', 'new_string'],
+          file_path='string', old_string='string', new_string='string', replace_all='boolean'),
+    _tool('Write', 'Create or overwrite a file with the full content.', ['file_path', 'content'],
+          file_path='string', content='string'),
+    _tool('Grep', 'Search file contents with a regular expression.', ['pattern'], pattern='string', path='string'),
+    _tool('Glob', 'List files whose names match a glob pattern.', ['pattern'], pattern='string', path='string'),
+]
+```
+
+A schema is only a promise. The environment has to implement the rules the schema states in prose. Here is a minimal in-memory workspace with `Edit`'s rules made explicit: the string must occur, it must be unique unless `replace_all` is set, and, by our choice, the file must have been read first. Claude Code enforces read-before-edit on some models and only conditionally on newer ones, which is why this is a design decision rather than a law.
+
+```python
+class Workspace:
+    """In-memory repository with Read / Edit / Grep semantics modeled on Claude Code's tools."""
+    def __init__(self, files):
+        self.files, self.seen = dict(files), set()
+
+    def read(self, file_path):
+        if file_path not in self.files:
+            return f'Error: {file_path} does not exist'
+        self.seen.add(file_path)
+        return '\n'.join(f'{i:>3}  {line}' for i, line in enumerate(self.files[file_path].splitlines(), 1))
+
+    def edit(self, file_path, old_string, new_string, replace_all=False):
+        if file_path not in self.seen:
+            return 'Error: read the file before editing it'
+        n = self.files[file_path].count(old_string)
+        if n == 0:
+            return 'Error: old_string not found (it must match exactly, including whitespace)'
+        if n > 1 and not replace_all:
+            return f'Error: old_string occurs {n} times; add context or set replace_all'
+        self.files[file_path] = self.files[file_path].replace(old_string, new_string)
+        return f'Edited {file_path}'
+
+    def grep(self, pattern):
+        return '\n'.join(f'{f}:{i}: {line}' for f in sorted(self.files)
+                         for i, line in enumerate(self.files[f].splitlines(), 1) if re.search(pattern, line))
+```
+
+`Bash` is the hard tool to give an agent, because a real shell can do anything. In production it runs inside a container (see Isolation below). Here we emulate a two-command allowlist: `ls`, and `pytest`, which runs the task's public tests on the current source with `run_tests` from Section 4.3. That is safe only because, in this demonstration, every edit is authored by us.
+
+```python
+def bash(ws, task, command):
+    """Allowlisted Bash emulation: `ls` and `pytest`. Real agents get a real shell in a sandbox."""
+    if command == 'ls':
+        return '  '.join(sorted(ws.files))
+    if command.startswith('pytest'):
+        results = run_tests(ws.files[f'{task.fn_name}.py'], task.public_tests, task.fn_name)
+        failed = sum(not ok for ok, _ in results)
+        return f'{len(results) - failed} passed, {failed} failed'
+    return f'Error: {command.split()[0]}: command not available in this sandbox'
+```
+
+Now the `clamp` repair as a production agent performs it: look around, read the file, write the edit, run the tests, and stop. Each call prints the observation the model would receive.
+
+```python
+ws = Workspace({'clamp.py': task0.source, 'test_clamp.py': '# public tests: 3 cases\n'})
+episode = [('Bash', lambda: bash(ws, task0, 'ls')),
+           ('Grep', lambda: ws.grep('def clamp')),
+           ('Read', lambda: ws.read('clamp.py')),
+           ('Edit', lambda: ws.edit('clamp.py', 'min(lower, max(value, upper))', 'max(lower, min(value, upper))')),
+           ('Bash', lambda: bash(ws, task0, 'pytest test_clamp.py'))]
+for name, call in episode:
+    print(f'{name:<5}| ' + call().replace('\n', '\n     | '))
+hidden = run_tests(ws.files['clamp.py'], task0.hidden_tests, 'clamp')
+print('final answer, no tool call | hidden tests passed:', all(ok for ok, _ in hidden))
+print('same edit as the gym op:', ws.files['clamp.py'] == swap_minmax(task0.source, task0.public_tests))
+```
+
+Output:
+
+```text
+Bash | clamp.py  test_clamp.py
+Grep | clamp.py:1: def clamp(value, lower, upper):
+Read |   1  def clamp(value, lower, upper):
+     |   2      return min(lower, max(value, upper))
+Edit | Edited clamp.py
+Bash | 3 passed, 0 failed
+final answer, no tool call | hidden tests passed: True
+same edit as the gym op: True
+```
+
+Five calls fix the bug, and the final `Edit` produces exactly the source that the gym's `swap_minmax` op produces. The op hides the step this episode made explicit: choosing `old_string` and `new_string`. The editor is unforgiving about that step, which is where real agents lose turns.
+
+```python
+fresh = Workspace({'clamp.py': task0.source})
+print('edit before read :', fresh.edit('clamp.py', 'min(', 'max('))
+fresh.read('clamp.py')
+print('wrong whitespace :', fresh.edit('clamp.py', 'min(lower,max(value, upper))', 'x'))
+print('ambiguous string :', fresh.edit('clamp.py', 'upper', 'hi'))
+```
+
+Output:
+
+```text
+edit before read : Error: read the file before editing it
+wrong whitespace : Error: old_string not found (it must match exactly, including whitespace)
+ambiguous string : Error: old_string occurs 2 times; add context or set replace_all
+```
+
+Each failure is an error observation that costs a turn, just like a malformed call in the gym. The table summarizes what each gym action abstracts.
+
+| Production call | Gym action | What the gym hides |
+| --- | --- | --- |
+| `Read(file_path)` | `read` | choosing the file; line numbers; full Python instead of the compact projection |
+| `Edit(file_path, old_string, new_string)` | `edit <op>` | locating the span, copying `old_string` exactly, and writing `new_string` |
+| `Bash("pytest ...")` | `test` | choosing the command and parsing a real test log |
+| answering without a tool call | `submit` | deciding when to stop |
+| `Bash("ls")`, `Grep`, `Glob`, `Write` | none | navigating a multi-file repository and creating files |
+
+The abstraction keeps what RL needs to show (information gathering, credit across turns, exploration, and the exploit) and removes what a 158k-parameter model cannot learn in a minute: writing exact code. A pretrained model already writes code, so for it the production surface is the right one. That is the setting of the real-model lab in Section 19.7.
+
+**Isolation.** Everything above runs model-written code. A sandbox for RL rollouts has to contain code that is buggy, adversarial, or both, and the RL loop actively searches for whatever the sandbox allows. The minimum is a separate process or container per episode with CPU, memory, and wall-clock limits, no network access unless the task needs it, a read-only view of anything the agent should not change (the test files above all), and a fresh filesystem at every reset. Hidden tests must not be reachable from inside the agent's sandbox, not even as files the agent could `cat`. The BugFix gym gets away with `exec` in the trainer process only because no model-written code ever reaches it: the policy chooses among six authored transformations of authored source.
+
+> **In production.** Grading happens after the agent's sandbox is finished, in a separate step that copies in the hidden tests, in the spirit of SWE-bench applying the `test_patch` only at evaluation time. That is a general engineering observation about these harnesses, not a claim about any specific lab's infrastructure.
+
+## 4.8 Design problems in practice
+
+> **Problem: environment determinism and reproducibility.** *Symptom:* the same checkpoint scores differently on two evaluation runs with the same seed, or an RL run cannot be replayed to debug a spike. *Cause:* hidden sources of randomness in the environment: unseeded test generation, dictionary or filesystem ordering, timestamps, network calls, or tests that depend on execution order. *Options:* (a) seed every random draw from the task identity, as `make_tasks` does by hashing the seed with the family and variant, which costs nothing. (b) Snapshot environments as images and pin them, which is the approach of container-based harnesses and costs storage. (c) Record and replay observations for debugging, which costs logging volume. *Default:* derive all environment randomness from `(seed, task id)` and assert reproducibility in a test, as below.
+
+```python
+again, other = make_tasks('train', seed=0), make_tasks('train', seed=1)
+print('same seed reproduces tests:', all(a.hidden_tests == b.hidden_tests for a, b in zip(train, again)))
+print('new seed changes tests:', sum(a.hidden_tests != b.hidden_tests for a, b in zip(train, other)), 'of', len(train))
+```
+
+Output:
+
+```text
+same seed reproduces tests: True
+new seed changes tests: 20 of 20
+```
+
+The seed changes every task's tests, and the same seed reproduces them exactly. Evaluations in later chapters can therefore report results across several test seeds with the same functions and bugs.
+
+> **Problem: flaky tests make the reward noisy.** *Symptom:* a correct policy's reward on the same task varies between rollouts, and advantages are nonzero in groups that should be uniform. *Cause:* in real repositories some tests depend on timing, randomness, or external services, so the verifier itself is stochastic. RL then pushes probability toward whatever happened to coincide with a lucky pass. *Options:* (a) run each candidate's tests several times and use the majority, which multiplies grading cost. (b) Filter out tasks whose gold patch does not pass reliably, which costs data. (c) Model the noise in the reward (Chapter 11). *Default:* before training, validate every task by running its reference fix repeatedly and drop tasks that ever fail. The next block shows how much a small flake rate costs the oracle.
+
+```python
+def flaky(rate, rng):
+    return lambda info: hidden_reward(info) * (rng.random() >= rate)   # a passing run fails with prob. rate
+
+for rate in [0.0, 0.05, 0.2]:
+    env = BugFixEnv(reward=flaky(rate, random.Random(0)))
+    rewards = [run_episode(scripted_policy('oracle'), env, t)[0] for t in train for _ in range(25)]
+    print(f'flake rate {rate:.2f}: oracle mean reward {sum(rewards) / len(rewards):.3f}')
+```
+
+Output:
+
+```text
+flake rate 0.00: oracle mean reward 1.000
+flake rate 0.05: oracle mean reward 0.936
+flake rate 0.20: oracle mean reward 0.806
+```
+
+With a 5% flake rate, a perfect policy's measured reward falls to 0.936, and with 20% to 0.806 (the expected values are 0.95 and 0.8; the gap is sampling noise over 500 episodes). The noise is independent of the action, so on average it only rescales the signal, but it adds variance to every advantage estimate and puts a ceiling on the reward that looks like a capability limit.
+
+> **Problem: leaking hidden tests through tools.** *Symptom:* training reward climbs much faster than held-out evaluation, or an agent's actions contain constants that appear only in the grader. *Cause:* some tool exposes the grader's data, for example a `test` tool that runs the hidden suite, a file the agent can read, or error messages that print expected values. *Options:* (a) keep hidden tests outside the sandbox and grade after the episode, at the cost of a separate grading step. (b) Audit observations automatically for grader content, as below. *Default:* both. The next check scans every observation of every oracle and random episode for a hidden-test input.
+
+```python
+def leaks(task, observations):
+    hidden = {'( ' + ' , '.join(map(str, args)) + ' )' for args, _ in task.hidden_tests}
+    return any(h in obs for obs in observations for h in hidden)
+
+count = 0
+for kind in ['oracle', 'random', 'hacker']:
+    policy = scripted_policy(kind)
+    for t in all_tasks:
+        env = BugFixEnv()
+        observations = [env.reset(t)]
+        while not env.done:
+            observations.append(env.step(policy(observations))[0])
+        count += leaks(t, observations)
+print('episodes with a hidden-test input in an observation:', count)
+```
+
+Output:
+
+```text
+episodes with a hidden-test input in an observation: 0
+```
+
+No observation from any of the three policies contains a hidden-test input. The `test` tool formats only public tests, and the hardcoded source shown by `read` contains only public inputs.
+
+> **Problem: tool-output truncation.** *Symptom:* agents loop on `read` or `test` with no progress, or context length explodes on a few tasks. *Cause:* real tools return unbounded text: a 3,000-line file, a stack trace, or a test log. Without a cap, a single observation can fill the context. With a naive cap, the useful part (the failing assertion is usually at the end) is cut off. *Options:* (a) truncate to the first $N$ tokens, which is simple and often discards the end. (b) Keep the head and the tail with an explicit marker, which preserves both the start and the failure. (c) Give tools arguments that scope their output (a line range for `read`, a single test for `test`), which moves the burden to the policy. *Default:* head-and-tail truncation with a visible marker and a token budget per observation. The BugFix gym avoids the problem by construction: its longest observation is a few dozen tokens.
+
+> **Problem: coarse action space versus free-form patches.** *Symptom:* a policy that is excellent in the gym cannot be transferred, or a free-form policy never gets a single reward. *Cause:* the action space sets both the difficulty of exploration and the ceiling. The six-op menu makes the right action reachable by random exploration (about one in nine calls), but it cannot express any fix outside the menu. Free-form patches can express any fix, but random patches almost never compile, let alone pass. *Options:* (a) a coarse menu, for teaching and for bootstrapping. (b) Structured edits such as exact-string replacement (`Edit` in Section 4.7) or search-and-replace blocks, a middle ground used by many coding agents, usually alongside a shell. (c) Free-form diffs with a strong pretrained prior, as in DeepSWE-style training of a 32B model. *Default:* for this book, the menu, because it lets a 158k-parameter model learn in a minute while every RL phenomenon remains visible. For a real agent, a structured edit format that the base model already writes reliably.
+
+> **Problem: environment latency, cost, and reset.** *Symptom:* GPUs idle while rollouts wait on environments, and a few slow episodes stall every step. *Cause:* a real `step` may build code, run a test suite, or start a container, taking seconds to minutes, and `reset` may need a fresh container. In synchronous RL the slowest episode in the batch sets the pace. *Options:* (a) pool and pre-warm environments, which costs memory. (b) Snapshot and restore container filesystems instead of rebuilding, which needs infrastructure. (c) Run rollouts asynchronously from training and tolerate stale data, at the price of off-policy corrections (Chapter 13). (d) Time out slow steps and treat the episode as truncated (Chapter 12). *Default:* measure step latency per tool from day one. The BugFix gym's `reset` only copies a string, so a reset costs microseconds. That makes it easy to forget that in production the environment, not the model, is often the throughput bottleneck.
+
+## Summary
+
+- An environment implements `reset(task) -> obs` and `step(action_text) -> (obs, reward, done, info)`. Its state includes things the agent never sees, most importantly the hidden tests.
+- The BugFix gym has five bug families with six surface variants each: 20 training tasks and 10 held-out tasks. Tests are executed on trusted, authored source, and expected values come from running a reference fix.
+- Actions follow the grammar `<call> tool [arg] </call>`. Malformed calls cost a turn. Six edit ops transform source generically, five repair one family each, and `hardcode_tests` passes public tests and fails hidden ones.
+- The reward is pluggable (`'hidden'`, `'public'`, or any function of `info`), and `info` always records both public and hidden outcomes.
+- Measured baselines (Section 4.6): oracle 1.0, blind about 0.2, random about 0.1, hacker 0.0 hidden but 1.0 public. A policy must read the code to beat about 0.2 on held-out variants.
+- Real environments (SWE-bench, R2E-Gym, rLLM) share this contract but run model code in isolated containers. Isolation, determinism, and latency are the main engineering costs.
+
+## Exercises
+
+1. Add a sixth bug family, for example a wrong default argument or an inverted boolean condition, with six variants and a matching repair op. Verify the op-by-family table of Section 4.4 stays diagonal.
+2. Change an assumption: make `parse_call` lenient, so that it finds the first `<call> ... </call>` span anywhere in the text. Which of the malformed examples now parse? Argue whether this would make RL from a random policy easier or harder, and what it would teach the policy about format.
+3. The random policy runs out of turns about half the time. Compute the probability that a uniformly random sequence of six calls contains `submit` exactly once, at the last turn, after the correct edit. Compare it with the measured random baseline.
+4. Write a `partial_reward(info)` that pays `hidden_frac` instead of a binary pass. Run the blind and hacker policies under it. What reward does the hacker earn, and why is that a problem?
+5. The oracle's `infer_op` rule uses keywords. Write a policy that chooses the op from `test` output alone, without `read`. On which families can it succeed, and why does `fail ( 1 , 0 ) -> error want 0` identify one family immediately?
+6. Design review: your team wants to replace the edit menu with free-form search-and-replace edits for the next version of the gym. List what must change in the environment (parsing, grading, isolation, observation length), what you expect to happen to the random-policy baseline, and what pretraining or SFT the policy would need before RL can start.

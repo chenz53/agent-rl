@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 380" width="980" height="380" role="img" aria-label="A teacher that is wrong on one family, and three students distilled from it">
+<style>
+svg{--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--neutral:#f0efec;--panel:#f4f3ef;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--s6:#008300;--s7:#6250d6;--s8:#e34948;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme: dark){svg{--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--neutral:#383835;--panel:#232322;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--s7:#9085e9;--s8:#e66767}}
+.bg{fill:var(--surface)} .t{fill:var(--ink)} .t2{fill:var(--ink2)} .m{fill:var(--muted)}
+.title{font-size:15px;font-weight:600;fill:var(--ink)} .sub{font-size:12px;fill:var(--ink2)}
+.lab{font-size:12px;fill:var(--ink2)} .tick{font-size:11px;fill:var(--muted);font-variant-numeric:tabular-nums}
+.grid{stroke:var(--grid);stroke-width:1} .axis{stroke:var(--axis);stroke-width:1}
+.box{fill:var(--panel);stroke:var(--axis);stroke-width:1} .edge{stroke:var(--ink2);stroke-width:1.5;fill:none}
+.ring{stroke:var(--surface);stroke-width:2} .note{font-size:11px;fill:var(--ink2)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--ink2)"/></marker></defs>
+<rect class="bg" width="980" height="380" rx="8"/>
+<text class="title" x="20" y="30">A teacher that is wrong on one family, and three students distilled from it</text>
+<text class="sub" x="20" y="48">Per-family hidden-test pass rate on training tasks (8 samples per task).</text>
+<line class="grid" x1="64" x2="920" y1="328.0" y2="328.0"/>
+<text class="tick" x="58" y="332.0" text-anchor="end">0</text>
+<line class="grid" x1="64" x2="920" y1="273.5" y2="273.5"/>
+<text class="tick" x="58" y="277.5" text-anchor="end">0.25</text>
+<line class="grid" x1="64" x2="920" y1="218.9" y2="218.9"/>
+<text class="tick" x="58" y="222.9" text-anchor="end">0.5</text>
+<line class="grid" x1="64" x2="920" y1="164.4" y2="164.4"/>
+<text class="tick" x="58" y="168.4" text-anchor="end">0.75</text>
+<line class="grid" x1="64" x2="920" y1="109.8" y2="109.8"/>
+<text class="tick" x="58" y="113.8" text-anchor="end">1</text>
+<line class="axis" x1="64" x2="920" y1="328.0" y2="328.0"/>
+<text class="tick" x="149.6" y="344" text-anchor="middle">minmax</text>
+<text class="tick" x="320.8" y="344" text-anchor="middle">range</text>
+<text class="tick" x="492.0" y="344" text-anchor="middle">compare</text>
+<text class="tick" x="663.2" y="344" text-anchor="middle">zero</text>
+<text class="tick" x="834.4" y="344" text-anchor="middle">init</text>
+<text class="lab" x="492.0" y="362" text-anchor="middle">bug family</text>
+<text class="lab" x="20" y="208.0" text-anchor="middle" transform="rotate(-90 20 208.0)">hidden-test pass rate</text>
+<clipPath id="clip135106146250112"><rect x="64" y="86" width="856" height="244"/></clipPath>
+<path d="M98.6,328.0 V113.8 Q98.6,109.8 102.6,109.8 H118.6 Q122.6,109.8 122.6,113.8 V328.0 Z" fill="var(--s8)"><title>bad teacher, minmax: 1</title></path>
+<path d="M269.8,328.0 V113.8 Q269.8,109.8 273.8,109.8 H289.8 Q293.8,109.8 293.8,113.8 V328.0 Z" fill="var(--s8)"><title>bad teacher, range: 1</title></path>
+<path d="M441.0,328.0 V113.8 Q441.0,109.8 445.0,109.8 H461.0 Q465.0,109.8 465.0,113.8 V328.0 Z" fill="var(--s8)"><title>bad teacher, compare: 1</title></path>
+<path d="M612.2,328.0 V328.0 Q612.2,328.0 612.2,328.0 H636.2 Q636.2,328.0 636.2,328.0 V328.0 Z" fill="var(--s8)"><title>bad teacher, zero: 0</title></path>
+<path d="M783.4,328.0 V113.8 Q783.4,109.8 787.4,109.8 H803.4 Q807.4,109.8 807.4,113.8 V328.0 Z" fill="var(--s8)"><title>bad teacher, init: 1</title></path>
+<path d="M124.6,328.0 V126.9 Q124.6,122.9 128.6,122.9 H144.6 Q148.6,122.9 148.6,126.9 V328.0 Z" fill="var(--s2)"><title>KL only, minmax: 0.94</title></path>
+<path d="M295.8,328.0 V140.0 Q295.8,136.0 299.8,136.0 H315.8 Q319.8,136.0 319.8,140.0 V328.0 Z" fill="var(--s2)"><title>KL only, range: 0.88</title></path>
+<path d="M467.0,328.0 V284.0 Q467.0,280.0 471.0,280.0 H487.0 Q491.0,280.0 491.0,284.0 V328.0 Z" fill="var(--s2)"><title>KL only, compare: 0.22</title></path>
+<path d="M638.2,328.0 V328.0 Q638.2,328.0 638.2,328.0 H662.2 Q662.2,328.0 662.2,328.0 V328.0 Z" fill="var(--s2)"><title>KL only, zero: 0</title></path>
+<path d="M809.4,328.0 V113.8 Q809.4,109.8 813.4,109.8 H829.4 Q833.4,109.8 833.4,113.8 V328.0 Z" fill="var(--s2)"><title>KL only, init: 1</title></path>
+<path d="M150.6,328.0 V113.8 Q150.6,109.8 154.6,109.8 H170.6 Q174.6,109.8 174.6,113.8 V328.0 Z" fill="var(--s3)"><title>KL + RL, minmax: 1</title></path>
+<path d="M321.8,328.0 V120.4 Q321.8,116.4 325.8,116.4 H341.8 Q345.8,116.4 345.8,120.4 V328.0 Z" fill="var(--s3)"><title>KL + RL, range: 0.97</title></path>
+<path d="M493.0,328.0 V203.3 Q493.0,199.3 497.0,199.3 H513.0 Q517.0,199.3 517.0,203.3 V328.0 Z" fill="var(--s3)"><title>KL + RL, compare: 0.59</title></path>
+<path d="M664.2,328.0 V328.0 Q664.2,328.0 664.2,328.0 H688.2 Q688.2,328.0 688.2,328.0 V328.0 Z" fill="var(--s3)"><title>KL + RL, zero: 0</title></path>
+<path d="M835.4,328.0 V133.5 Q835.4,129.5 839.4,129.5 H855.4 Q859.4,129.5 859.4,133.5 V328.0 Z" fill="var(--s3)"><title>KL + RL, init: 0.91</title></path>
+<path d="M176.6,328.0 V236.0 Q176.6,232.0 180.6,232.0 H196.6 Q200.6,232.0 200.6,236.0 V328.0 Z" fill="var(--s1)"><title>gated + RL, minmax: 0.44</title></path>
+<path d="M347.8,328.0 V148.7 Q347.8,144.7 351.8,144.7 H367.8 Q371.8,144.7 371.8,148.7 V328.0 Z" fill="var(--s1)"><title>gated + RL, range: 0.84</title></path>
+<path d="M519.0,328.0 V113.8 Q519.0,109.8 523.0,109.8 H539.0 Q543.0,109.8 543.0,113.8 V328.0 Z" fill="var(--s1)"><title>gated + RL, compare: 1</title></path>
+<path d="M690.2,328.0 V328.0 Q690.2,328.0 690.2,328.0 H714.2 Q714.2,328.0 714.2,328.0 V328.0 Z" fill="var(--s1)"><title>gated + RL, zero: 0</title></path>
+<path d="M861.4,328.0 V113.8 Q861.4,109.8 865.4,109.8 H881.4 Q885.4,109.8 885.4,113.8 V328.0 Z" fill="var(--s1)"><title>gated + RL, init: 1</title></path>
+<text class="note" x="663.2" y="314.9" text-anchor="middle">zero: 0.00 for all four</text>
+<rect x="66" y="66" width="12" height="12" rx="3" fill="var(--s8)"/>
+<text class="t2" x="88" y="76" font-size="12" text-anchor="start">bad teacher</text>
+<rect x="185" y="66" width="12" height="12" rx="3" fill="var(--s2)"/>
+<text class="t2" x="207" y="76" font-size="12" text-anchor="start">KL only</text>
+<rect x="276" y="66" width="12" height="12" rx="3" fill="var(--s3)"/>
+<text class="t2" x="298" y="76" font-size="12" text-anchor="start">KL + RL</text>
+<rect x="367" y="66" width="12" height="12" rx="3" fill="var(--s1)"/>
+<text class="t2" x="389" y="76" font-size="12" text-anchor="start">gated + RL</text>
+</svg>

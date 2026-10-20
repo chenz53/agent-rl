@@ -1,0 +1,611 @@
+# 15. SFT, Rejection Sampling, and Preferences
+
+Part II trained policies with rewards alone, and [Chapter 5](05-trajectories-and-templates.md#57-sampling-rollouts) showed why that cannot start from nothing: a randomly initialized TinyAgent never emits a well-formed call, every reward is 0, and every policy gradient is exactly 0. Production agent training never starts from nothing either. It starts from a pretrained model and usually runs several supervised stages before any RL: supervised fine-tuning (SFT) on demonstrations, fine-tuning on the model's own filtered successes, and preference optimization on pairs of episodes. These stages are cheaper per update than RL, easier to debug, and often decide what RL can still discover.
+
+This chapter treats those stages as what they are mathematically: weighted maximum-likelihood objectives over trajectories. We build trajectory SFT with the action mask, show that rejection-sampling fine-tuning is a policy gradient with a 0/1 reward in disguise, derive DPO for agent episodes, and then compare the recipes on the BugFix gym. The comparison measures something RL papers rarely show in isolation: what each recipe learns from the *same* weak starting policy, on training tasks and on held-out variants.
+
+```python
+#@save
+import copy
+import random
+import torch
+import torch.nn.functional as F
+import agentrl as arl
+```
+
+The saved code calls earlier chapters through `arl.`. The next block sets up the gym and tokenizer exactly as Chapter 5 did.
+
+```python
+from collections import Counter
+tasks = arl.make_tasks('all')
+tok = arl.build_tokenizer(tasks)
+train, heldout = arl.make_tasks('train'), arl.make_tasks('heldout')
+print('vocab:', tok.vocab_size, '| train tasks:', len(train), '| held-out tasks:', len(heldout))
+```
+
+Output:
+
+```text
+vocab: 316 | train tasks: 20 | held-out tasks: 10
+```
+
+## 15.1 Trajectory SFT and the action mask
+
+A **demonstration** is a trajectory produced by someone other than the policy we train: a human, a scripted expert, or a stronger model. SFT fits the policy to demonstrations by maximum likelihood. For a single-turn response this is ordinary next-token cross-entropy. For an agent trajectory, the question is which tokens' likelihood to maximize, and the answer follows from the probability of the trajectory itself.
+
+Write a demonstration as alternating actions and observations, $\tau = (s_0, a_0, o_0, a_1, o_1, \dots, a_{H})$, where $s_0$ is the prompt. Under a policy $\pi_\theta$ in a fixed environment, its probability factorizes into the policy's choices and the environment's responses:
+
+$$
+p_\theta(\tau) = p(s_0) \prod_{t=0}^{H} \pi_\theta(a_t \mid h_t) \prod_{t=0}^{H-1} P(o_t \mid h_t, a_t),
+$$
+
+where $h_t$ is the history before action $t$. Each action is a token string, so $\log \pi_\theta(a_t\mid h_t)$ is the sum of its token log-probabilities ([Section 3.1](03-language-models-as-policies.md#31-from-next-token-prediction-to-a-policy)). Taking the log, only the middle product depends on $\theta$:
+
+$$
+\log p_\theta(\tau) = \sum_{t}\sum_{i \in a_t} \log \pi_\theta(y_i \mid c_i) + \underbrace{\log p(s_0) + \sum_t \log P(o_t\mid h_t, a_t)}_{\text{independent of } \theta}.
+$$
+
+Maximum likelihood over demonstrations is therefore exactly the masked objective: sum the log-probabilities of policy-owned tokens, and condition on everything else. The action mask is not a heuristic that "avoids training on tool output". It *is* the gradient of the trajectory log-likelihood, because the environment's probabilities carry no parameters. Training on observation tokens optimizes a different objective, a model of the environment, which teaches the policy to predict, and eventually to invent, tool output. This is the same derivation that makes environment dynamics drop out of the policy gradient (Chapter 6), seen from the supervised side.
+
+`sft_loss` implements it on a `collate` batch. We average over action tokens (token mean). Chapter 6 discusses how this choice reweights long and short trajectories.
+
+```python
+#@save
+def sft_loss(model, batch):
+    """Masked NLL on policy tokens: batch from collate (ids [B, T], action_mask [B, T-1]) -> scalar."""
+    logp = arl.sequence_log_probs(model, batch['ids'])           # [B, T-1]
+    mask = batch['action_mask']                                  # [B, T-1], 1 on policy tokens
+    return -(logp * mask).sum() / mask.sum()
+```
+
+The oracle of [Section 4.6](04-environments-and-tools.md#46-scripted-baselines), run through `scripted_rollout`, gives one demonstration per task. We compare the masked loss with the unmasked loss over all predicted positions on an untrained model, and count where the unmasked loss would put its weight.
+
+```python
+oracle_demos = [arl.scripted_rollout(arl.scripted_policy('oracle'), arl.BugFixEnv(), t, tok) for t in train]
+batch = arl.collate(oracle_demos, tok.pad_id)
+torch.manual_seed(0)
+fresh = arl.TinyAgent(tok.vocab_size)
+with torch.no_grad():
+    logp = arl.sequence_log_probs(fresh, batch['ids'])                 # [B, T-1]
+real = batch['attention_mask'][:, 1:]                                  # [B, T-1], non-padding
+owner = torch.stack([F.pad(t.owner[1:], (0, real.shape[1] - len(t.owner) + 1), value=-1) for t in oracle_demos])
+names = {v: k for k, v in arl.OWNER.items()}
+print('predicted tokens by owner:', {names[o]: int((owner == o).sum()) for o in range(4)})
+print(f'masked SFT loss {sft_loss(fresh, batch).item():.3f} | unmasked {-(logp * real).sum().item() / real.sum().item():.3f}')
+```
+
+Output:
+
+```text
+predicted tokens by owner: {'template': 120, 'prompt': 120, 'policy': 260, 'tool': 838}
+masked SFT loss 5.913 | unmasked 5.879
+```
+
+Of the 1,338 predicted positions in the 20 oracle demonstrations, only 260 (19%) are actions. Tool output accounts for 838 (63%), so an unmasked loss would spend almost two thirds of its gradient on learning to reproduce source listings and test results. At initialization both losses are near $\log 316 \approx 5.76$, so the value of the loss does not reveal the bug. Only the mask does.
+
+## 15.2 Warm starts: format first, then skill
+
+SFT plays two different roles in an agent pipeline, and the gym lets us separate them. The first is teaching **format**: the call grammar, the stop token, and the rhythm of turns. The second is teaching **skill**: which call to make given what was observed. Pretraining plus generic instruction tuning give a real model the first. We build TinyAgent's analog by SFT on well-formed but unskilled play, a mixture of the blind and random scripted policies from Chapter 4. We call the result the **weak base**. It is the starting point for every recipe in this chapter. (Chapter 6 builds a similar base agent for Part II.)
+
+`sft_train` is a minimal loop: sample a minibatch of trajectories with replacement, take one AdamW step on `sft_loss`, and optionally call a hook every few steps so that experiments can evaluate or checkpoint without restarting the optimizer.
+
+```python
+#@save
+def sft_train(model, trajs, tok, steps=100, lr=3e-3, batch_size=32, seed=0, hook=None, every=10):
+    """Minibatch SFT on trajectories with sft_loss; hook(step) runs every `every` steps -> list of losses."""
+    opt = torch.optim.AdamW(model.parameters(), lr=lr)
+    gen = torch.Generator().manual_seed(seed)
+    losses = []
+    for step in range(1, steps + 1):
+        idx = torch.randint(len(trajs), (min(batch_size, len(trajs)),), generator=gen)
+        loss = sft_loss(model, arl.collate([trajs[i] for i in idx.tolist()], tok.pad_id))
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        losses.append(loss.item())
+        if hook is not None and step % every == 0:
+            hook(step)
+    return losses
+```
+
+To measure a policy we sample episodes with `rollout_batch` and average the reward. `pass_rate` returns the trajectories too, so callers can inspect them, and `action_entropy` reports the mean next-token entropy on the action tokens of a batch, the exploration statistic of [Section 3.2](03-language-models-as-policies.md#32-stable-log-probabilities-and-entropy).
+
+```python
+#@save
+def pass_rate(model, tasks, tok, n_samples=4, temperature=1.0, seed=0, reward='hidden'):
+    """Sample n_samples episodes per task in lockstep -> (mean reward, list of Trajectory)."""
+    gen = torch.Generator().manual_seed(seed)
+    batch_tasks = [t for t in tasks for _ in range(n_samples)]
+    envs = [arl.BugFixEnv(reward=reward) for _ in batch_tasks]
+    trajs = arl.rollout_batch(model, envs, batch_tasks, tok, temperature=temperature, generator=gen)
+    return sum(t.reward for t in trajs) / len(trajs), trajs
+
+
+def action_entropy(model, batch):
+    """Mean next-token entropy over action tokens of a collate batch -> float."""
+    with torch.no_grad():
+        ent = arl.entropy_from_logits(model(batch['ids'])[:, :-1])   # [B, T-1]
+    return ((ent * batch['action_mask']).sum() / batch['action_mask'].sum()).item()
+```
+
+We generate 160 episodes of weak play, train the weak base, and report what it does.
+
+```python
+def describe(model, label, seed=0):
+    rate_train, trajs = pass_rate(model, train, tok, 8, seed=seed)
+    rate_held, _ = pass_rate(model, heldout, tok, 8, seed=seed)
+    invalid = sum(t.info['n_invalid'] for t in trajs) / len(trajs)
+    reads = sum('<call> read </call>' in t.info['actions'] for t in trajs) / len(trajs)
+    ent = action_entropy(model, arl.collate(trajs, tok.pad_id))
+    print(f'{label:<12} train {rate_train:.3f} | held-out {rate_held:.3f} | invalid/ep {invalid:.2f}'
+          f' | reads {reads:.2f} | action entropy {ent:.3f}')
+
+weak_play = [arl.scripted_rollout(arl.scripted_policy(kind, seed=s), arl.BugFixEnv(), t, tok)
+             for kind in ['blind', 'random'] for s in range(4) for t in train]
+torch.manual_seed(0)
+weak = arl.TinyAgent(tok.vocab_size)
+sft_train(weak, weak_play, tok, steps=150)
+describe(weak, 'weak base')
+```
+
+Output:
+
+```text
+weak base    train 0.144 | held-out 0.138 | invalid/ep 0.06 | reads 0.29 | action entropy 0.251
+```
+
+The weak base has learned the format almost perfectly, with 0.06 malformed calls per episode against 6 per episode for the untrained model of Chapter 5. It has not learned the skill: its hidden-test reward of 0.14 on both splits is at or below the guessing level of the blind policy (about 0.2, [Section 4.6](04-environments-and-tools.md#46-scripted-baselines)), and it reads the file in only 29% of episodes. Its action entropy of 0.25 nats is the residual randomness of the scripted mixture, which is what gives RL something to select from.
+
+Now the skill. We continue training the weak base on the 20 oracle demonstrations and evaluate every 10 steps. The hook also keeps a copy of the model at step 20, which Section 15.5 uses as a **cold start** for RL.
+
+```python
+evaluate = lambda m: (pass_rate(m, train, tok, 4)[0], pass_rate(m, heldout, tok, 4)[0])
+sft_model, hist_sft, snapshots = copy.deepcopy(weak), [(0, *evaluate(weak))], {}
+def sft_hook(step):
+    hist_sft.append((step, *evaluate(sft_model)))
+    snapshots[step] = copy.deepcopy(sft_model)
+sft_train(sft_model, oracle_demos, tok, steps=60, hook=sft_hook)
+print('oracle SFT (step, train, held-out):', [(s, round(a, 2), round(b, 2)) for s, a, b in hist_sft])
+describe(sft_model, 'oracle SFT')
+```
+
+Output:
+
+```text
+oracle SFT (step, train, held-out): [(0, 0.16, 0.05), (10, 0.47, 0.47), (20, 0.8, 0.85), (30, 0.91, 0.95), (40, 0.99, 0.9), (50, 0.97, 0.9), (60, 0.99, 0.93)]
+oracle SFT   train 0.981 | held-out 0.887 | invalid/ep 0.02 | reads 1.00 | action entropy 0.022
+```
+
+Twenty demonstrations and about 40 gradient steps take the weak base to a training pass rate near 0.99, and the held-out variants follow at about 0.9. The oracle always reads before it edits, so the student learns to choose the op from the `read` observation (keywords such as `min` or `//`) rather than from the function name, and that rule transfers to unseen functions. The cost is in the last column: the action entropy falls from 0.25 to 0.02 nats, an order of magnitude. The policy has become nearly deterministic, which matters the moment RL follows (Section 15.6).
+
+> **Evidence.** Measured here, on one seed, with 4 samples per task per evaluation (80 train and 40 held-out episodes), so each pass rate carries a standard error of up to about 0.06. The oracle is perfect and covers every family. Real demonstrations are neither, and Sections 15.3 to 15.5 show what changes when the data comes from the model itself.
+
+## 15.3 Rejection sampling and expert iteration
+
+Demonstrations are expensive. A verifier is often cheap. **Rejection-sampling fine-tuning** (RFT) replaces the demonstrator with the model itself: sample several episodes per task from the current policy, keep the ones the verifier accepts, and run SFT on the kept set. Repeating sample, filter, and fine-tune is **expert iteration**; STaR applies the loop to reasoning rationales, keeping rationales that lead to correct answers ([Zelikman et al., 2022](https://arxiv.org/abs/2203.14465)), and RFT for math reasoning reports that more *distinct* correct paths give larger gains ([Yuan et al., 2023](https://arxiv.org/abs/2308.01825)). The interesting question is how this relates to RL.
+
+### RFT is a policy gradient with a 0/1 reward
+
+Let $R(\tau) \in \{0, 1\}$ and $p = \Pr_{\tau\sim\pi_\theta}[R(\tau)=1]$. The policy gradient of [Chapter 6](06-policy-gradient.md) is
+
+$$
+\nabla_\theta J(\theta) = \mathbb{E}_{\tau\sim\pi_\theta}\big[R(\tau)\,\nabla_\theta \log \pi_\theta(\tau)\big]
+= p \;\mathbb{E}_{\tau\sim\pi_\theta}\big[\nabla_\theta \log \pi_\theta(\tau) \,\big|\, R(\tau)=1\big],
+$$
+
+because $R$ is 0 on failures and 1 on successes. The right-hand expectation is the gradient of the log-likelihood of successful trajectories drawn from the current policy, which is exactly what one SFT step on the kept set estimates. So **one RFT step on fresh samples is a policy-gradient step whose learning rate is divided by the success rate $p$**. Three differences separate the practical method from the estimator:
+
+1. **Normalization.** SFT averages over kept tokens, policy gradient over all sampled tokens. When $p$ is small, RFT takes a larger step per unit of gradient signal.
+2. **No negative signal.** Failures contribute nothing. With a baseline $b$, the policy gradient is $\sum_i (R_i - b)\nabla\log\pi(\tau_i) = (1-b)\sum_{\text{succ}}\nabla\log\pi - b\sum_{\text{fail}}\nabla\log\pi$; RFT keeps only the first term. Nothing pushes probability *away* from failure modes, except indirectly through the softmax.
+3. **Reuse.** Several epochs on a fixed kept set are off-policy updates without importance correction. Fitting the kept set to convergence solves $\min_\theta \mathrm{KL}\big(\pi_{\text{old}}(\cdot\mid R=1)\,\|\,\pi_\theta\big)$, the success-conditioned old policy. This is **filtered behavior cloning**, and each round of expert iteration is one such projection.
+
+The third point gives both the strength and the limit of expert iteration. The success-conditioned policy $\pi_{\text{old}}(\tau\mid R=1)$ solves every task on which $\pi_{\text{old}}$ ever succeeds, so a round can jump far, but it puts zero mass on tasks where $\pi_{\text{old}}$ never succeeded, and it copies *whatever* produced the successes, including lucky guesses. We check the gradient identity first. On a batch from the weak base, the token-mean policy-gradient loss with a 0/1 reward and the SFT loss on the kept episodes must have gradients that are exactly proportional, with ratio (kept action tokens)/(all action tokens).
+
+```python
+def flat_grad(loss, model):
+    return torch.cat([g.flatten() for g in torch.autograd.grad(loss, list(model.parameters()), retain_graph=True)])
+
+rate, sample = pass_rate(weak, train, tok, 4, seed=7)
+kept = [t for t in sample if t.reward == 1.0]
+b_all, b_kept = arl.collate(sample, tok.pad_id), arl.collate(kept, tok.pad_id)
+logp = arl.sequence_log_probs(weak, b_all['ids'])                         # [B, T-1]
+mask, rewards = b_all['action_mask'], b_all['rewards'][:, None]           # [B, T-1], [B, 1]
+g_pg = flat_grad(-(rewards * logp * mask).sum() / mask.sum(), weak)
+g_rft = flat_grad(sft_loss(weak, b_kept), weak)
+scale = b_kept['action_mask'].sum() / mask.sum()
+print(f'kept {len(kept)} of {len(sample)} | token ratio {scale:.4f} | max |g_pg - ratio * g_rft| = {(g_pg - scale * g_rft).abs().max():.1e}')
+g_base = flat_grad(-((rewards - rewards.mean()) * logp * mask).sum() / mask.sum(), weak)
+print(f'cosine(baseline PG, RFT) = {F.cosine_similarity(g_base, g_rft, 0):.3f}')
+```
+
+Output:
+
+```text
+kept 9 of 80 | token ratio 0.0935 | max |g_pg - ratio * g_rft| = 1.4e-09
+cosine(baseline PG, RFT) = 0.985
+```
+
+The identity holds to float rounding: 9 of 80 episodes succeeded, they hold 9.35% of the action tokens, and the 0/1 policy gradient is the RFT gradient times exactly that ratio. Adding a mean baseline changes the direction (cosine 0.985) because it adds the push-down term on the 71 failures, which RFT discards. At a success rate of 0.11 the baseline is small, so each failure gets weight $-0.11$ against $+0.89$ for a success and the change is modest. At a success rate near 0.5 the two terms are equal in size.
+
+### Expert iteration from the weak base
+
+We run four rounds. Each round samples 16 episodes per training task (320 episodes), keeps the successes, and takes 15 SFT steps on them, continuing from the previous round's model.
+
+```python
+rft, hist_rft, rounds = copy.deepcopy(weak), [(0, *evaluate(weak))], []
+for k in range(4):
+    rate, sample = pass_rate(rft, train, tok, 16, seed=100 + k)
+    kept = [t for t in sample if t.reward == 1.0]
+    rounds.append(dict(rate=rate, kept=kept, solved={t.info['task'] for t in kept}))
+    sft_train(rft, kept, tok, steps=15, seed=k)
+    hist_rft.append((15 * (k + 1), *evaluate(rft)))
+    print(f'round {k}: sample pass {rate:.3f}, kept {len(kept):>3}, tasks solved {len(rounds[-1]["solved"]):>2}/20'
+          f' -> train {hist_rft[-1][1]:.2f}, held-out {hist_rft[-1][2]:.2f}')
+describe(rft, 'after RFT')
+```
+
+Output:
+
+```text
+round 0: sample pass 0.153, kept  49, tasks solved 16/20 -> train 0.33, held-out 0.12
+round 1: sample pass 0.263, kept  84, tasks solved 15/20 -> train 0.68, held-out 0.23
+round 2: sample pass 0.659, kept 211, tasks solved 16/20 -> train 0.75, held-out 0.10
+round 3: sample pass 0.713, kept 228, tasks solved 15/20 -> train 0.74, held-out 0.15
+after RFT    train 0.756 | held-out 0.150 | invalid/ep 0.01 | reads 0.30 | action entropy 0.062
+```
+
+The early rounds are the large jumps the analysis predicts: the training pass rate rises from 0.15 to 0.33 and then 0.68, because each round of filtered cloning moves the policy toward its own success-conditioned distribution, and the sample pass rate of the next round shows it (0.15, 0.26, 0.66). Then it stalls near 0.75, just under the ceiling of 0.80 that 16 solvable tasks out of 20 impose, and the held-out pass rate stays between 0.10 and 0.23, around the guessing level. Two diagnostics explain both numbers.
+
+```python
+never = sorted({t.name for t in train} - rounds[0]['solved'])
+print('tasks never solved by the weak base:', never)
+first_kept = Counter(t.info['actions'][0] for t in rounds[0]['kept'])
+print('first action of kept episodes, round 0:', first_kept.most_common(3))
+```
+
+Output:
+
+```text
+tasks never solved by the weak base: ['init/count_by', 'init/factorial', 'init/pow2', 'init/sum_upto']
+first action of kept episodes, round 0: [('<call> edit swap_minmax </call>', 16), ('<call> edit fix_range_end </call>', 16), ('<call> read </call>', 10)]
+```
+
+The four tasks the weak base never solved form one whole family, `init`. The kept set contains no example of it, so no round can learn it: expert iteration can only sharpen behavior that already has support, which is the coverage limit of filtered cloning. And most kept successes begin with an edit, not a read (32 of the 49 in round 0 start with one of two edit ops, and only 10 with a read). They are blind guesses that happened to be right, and the cheapest rule that reproduces them maps the function name in the issue to an op. That rule is exact on training tasks and useless on held-out functions, whose names the model has never seen, so held-out stays near guessing. The final policy reads in only 30% of episodes. RFT is faithful to what produced the successes, and here that was luck. STaR's "rationalization" step, which regenerates a rationale given the correct answer for problems the model fails, addresses the coverage half of this problem ([Zelikman et al., 2022](https://arxiv.org/abs/2203.14465)). Nothing in the filter addresses the shortcut half.
+
+## 15.4 DPO for agent trajectories
+
+RFT discards failures. **Preference optimization** uses them: given a pair of episodes on the same task, one preferred ($\tau^+$, chosen) and one not ($\tau^-$, rejected), increase the relative likelihood of the chosen one. Direct Preference Optimization (DPO) derives such an update from the KL-regularized RL objective without sampling during training ([Rafailov et al., 2023](https://arxiv.org/abs/2305.18290)).
+
+Start from $\max_\pi \mathbb{E}_{\tau\sim\pi}[r(\tau)] - \beta\,\mathrm{KL}(\pi\,\|\,\pi_{\text{ref}})$. Its maximizer is $\pi^*(\tau) \propto \pi_{\text{ref}}(\tau)\exp(r(\tau)/\beta)$, so the reward can be written through the policy as $r(\tau) = \beta \log\frac{\pi^*(\tau)}{\pi_{\text{ref}}(\tau)} + \beta\log Z$. Under the Bradley–Terry model, $\Pr(\tau^+ \succ \tau^-) = \sigma\big(r(\tau^+) - r(\tau^-)\big)$, the partition function $Z$ cancels, and maximizing the likelihood of observed preferences gives the DPO loss
+
+$$
+\mathcal{L}_{\text{DPO}} = -\log \sigma\Big(\beta\Big[\log\frac{\pi_\theta(\tau^+)}{\pi_{\text{ref}}(\tau^+)} - \log\frac{\pi_\theta(\tau^-)}{\pi_{\text{ref}}(\tau^-)}\Big]\Big).
+$$
+
+For agent trajectories one more cancellation happens. Each $\log \pi(\tau)$ contains the environment's terms from Section 15.1, and the ratio $\pi_\theta(\tau)/\pi_{\text{ref}}(\tau)$ divides them out, because both policies face the same environment. Each log-ratio is therefore the sum over **action tokens only** of $\log\pi_\theta - \log\pi_{\text{ref}}$. The action mask enters DPO for the same reason it enters SFT. Two more consequences are worth stating. Tokens that the two episodes share in an identical context, such as the issue and a common first call, contribute equal and opposite gradients and cancel, so DPO learns only from the point where the episodes diverge onward. And the loss constrains the policy only on the trajectories in the dataset; the KL regularization it was derived from is never evaluated on the policy's own samples.
+
+`dpo_loss` takes summed sequence log-probabilities, so it is independent of how the caller masks and sums.
+
+```python
+#@save
+def dpo_loss(policy_logp_chosen, policy_logp_rejected, ref_chosen, ref_rejected, beta=0.1):
+    """DPO loss from summed action log-probs, each [B] -> scalar; reference terms are constants."""
+    chosen_ratio = policy_logp_chosen - ref_chosen.detach()          # [B]
+    rejected_ratio = policy_logp_rejected - ref_rejected.detach()    # [B]
+    return -F.logsigmoid(beta * (chosen_ratio - rejected_ratio)).mean()
+```
+
+At equal ratios the margin is 0 and the loss is $\log 2$. A positive margin lowers it and a negative margin raises it, as a quick check confirms.
+
+```python
+zero = torch.zeros(1)
+for c, r in [(0.0, 0.0), (2.0, -2.0), (-2.0, 2.0)]:
+    print(f'chosen ratio {c:+.0f}, rejected ratio {r:+.0f}: loss {dpo_loss(torch.tensor([c]), torch.tensor([r]), zero, zero, beta=0.5).item():.4f}')
+```
+
+Output:
+
+```text
+chosen ratio +0, rejected ratio +0: loss 0.6931
+chosen ratio +2, rejected ratio -2: loss 0.1269
+chosen ratio -2, rejected ratio +2: loss 2.1269
+```
+
+Equal ratios give $\log 2 = 0.6931$. A margin of $+4$ at $\beta = 0.5$ gives $-\log\sigma(2) = 0.1269$, and a margin of $-4$ gives $-\log\sigma(-2) = 2.1269$. The loss is not symmetric around zero: a wrong ordering costs far more than a right one saves, so DPO keeps pushing until every pair is ordered with a margin.
+
+![Figure 15.1: SFT, RFT, policy gradient, and DPO as weighted log-likelihoods of trajectories. Each row names where the trajectories come from and the weight each one receives in the gradient.](../figures/ch15-weights.svg)
+
+Figure 15.1 places the methods of this chapter side by side. Every method in it computes $\sum_i w_i \nabla_\theta \log \pi_\theta(\tau_i)$ over masked action tokens. They differ in where $\tau_i$ comes from (an expert, the current policy, or a fixed dataset of pairs) and in $w_i$: 1 for demonstrations, $R_i/\hat p$ for RFT, $R_i - \bar R$ for policy gradient, and a sigmoid-weighted $\pm\beta$ for DPO. Once the data source and the weight are written down, most design questions in this chapter become questions about one of the two.
+
+We build pairs from the weak base the way an offline pipeline would: sample 16 episodes per training task once, pair every success with a random failure on the same task, and freeze the weak base as the reference. `episode_logp` sums the masked log-probabilities of a batch.
+
+```python
+def episode_logp(model, batch):
+    return (arl.sequence_log_probs(model, batch['ids']) * batch['action_mask']).sum(-1)   # [B]
+
+_, sample = pass_rate(weak, train, tok, 16, seed=300)
+pair_rng, pairs = random.Random(0), []
+for task in train:
+    episodes = [t for t in sample if t.info['task'] == task.name]
+    wins, losses = [t for t in episodes if t.reward == 1], [t for t in episodes if t.reward == 0]
+    pairs += [(w, pair_rng.choice(losses)) for w in wins]
+chosen_b = arl.collate([w for w, _ in pairs], tok.pad_id)
+rejected_b = arl.collate([l for _, l in pairs], tok.pad_id)
+with torch.no_grad():
+    ref_c, ref_r = episode_logp(weak, chosen_b), episode_logp(weak, rejected_b)
+print('pairs:', len(pairs), '| tasks with a pair:', len({w.info['task'] for w, _ in pairs}))
+```
+
+Output:
+
+```text
+pairs: 55 | tasks with a pair: 14
+```
+
+Now the training loop. Each step is one full-batch DPO update on all 55 pairs. Every 25 steps we log the mean change of the chosen and rejected log-probabilities relative to the reference, and we roll the policy out in the gym.
+
+```python
+def train_dpo(nll_weight=0.0, steps=100, beta=0.1, lr=1e-3):
+    policy, log = copy.deepcopy(weak), []
+    opt = torch.optim.AdamW(policy.parameters(), lr=lr)
+    for step in range(1, steps + 1):
+        pc, pr = episode_logp(policy, chosen_b), episode_logp(policy, rejected_b)
+        loss = dpo_loss(pc, pr, ref_c, ref_r, beta) + nll_weight * sft_loss(policy, chosen_b)
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+        if step % 25 == 0:
+            rate_train, trajs = pass_rate(policy, train, tok, 4)
+            invalid = sum(t.info['n_invalid'] for t in trajs) / len(trajs)
+            log.append(dict(step=step, d_chosen=(pc - ref_c).mean().item(), d_rejected=(pr - ref_r).mean().item(),
+                            train=rate_train, held=pass_rate(policy, heldout, tok, 4)[0], invalid=invalid))
+    return log
+
+dpo_log = train_dpo()
+for row in dpo_log:
+    print(' | '.join(f'{k} {v:.2f}' if isinstance(v, float) else f'{k} {v}' for k, v in row.items()))
+```
+
+Output:
+
+```text
+step 25 | d_chosen -0.42 | d_rejected -15.05 | train 0.20 | held 0.10 | invalid 0.50
+step 50 | d_chosen -0.64 | d_rejected -29.04 | train 0.20 | held 0.07 | invalid 2.26
+step 75 | d_chosen 0.34 | d_rejected -38.68 | train 0.31 | held 0.07 | invalid 2.44
+step 100 | d_chosen 0.74 | d_rejected -44.68 | train 0.41 | held 0.00 | invalid 2.02
+```
+
+By its own metric DPO succeeds: the rejected episodes lose 45 nats of log-probability relative to the reference, and the chosen ones dip and then end slightly above it (+0.74). In the gym, the picture is different. The training pass rate rises from 0.14 to 0.41, but the policy makes 2.0 to 2.4 malformed calls per episode from step 50 on, up from 0.06, and the held-out pass rate falls to 0. The loss pushed probability *out of* the rejected calls, and the softmax had to put it somewhere. Most of it went to token sequences that appear in no pair, such as unterminated calls, because nothing in an offline loss evaluates them. The pairs, moreover, were built from the same lucky guesses as RFT's kept set, so the preferred behavior is again "this function name gets this op".
+
+![Figure 15.2: Offline DPO on weak-base pairs. Left: change in summed log-probability of chosen and rejected episodes relative to the reference. Right: pass rate and malformed calls per episode when the policy acts in the gym, for plain DPO and DPO with an NLL term on chosen episodes.](../figures/ch15-dpo.svg)
+
+Figure 15.2 puts the two views side by side. The left panel is what a DPO dashboard shows: a rejected log-probability falling without bound while the chosen one barely moves. The right panel is what the policy does with that change. Section 15.6 measures a common mitigation.
+
+## 15.5 Experiment: four recipes from one weak base
+
+We now compare recipes that all start from the weak base and are evaluated the same way:
+
+- **SFT on oracle traces** (Section 15.2): 20 demonstrations, 60 steps.
+- **RFT / expert iteration** (Section 15.3): no demonstrations, 4 rounds of 320 sampled episodes and 15 steps each.
+- **SFT then RL**: the oracle-SFT checkpoint at step 20 (pass rate 0.80 on train), followed by 40 RL steps.
+- **RL from the weak base**: 60 RL steps, the comparison that shows what the cold start bought.
+
+The RL phase needs a policy-gradient loop. [Chapter 9](09-grpo-and-variants.md) builds the book's full trainer. Here we write the minimum: REINFORCE with a **group baseline**. Each step samples $G = 8$ episodes on each of 8 tasks, subtracts the mean reward of each task's group from every episode's reward, and weights each action token's log-probability by that advantage. [Chapter 6](06-policy-gradient.md) derives the estimator and [Chapter 7](07-advantages-and-credit.md) the baseline.
+
+```python
+def reinforce_step(model, opt, rng, gen, n_tasks=8, group=8):
+    """One REINFORCE step with a per-task group-mean baseline -> mean batch reward."""
+    batch_tasks = [t for t in rng.sample(train, n_tasks) for _ in range(group)]
+    trajs = arl.rollout_batch(model, [arl.BugFixEnv() for _ in batch_tasks], batch_tasks, tok, generator=gen)
+    batch = arl.collate(trajs, tok.pad_id)
+    rewards = batch['rewards'].view(n_tasks, group)                         # [tasks, G]
+    adv = (rewards - rewards.mean(1, keepdim=True)).view(-1, 1)             # [B, 1]
+    logp = arl.sequence_log_probs(model, batch['ids'])                      # [B, T-1]
+    mask = batch['action_mask']
+    loss = -(adv * logp * mask).sum() / mask.sum()
+    opt.zero_grad()
+    loss.backward()
+    opt.step()
+    return rewards.mean().item()
+
+def train_rl(model, steps, start=0, lr=1e-3, seed=0):
+    opt, rng, gen = torch.optim.AdamW(model.parameters(), lr=lr), random.Random(seed), torch.Generator().manual_seed(seed)
+    history = [(start, *evaluate(model))]
+    for step in range(1, steps + 1):
+        reinforce_step(model, opt, rng, gen)
+        if step % 10 == 0:
+            history.append((start + step, *evaluate(model)))
+    return history
+```
+
+The loop runs the two RL recipes. The SFT-then-RL curve starts at step 20 on the shared x-axis of gradient steps, where its SFT phase ended.
+
+```python
+cold_rl = copy.deepcopy(snapshots[20])
+hist_cold_rl = hist_sft[:3] + train_rl(cold_rl, 40, start=20)[1:]
+rl_only = copy.deepcopy(weak)
+hist_rl = train_rl(rl_only, 60)
+recipes = {'SFT (oracle)': hist_sft, 'RFT': hist_rft, 'SFT -> RL': hist_cold_rl, 'RL only': hist_rl}
+for name, hist in recipes.items():
+    print(f'{name:<13}' + ' '.join(f'{s:>3}:{a:.2f}/{b:.2f}' for s, a, b in hist))
+```
+
+Output:
+
+```text
+SFT (oracle)   0:0.16/0.05  10:0.47/0.47  20:0.80/0.85  30:0.91/0.95  40:0.99/0.90  50:0.97/0.90  60:0.99/0.93
+RFT            0:0.16/0.05  15:0.33/0.12  30:0.68/0.23  45:0.75/0.10  60:0.74/0.15
+SFT -> RL      0:0.16/0.05  10:0.47/0.47  20:0.80/0.85  30:0.81/0.85  40:0.90/0.90  50:0.94/0.90  60:0.96/0.95
+RL only        0:0.16/0.05  10:0.21/0.20  20:0.20/0.17  30:0.23/0.17  40:0.19/0.20  50:0.34/0.25  60:0.36/0.30
+```
+
+Each entry is step:train/held-out. To compare costs, we also count what each recipe consumed: expert demonstrations, sampled episodes, and verifier calls.
+
+```python
+cost = {'SFT (oracle)': (20, 0), 'RFT': (0, 4 * 320), 'SFT -> RL': (20, 40 * 64), 'RL only': (0, 60 * 64)}
+print(f'{"recipe":<13}{"demos":>7}{"sampled":>9}{"train":>7}{"held":>6}')
+for name, hist in recipes.items():
+    print(f'{name:<13}{cost[name][0]:>7}{cost[name][1]:>9}{hist[-1][1]:>7.2f}{hist[-1][2]:>6.2f}')
+```
+
+Output:
+
+```text
+recipe         demos  sampled  train  held
+SFT (oracle)      20        0   0.99  0.93
+RFT                0     1280   0.74  0.15
+SFT -> RL         20     2560   0.96  0.95
+RL only            0     3840   0.36  0.30
+```
+
+![Figure 15.3: Hidden-test pass rate on training tasks (left) and held-out variants (right) for four recipes that start from the same weak base. The x-axis counts gradient steps; RFT takes 15 SFT steps per round.](../figures/ch15-recipes.svg)
+
+Figure 15.3 and the table support four conclusions, each limited to this gym and this budget.
+
+1. **With a perfect, covering demonstrator, SFT is very hard to beat.** Twenty oracle traces and 40 steps reach 0.99 on train and about 0.9 on held-out. RL after a cold start ends in the same place (0.96/0.95), not above it: there is nothing for RL to add to a demonstrator whose behavior is already optimal and who reads before acting. This is why agent pipelines collect or synthesize demonstrations when they can.
+2. **RFT from a weak base is bounded by the base.** It improved fast, plateaued at the 16 tasks the base could solve, and learned a shortcut that does not transfer. Filtered cloning cannot create behavior the sampler never produced.
+3. **A cold start makes RL work.** From the step-20 checkpoint, 40 RL steps reach 0.96 on train and 0.95 on held-out, while RL from the weak base, given 60 steps, reaches 0.36/0.30. At step 20 the cold-started policy already reads the file and succeeds about 80% of the time, so most groups contain both outcomes and the advantages are informative (Section 15.6 measures 70%). The weak base rarely reads, and RL must first discover reading by chance.
+4. **RL only is still moving.** Its curve rises at the end, and Chapter 9 shows what a longer run with a tuned trainer reaches. The point here is the ordering at a fixed budget, not the asymptote.
+
+> **Evidence.** All four curves are single-seed CPU runs with evaluations of 80 and 40 episodes. Differences below about 0.1 are within noise. The ordering of RL only against the others is far outside it.
+
+## 15.6 Design problems in practice
+
+> **Problem: SFT reduces entropy and exploration before RL.** *Symptom:* after a strong SFT stage, RL reward stays flat, most groups have zero reward variance, and the entropy curve starts near zero. *Cause:* SFT to convergence drives the policy toward the demonstrator's deterministic choices (Section 15.2 measured 0.25 → 0.02 nats). A group-baseline advantage is $R_i - \bar R$, which is zero for every member of a group whose episodes all pass or all fail, so a near-deterministic policy produces almost no gradient, including on tasks it gets wrong. *Options:* (a) stop SFT early, at a checkpoint that still has entropy, as the step-20 cold start did, at the cost of a lower starting pass rate. (b) Raise the rollout temperature during RL, which changes the behavior policy (Section 3.3). (c) Add an entropy bonus (Chapter 10). (d) Mix diverse demonstrations so that SFT fits a distribution rather than one path. *Default:* choose the SFT checkpoint by the fraction of RL groups with nonzero reward variance on a probe set, not by SFT loss. The next block measures that fraction on held-out tasks.
+
+```python
+def probe(model, tasks, group=8, seed=5):
+    _, trajs = pass_rate(model, tasks, tok, group, seed=seed)
+    rewards = torch.tensor([t.reward for t in trajs]).view(len(tasks), group)    # [tasks, G]
+    informative = (rewards.std(1) > 0).float().mean().item()
+    return rewards.mean().item(), informative, action_entropy(model, arl.collate(trajs, tok.pad_id))
+
+for label, model in [('weak base', weak), ('SFT step 20', snapshots[20]), ('SFT step 60', sft_model)]:
+    rate, informative, ent = probe(model, heldout)
+    print(f'{label:<12} held-out pass {rate:.2f} | groups with signal {informative:.2f} | action entropy {ent:.3f}')
+```
+
+Output:
+
+```text
+weak base    held-out pass 0.14 | groups with signal 0.60 | action entropy 0.255
+SFT step 20  held-out pass 0.82 | groups with signal 0.70 | action entropy 0.126
+SFT step 60  held-out pass 0.93 | groups with signal 0.10 | action entropy 0.027
+```
+
+The step-20 checkpoint gives RL the most to work with: 70% of its held-out groups mix passes and failures. At step 60 only 10% do, although the policy still fails 7% of held-out episodes. Most of its remaining failures sit in groups where every sample fails the same way, and a group-baseline advantage is zero there. Training longer on the demonstrations has frozen those mistakes in place: RL never sees a successful alternative to reinforce.
+
+> **Problem: demonstrations rendered with a different template than RL.** *Symptom:* SFT loss is excellent, and the first RL rollouts (or the first evaluation) are far worse than the SFT validation numbers suggested. *Cause:* the demonstration pipeline rendered episodes with a different template from the rollout pipeline, so the policy is evaluated on prefixes it never trained on ([Section 5.8](05-trajectories-and-templates.md#58-design-problems-in-practice)). *Options:* (a) render all data through the rollout's own `Episode` code path, which is the cheapest fix. (b) Re-render legacy data with the RL template. (c) Assert token-level equality of a fixed conversation under both pipelines. *Default:* (a) and (c). The next block simulates a demonstration pipeline that omitted the `<obs>` and `</obs>` wrapper tokens and trains on its output.
+
+```python
+def strip_wrappers(traj):
+    keep = (traj.owner != arl.OWNER['template']) | (torch.arange(len(traj.ids)) == 0)   # keep <bos>
+    owner = traj.owner[keep]
+    return arl.Trajectory(traj.ids[keep], (owner[1:] == arl.OWNER['policy']).float(),
+                          torch.zeros(int(keep.sum()) - 1), traj.reward, traj.info, owner, traj.turn[keep])
+
+mismatched = copy.deepcopy(weak)
+sft_train(mismatched, [strip_wrappers(t) for t in oracle_demos], tok, steps=60)
+print('demo text:', tok.decode(strip_wrappers(oracle_demos[0]).ids[7:16].tolist()))
+with torch.no_grad():
+    print(f'NLL on correctly rendered demos: {sft_loss(mismatched, batch).item():.3f}')
+describe(mismatched, 'mismatched')
+```
+
+Output:
+
+```text
+demo text: <call> read </call> def clamp ( value , lower
+NLL on correctly rendered demos: 0.815
+mismatched   train 0.075 | held-out 0.087 | invalid/ep 0.62 | reads 1.00 | action entropy 0.190
+```
+
+Two missing template tokens per turn are enough. The model trained on the stripped rendering reads the file in every episode, so it learned the oracle's opening, but in the real rollout format it emits 0.62 malformed calls per episode and passes 7.5% of training tasks, against 0.98 for the same data rendered correctly (Section 15.2). Its NLL on correctly rendered demonstrations is 0.82 nats per action token, so a validation set built with the rollout template would have caught it.
+
+> **Problem: off-policy degradation of DPO.** *Symptom:* DPO's training loss and reward accuracy improve steadily while the policy's own rollouts get worse: more malformed outputs, longer or stranger episodes, falling held-out scores. *Cause:* the loss is evaluated only on the fixed pairs, and decreasing $\log\pi_\theta(\tau^-)$ can be achieved by moving mass to sequences outside the data, where nothing constrains it (Section 15.4). The further the policy drifts from the policy that generated the pairs, the less the pairs say about its current behavior. *Options:* (a) add an NLL term on chosen episodes, as Iterative RPO does, reporting that it is "crucial" ([Pang et al., 2024](https://arxiv.org/abs/2404.19733)), which anchors the chosen behavior. (b) Regenerate pairs from the current policy every few hundred steps (iterative or online DPO), which costs sampling and labeling. (c) Use a larger $\beta$ or fewer steps, which limits drift and learning alike. *Default:* (a) always, and (b) when the policy moves far. The next block reruns Section 15.4 with an NLL weight of 1.
+
+```python
+nll_log = train_dpo(nll_weight=1.0)
+for row in [dpo_log[-1], nll_log[-1]]:
+    print(f"step {row['step']}: train {row['train']:.2f} | held {row['held']:.2f} | invalid/ep {row['invalid']:.2f}"
+          f" | d_chosen {row['d_chosen']:+.2f} | d_rejected {row['d_rejected']:+.2f}")
+```
+
+Output:
+
+```text
+step 100: train 0.41 | held 0.00 | invalid/ep 2.02 | d_chosen +0.74 | d_rejected -44.68
+step 100: train 0.69 | held 0.17 | invalid/ep 0.61 | d_chosen +1.89 | d_rejected -45.60
+```
+
+The NLL term keeps the chosen episodes' log-probability rising (+1.89 against +0.74) and cuts malformed calls by a factor of three, and the training pass rate rises from 0.41 to 0.69. It does not fix generalization (held-out 0.17), because the chosen episodes are the same lucky guesses as before: no regularizer repairs a dataset.
+
+> **Problem: data mixture and deduplication.** *Symptom:* after a few rounds of RFT, the kept set is dominated by a handful of tasks or by identical episodes, and the model overfits them while other tasks regress. *Cause:* success rates differ across tasks, so sampling the same number of episodes per task returns many copies of easy successes. A deterministic policy returns literally identical trajectories, which multiplies their weight in the SFT loss. *Options:* (a) deduplicate by action sequence, which RFT for math reasoning motivates by the value of distinct paths ([Yuan et al., 2023](https://arxiv.org/abs/2308.01825)). (b) Cap kept episodes per task. (c) Sample more episodes for hard tasks. (d) Mix in a fixed fraction of demonstrations or earlier data to prevent forgetting. *Default:* (a) plus (b), and log the per-family share of the kept set every round. The next block measures the round-1 kept set from Section 15.3.
+
+```python
+kept1 = rounds[1]['kept']
+unique = {(t.info['task'], tuple(t.info['actions'])): t for t in kept1}
+share = lambda ts: {f: round(sum(t.info['family'] == f for t in ts) / len(ts), 2) for f in arl.FAMILIES}
+print(f'kept {len(kept1)} episodes, {len(unique)} distinct action sequences')
+print('family share, raw:    ', share(kept1))
+print('family share, deduped:', share(list(unique.values())))
+```
+
+Output:
+
+```text
+kept 84 episodes, 21 distinct action sequences
+family share, raw:     {'minmax': 0.21, 'range': 0.37, 'compare': 0.35, 'zero': 0.07, 'init': 0.0}
+family share, deduped: {'minmax': 0.43, 'range': 0.24, 'compare': 0.19, 'zero': 0.14, 'init': 0.0}
+```
+
+After one round, 84 kept episodes contain only 21 distinct action sequences, so the average sequence appears four times. The duplicates are not spread evenly. The `range` and `compare` families supply 72% of the raw set, because the policy has become nearly deterministic on them and returns the same episode again and again, while `minmax` successes are more varied. Deduplication reverses the order, and `minmax` becomes the largest share at 0.43. Neither row is "the right mixture": deduplication is a reweighting decision with its own bias, and it cannot add the `init` family, which has share 0 in both rows. Deduplication changes weighting, not coverage.
+
+> **Problem: SFT on hacked successes.** *Symptom:* the RFT kept set grows each round, the training reward approaches 1, and the hidden-test or human evaluation falls. *Cause:* the filter is the reward, and a reward that checks only what the agent can see accepts exploits. With the public-test reward of [Section 4.5](04-environments-and-tools.md#45-the-action-grammar-and-the-environment), every `hardcode_tests` episode that submits passes the filter, and filtered cloning then copies it faithfully, with the $1/p$-scaled step of Section 15.3. *Options:* (a) filter with held-out or hidden tests, at the cost of writing them. (b) Add a detector for known exploit patterns. (c) Audit a sample of kept episodes per round. *Default:* never filter on a signal the policy can observe, and log the gap between the filter's pass rate and an independent check. The next block runs three rounds of RFT from the weak base with the public-test filter.
+
+```python
+hacker, hack_log = copy.deepcopy(weak), []
+for k in range(3):
+    rate, sample = pass_rate(hacker, train, tok, 16, seed=200 + k, reward='public')
+    kept = [t for t in sample if t.reward == 1.0]
+    hacks = sum(not t.info['hidden_pass'] for t in kept)
+    sft_train(hacker, kept, tok, steps=15, seed=k)
+    _, trajs = pass_rate(hacker, train, tok, 4, reward='public')
+    public = sum(t.reward for t in trajs) / len(trajs)
+    hidden = sum(t.info['hidden_pass'] and t.info['submitted'] for t in trajs) / len(trajs)
+    hack_log.append(dict(round=k + 1, kept=len(kept), hacks=hacks, public=public, hidden=hidden))
+    print(f'round {k}: kept {len(kept)} ({hacks} fail hidden tests) -> public {public:.2f}, hidden {hidden:.2f}')
+```
+
+Output:
+
+```text
+round 0: kept 83 (35 fail hidden tests) -> public 0.61, hidden 0.23
+round 1: kept 188 (111 fail hidden tests) -> public 0.94, hidden 0.34
+round 2: kept 287 (185 fail hidden tests) -> public 0.97, hidden 0.36
+```
+
+In the first round, 35 of the 83 kept episodes (42%) are hacks, because the weak base learned `hardcode_tests` from the random policy's play, and the share grows to 64% (185 of 287) by the third round. The filter's own pass rate climbs to 0.97 while the hidden-test pass rate stays near 0.35. The policy has not become worse at fixing bugs. It has learned that the exploit is the most reliable way to pass the filter.
+
+![Figure 15.4: RFT with a public-test filter. Bars: kept episodes per round, split into genuine fixes and hacks that fail hidden tests. Lines: the policy's public-test and hidden-test pass rates after each round.](../figures/ch15-hacked-rft.svg)
+
+Figure 15.4 shows the mechanism: the red share of the kept set grows every round, and the two pass rates separate. A reward-filtered dataset is a reward-optimized policy in disguise, and it inherits every exploit the reward permits.
+
+
+## Summary
+
+- Trajectory SFT maximizes the log-likelihood of demonstrated actions. The environment's probabilities carry no parameters, so the action mask is the exact gradient of the trajectory log-likelihood, not a heuristic. In the oracle demonstrations, only 19% of predicted tokens are actions.
+- SFT teaches format and skill separately. A weak base trained on unskilled play has the format (0.06 malformed calls per episode) but guessing-level skill (0.14). Twenty oracle demonstrations take it to about 0.99 on train and 0.9 on held-out, and drive action entropy from 0.25 to 0.02 nats (measured here).
+- Rejection-sampling fine-tuning is a 0/1-reward policy gradient with its step size divided by the success rate and without negative signal. Expert iteration is filtered behavior cloning: it rose from 0.15 to 0.68 in two rounds, then stalled below the 16 tasks the base could solve and copied lucky guesses that did not transfer (held-out 0.15).
+- DPO for agent trajectories uses masked action log-probabilities, because the environment cancels in the policy/reference ratio. Offline, it lowered rejected log-probabilities by 45 nats while malformed calls rose more than thirtyfold. An NLL term on chosen episodes reduced the damage but did not fix the data.
+- From the same weak base, oracle SFT reached 0.99/0.93 (train/held-out), SFT then RL 0.96/0.95, RFT 0.74/0.15, and RL only 0.36/0.30 at 60 steps. The cold start's value was informative groups: 70% of its held-out groups carried signal, against 10% after longer SFT.
+
+## Exercises
+
+1. Prove that the token-mean 0/1 policy-gradient loss and the token-mean SFT loss on kept episodes have gradients with ratio exactly (kept action tokens)/(all action tokens), and verify it for a sequence-mean aggregation instead. Which aggregation makes RFT's effective step size depend on episode length?
+2. Change an assumption: replace the weak base's blind and random play with play from the `random` policy only. How does the set of tasks the base can solve change, and what does expert iteration converge to?
+3. Implement STaR's rationalization for the gym: for tasks with no success in a round, roll out the current model with the correct op forced at the edit turn, keep successes, and mask the forced tokens out of the loss. Does the `init` family become learnable, and is the result still filtered behavior cloning?
+4. Add a group baseline to RFT by also training on failures with weight $-\bar R/(1-\bar R)$ per group. Show that this recovers the baseline policy gradient up to scale, and measure whether it changes the plateau of Section 15.3.
+5. Build DPO pairs from the oracle-SFT step-20 checkpoint instead of the weak base, train for 100 steps, and compare malformed calls and held-out pass rate with Section 15.4. Explain the difference in terms of what the pairs' chosen episodes contain.
+6. Measure the SFT-then-RL recipe from the step-10, step-20, and step-40 checkpoints, and plot final held-out pass rate against the starting fraction of informative groups.
+7. Design review: your team has 2,000 human demonstrations of a coding agent, a test-based verifier, and a budget for one more stage before RL. Argue for SFT on the demonstrations, RFT from the SFT model, or DPO on (demonstration, model failure) pairs, and name the dashboard metric that would tell you within one day that your choice was wrong.

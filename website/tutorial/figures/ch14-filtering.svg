@@ -1,0 +1,85 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" width="1000" height="400" role="img" aria-label="Pass-rate filtering: similar held-out pass rate for fewer rollouts">
+<style>
+svg{--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--neutral:#f0efec;--panel:#f4f3ef;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--s6:#008300;--s7:#6250d6;--s8:#e34948;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme: dark){svg{--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--neutral:#383835;--panel:#232322;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--s7:#9085e9;--s8:#e66767}}
+.bg{fill:var(--surface)} .t{fill:var(--ink)} .t2{fill:var(--ink2)} .m{fill:var(--muted)}
+.title{font-size:15px;font-weight:600;fill:var(--ink)} .sub{font-size:12px;fill:var(--ink2)}
+.lab{font-size:12px;fill:var(--ink2)} .tick{font-size:11px;fill:var(--muted);font-variant-numeric:tabular-nums}
+.grid{stroke:var(--grid);stroke-width:1} .axis{stroke:var(--axis);stroke-width:1}
+.box{fill:var(--panel);stroke:var(--axis);stroke-width:1} .edge{stroke:var(--ink2);stroke-width:1.5;fill:none}
+.ring{stroke:var(--surface);stroke-width:2} .note{font-size:11px;fill:var(--ink2)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--ink2)"/></marker></defs>
+<rect class="bg" width="1000" height="400" rx="8"/>
+<text class="title" x="20" y="30">Pass-rate filtering: similar held-out pass rate for fewer rollouts</text>
+<text class="sub" x="20" y="48">TinyAgent, default GRPO, 60 steps, 4 seeds per arm. Tiny-scale mechanism demonstration.</text>
+<line class="grid" x1="64" x2="440.0" y1="348.0" y2="348.0"/>
+<text class="tick" x="58" y="352.0" text-anchor="end">0</text>
+<line class="grid" x1="64" x2="440.0" y1="284.1" y2="284.1"/>
+<text class="tick" x="58" y="288.1" text-anchor="end">1,000</text>
+<line class="grid" x1="64" x2="440.0" y1="220.1" y2="220.1"/>
+<text class="tick" x="58" y="224.1" text-anchor="end">2,000</text>
+<line class="grid" x1="64" x2="440.0" y1="156.2" y2="156.2"/>
+<text class="tick" x="58" y="160.2" text-anchor="end">3,000</text>
+<line class="grid" x1="64" x2="440.0" y1="92.3" y2="92.3"/>
+<text class="tick" x="58" y="96.3" text-anchor="end">4,000</text>
+<line class="axis" x1="64" x2="440.0" y1="348.0" y2="348.0"/>
+<line class="axis" x1="185.1" x2="185.1" y1="348" y2="352"/>
+<text class="tick" x="185.1" y="364" text-anchor="middle">20</text>
+<line class="axis" x1="312.5" x2="312.5" y1="348" y2="352"/>
+<text class="tick" x="312.5" y="364" text-anchor="middle">40</text>
+<line class="axis" x1="440.0" x2="440.0" y1="348" y2="352"/>
+<text class="tick" x="440.0" y="364" text-anchor="middle">60</text>
+<text class="lab" x="252.0" y="382" text-anchor="middle">step</text>
+<text class="lab" x="20" y="218.0" text-anchor="middle" transform="rotate(-90 20 218.0)">cumulative episodes sampled</text>
+<clipPath id="clip137755227499856"><rect x="64" y="86" width="376.0" height="264"/></clipPath>
+<polygon points="64.0,343.9 70.4,339.8 76.7,335.7 83.1,331.6 89.5,327.5 95.9,323.4 102.2,319.4 108.6,315.3 115.0,311.2 121.4,307.1 127.7,303.0 134.1,298.9 140.5,294.8 146.8,290.7 153.2,286.6 159.6,282.5 166.0,278.4 172.3,274.3 178.7,270.3 185.1,266.2 191.5,262.1 197.8,258.0 204.2,253.9 210.6,249.8 216.9,245.7 223.3,241.6 229.7,237.5 236.1,233.4 242.4,229.3 248.8,225.2 255.2,221.2 261.6,217.1 267.9,213.0 274.3,208.9 280.7,204.8 287.1,200.7 293.4,196.6 299.8,192.5 306.2,188.4 312.5,184.3 318.9,180.2 325.3,176.1 331.7,172.0 338.0,168.0 344.4,163.9 350.8,159.8 357.2,155.7 363.5,151.6 369.9,147.5 376.3,143.4 382.6,139.3 389.0,135.2 395.4,131.1 401.8,127.0 408.1,122.9 414.5,118.9 420.9,114.8 427.3,110.7 433.6,106.6 440.0,102.5 440.0,102.5 433.6,106.6 427.3,110.7 420.9,114.8 414.5,118.9 408.1,122.9 401.8,127.0 395.4,131.1 389.0,135.2 382.6,139.3 376.3,143.4 369.9,147.5 363.5,151.6 357.2,155.7 350.8,159.8 344.4,163.9 338.0,168.0 331.7,172.0 325.3,176.1 318.9,180.2 312.5,184.3 306.2,188.4 299.8,192.5 293.4,196.6 287.1,200.7 280.7,204.8 274.3,208.9 267.9,213.0 261.6,217.1 255.2,221.2 248.8,225.2 242.4,229.3 236.1,233.4 229.7,237.5 223.3,241.6 216.9,245.7 210.6,249.8 204.2,253.9 197.8,258.0 191.5,262.1 185.1,266.2 178.7,270.3 172.3,274.3 166.0,278.4 159.6,282.5 153.2,286.6 146.8,290.7 140.5,294.8 134.1,298.9 127.7,303.0 121.4,307.1 115.0,311.2 108.6,315.3 102.2,319.4 95.9,323.4 89.5,327.5 83.1,331.6 76.7,335.7 70.4,339.8 64.0,343.9" fill="var(--s1)" fill-opacity="0.12" stroke="none" clip-path="url(#clip137755227499856)"/>
+<polyline points="64.0,343.9 70.4,339.8 76.7,335.7 83.1,331.6 89.5,327.5 95.9,323.4 102.2,319.4 108.6,315.3 115.0,311.2 121.4,307.1 127.7,303.0 134.1,298.9 140.5,294.8 146.8,290.7 153.2,286.6 159.6,282.5 166.0,278.4 172.3,274.3 178.7,270.3 185.1,266.2 191.5,262.1 197.8,258.0 204.2,253.9 210.6,249.8 216.9,245.7 223.3,241.6 229.7,237.5 236.1,233.4 242.4,229.3 248.8,225.2 255.2,221.2 261.6,217.1 267.9,213.0 274.3,208.9 280.7,204.8 287.1,200.7 293.4,196.6 299.8,192.5 306.2,188.4 312.5,184.3 318.9,180.2 325.3,176.1 331.7,172.0 338.0,168.0 344.4,163.9 350.8,159.8 357.2,155.7 363.5,151.6 369.9,147.5 376.3,143.4 382.6,139.3 389.0,135.2 395.4,131.1 401.8,127.0 408.1,122.9 414.5,118.9 420.9,114.8 427.3,110.7 433.6,106.6 440.0,102.5" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip137755227499856)"/>
+<circle class="ring" cx="440.0" cy="102.5" r="4" fill="var(--s1)"><title>all tasks: x=60, y=3.84e+03</title></circle>
+<text class="lab" x="448.0" y="106.5">all tasks</text>
+<polygon points="64.0,343.9 70.4,339.8 76.7,335.7 83.1,331.6 89.5,327.5 95.9,323.4 102.2,319.4 108.6,315.3 115.0,311.2 121.4,307.1 127.7,303.0 134.1,298.9 140.5,294.8 146.8,290.7 153.2,286.6 159.6,282.5 166.0,278.4 172.3,274.3 178.7,270.3 185.1,266.2 191.5,262.1 197.8,258.0 204.2,253.9 210.6,249.8 216.9,245.7 223.3,241.6 229.7,238.0 236.1,234.4 242.4,230.9 248.8,226.8 255.2,222.7 261.6,220.1 267.9,217.1 274.3,215.0 280.7,213.0 287.1,210.9 293.4,208.9 299.8,207.3 306.2,206.3 312.5,205.3 318.9,203.8 325.3,202.7 331.7,202.2 338.0,201.2 344.4,200.2 350.8,199.2 357.2,198.6 363.5,197.6 369.9,196.1 376.3,194.6 382.6,193.0 389.0,191.5 395.4,190.5 401.8,189.4 408.1,188.4 414.5,187.4 420.9,186.4 427.3,185.3 433.6,184.3 440.0,183.3 440.0,214.5 433.6,216.0 427.3,217.1 420.9,218.6 414.5,220.6 408.1,222.2 401.8,223.7 395.4,224.7 389.0,225.8 382.6,226.8 376.3,227.3 369.9,227.8 363.5,228.3 357.2,229.3 350.8,230.4 344.4,231.9 338.0,233.4 331.7,234.4 325.3,235.0 318.9,236.0 312.5,237.5 306.2,239.6 299.8,241.1 293.4,242.1 287.1,243.7 280.7,245.2 274.3,246.2 267.9,247.2 261.6,247.7 255.2,249.3 248.8,250.3 242.4,251.3 236.1,251.8 229.7,252.4 223.3,253.4 216.9,254.4 210.6,255.9 204.2,258.0 197.8,261.0 191.5,263.6 185.1,266.7 178.7,270.8 172.3,274.9 166.0,278.9 159.6,283.0 153.2,287.1 146.8,291.2 140.5,295.3 134.1,299.4 127.7,303.5 121.4,307.6 115.0,311.2 108.6,315.3 102.2,319.4 95.9,323.4 89.5,327.5 83.1,331.6 76.7,335.7 70.4,339.8 64.0,343.9" fill="var(--s2)" fill-opacity="0.12" stroke="none" clip-path="url(#clip137755227499856)"/>
+<polyline points="64.0,343.9 70.4,339.8 76.7,335.7 83.1,331.6 89.5,327.5 95.9,323.4 102.2,319.4 108.6,315.3 115.0,311.2 121.4,307.2 127.7,303.1 134.1,299.0 140.5,294.9 146.8,290.8 153.2,286.7 159.6,282.7 166.0,278.6 172.3,274.5 178.7,270.4 185.1,266.4 191.5,263.0 197.8,259.9 204.2,256.8 210.6,253.9 216.9,250.9 223.3,248.5 229.7,246.7 236.1,244.9 242.4,243.1 248.8,241.4 255.2,239.6 261.6,238.0 267.9,236.6 274.3,235.2 280.7,233.8 287.1,232.1 293.4,230.7 299.8,229.7 306.2,228.7 312.5,227.4 318.9,226.0 325.3,224.6 331.7,223.8 338.0,222.8 344.4,221.5 350.8,220.4 357.2,219.4 363.5,218.3 369.9,217.4 376.3,216.3 382.6,215.1 389.0,213.9 395.4,212.6 401.8,211.4 408.1,210.3 414.5,209.1 420.9,207.9 427.3,206.7 433.6,205.6 440.0,204.4" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip137755227499856)"/>
+<circle class="ring" cx="440.0" cy="204.4" r="4" fill="var(--s2)"><title>filter (0, 1): x=60, y=2.25e+03</title></circle>
+<text class="lab" x="448.0" y="208.4">filter (0, 1)</text>
+<line class="grid" x1="564.0" x2="940.0" y1="348.0" y2="348.0"/>
+<text class="tick" x="558.0" y="352.0" text-anchor="end">0</text>
+<line class="grid" x1="564.0" x2="940.0" y1="296.0" y2="296.0"/>
+<text class="tick" x="558.0" y="300.0" text-anchor="end">0.2</text>
+<line class="grid" x1="564.0" x2="940.0" y1="244.0" y2="244.0"/>
+<text class="tick" x="558.0" y="248.0" text-anchor="end">0.4</text>
+<line class="grid" x1="564.0" x2="940.0" y1="192.0" y2="192.0"/>
+<text class="tick" x="558.0" y="196.0" text-anchor="end">0.6</text>
+<line class="grid" x1="564.0" x2="940.0" y1="140.0" y2="140.0"/>
+<text class="tick" x="558.0" y="144.0" text-anchor="end">0.8</text>
+<line class="grid" x1="564.0" x2="940.0" y1="88.0" y2="88.0"/>
+<text class="tick" x="558.0" y="92.0" text-anchor="end">1</text>
+<line class="axis" x1="564.0" x2="940.0" y1="348.0" y2="348.0"/>
+<line class="axis" x1="633.6" x2="633.6" y1="348" y2="352"/>
+<text class="tick" x="633.6" y="364" text-anchor="middle">2,000</text>
+<line class="axis" x1="772.9" x2="772.9" y1="348" y2="352"/>
+<text class="tick" x="772.9" y="364" text-anchor="middle">3,000</text>
+<line class="axis" x1="912.1" x2="912.1" y1="348" y2="352"/>
+<text class="tick" x="912.1" y="364" text-anchor="middle">4,000</text>
+<text class="lab" x="752.0" y="382" text-anchor="middle">episodes sampled in 60 steps</text>
+<text class="lab" x="520.0" y="218.0" text-anchor="middle" transform="rotate(-90 520.0 218.0)">held-out pass rate</text>
+<clipPath id="clip137755229593696"><rect x="564.0" y="86" width="376.0" height="264"/></clipPath>
+<circle class="ring" cx="889.9" cy="151.4" r="6" fill="var(--s1)"><title>all tasks (3840, 0.756)</title></circle>
+<circle class="ring" cx="889.9" cy="135.1" r="6" fill="var(--s1)"><title>all tasks (3840, 0.819)</title></circle>
+<circle class="ring" cx="889.9" cy="127.0" r="6" fill="var(--s1)"><title>all tasks (3840, 0.85)</title></circle>
+<circle class="ring" cx="889.9" cy="144.9" r="6" fill="var(--s1)"><title>all tasks (3840, 0.781)</title></circle>
+<circle class="ring" cx="645.9" cy="157.9" r="6" fill="var(--s2)"><title>filter (0, 1) (2088, 0.731)</title></circle>
+<circle class="ring" cx="659.3" cy="148.1" r="6" fill="var(--s2)"><title>filter (0, 1) (2184, 0.769)</title></circle>
+<circle class="ring" cx="652.6" cy="161.1" r="6" fill="var(--s2)"><title>filter (0, 1) (2136, 0.719)</title></circle>
+<circle class="ring" cx="713.8" cy="138.4" r="6" fill="var(--s2)"><title>filter (0, 1) (2576, 0.806)</title></circle>
+<line class="axis" x1="564.0" x2="940.0" y1="296.0" y2="296.0" stroke-dasharray="4 3"/>
+<text class="note" x="936.0" y="291.0" text-anchor="end">blind single guess</text>
+<line x1="64" x2="82" y1="72" y2="72" stroke="var(--s1)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="88" y="76" font-size="12" text-anchor="start">all tasks</text>
+<line x1="169" x2="187" y1="72" y2="72" stroke="var(--s2)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="193" y="76" font-size="12" text-anchor="start">filter (0, 1)</text>
+<circle cx="573.0" cy="72" r="4" fill="var(--s1)"/>
+<text class="t2" x="588.0" y="76" font-size="12" text-anchor="start">all tasks</text>
+<circle cx="678.0" cy="72" r="4" fill="var(--s2)"/>
+<text class="t2" x="693.0" y="76" font-size="12" text-anchor="start">filter (0, 1)</text>
+</svg>

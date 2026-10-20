@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 440" width="1000" height="440" role="img" aria-label="Intervals for checkpoints and seeds (held-out pass@1)">
+<style>
+svg{--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--neutral:#f0efec;--panel:#f4f3ef;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--s6:#008300;--s7:#6250d6;--s8:#e34948;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme: dark){svg{--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--neutral:#383835;--panel:#232322;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--s7:#9085e9;--s8:#e66767}}
+.bg{fill:var(--surface)} .t{fill:var(--ink)} .t2{fill:var(--ink2)} .m{fill:var(--muted)}
+.title{font-size:15px;font-weight:600;fill:var(--ink)} .sub{font-size:12px;fill:var(--ink2)}
+.lab{font-size:12px;fill:var(--ink2)} .tick{font-size:11px;fill:var(--muted);font-variant-numeric:tabular-nums}
+.grid{stroke:var(--grid);stroke-width:1} .axis{stroke:var(--axis);stroke-width:1}
+.box{fill:var(--panel);stroke:var(--axis);stroke-width:1} .edge{stroke:var(--ink2);stroke-width:1.5;fill:none}
+.ring{stroke:var(--surface);stroke-width:2} .note{font-size:11px;fill:var(--ink2)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--ink2)"/></marker></defs>
+<rect class="bg" width="1000" height="440" rx="8"/>
+<text class="title" x="20" y="30">Intervals for checkpoints and seeds (held-out pass@1)</text>
+<text class="sub" x="20" y="48">Left: one run, 5 validation and 5 test tasks, 32 episodes each, task-bootstrap 95% intervals. Right: 4 seeds at step 30, naive vs task-level interval.</text>
+<text class="lab" x="64" y="96" font-weight="600">checkpoints of seed 0</text>
+<line class="grid" x1="64" x2="540.0" y1="388.0" y2="388.0"/>
+<text class="tick" x="58" y="392.0" text-anchor="end">0</text>
+<line class="grid" x1="64" x2="540.0" y1="320.9" y2="320.9"/>
+<text class="tick" x="58" y="324.9" text-anchor="end">0.25</text>
+<line class="grid" x1="64" x2="540.0" y1="253.7" y2="253.7"/>
+<text class="tick" x="58" y="257.7" text-anchor="end">0.5</text>
+<line class="grid" x1="64" x2="540.0" y1="186.6" y2="186.6"/>
+<text class="tick" x="58" y="190.6" text-anchor="end">0.75</text>
+<line class="grid" x1="64" x2="540.0" y1="119.4" y2="119.4"/>
+<text class="tick" x="58" y="123.4" text-anchor="end">1</text>
+<line class="axis" x1="64" x2="540.0" y1="388.0" y2="388.0"/>
+<line class="axis" x1="93.8" x2="93.8" y1="388" y2="392"/>
+<text class="tick" x="93.8" y="404" text-anchor="middle">10</text>
+<line class="axis" x1="153.2" x2="153.2" y1="388" y2="392"/>
+<text class="tick" x="153.2" y="404" text-anchor="middle">20</text>
+<line class="axis" x1="212.8" x2="212.8" y1="388" y2="392"/>
+<text class="tick" x="212.8" y="404" text-anchor="middle">30</text>
+<line class="axis" x1="272.2" x2="272.2" y1="388" y2="392"/>
+<text class="tick" x="272.2" y="404" text-anchor="middle">40</text>
+<line class="axis" x1="331.8" x2="331.8" y1="388" y2="392"/>
+<text class="tick" x="331.8" y="404" text-anchor="middle">50</text>
+<line class="axis" x1="391.2" x2="391.2" y1="388" y2="392"/>
+<text class="tick" x="391.2" y="404" text-anchor="middle">60</text>
+<line class="axis" x1="450.8" x2="450.8" y1="388" y2="392"/>
+<text class="tick" x="450.8" y="404" text-anchor="middle">70</text>
+<line class="axis" x1="510.2" x2="510.2" y1="388" y2="392"/>
+<text class="tick" x="510.2" y="404" text-anchor="middle">80</text>
+<text class="lab" x="302.0" y="422" text-anchor="middle">checkpoint (training step)</text>
+<text class="lab" x="20" y="247.0" text-anchor="middle" transform="rotate(-90 20 247.0)">pass@1</text>
+<clipPath id="clip127359482951968"><rect x="64" y="104" width="476.0" height="286"/></clipPath>
+<polyline points="86.6,320.9 86.6,218.5" fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359482951968)"/>
+<circle class="ring" cx="86.6" cy="267.1" r="5" fill="var(--s3)"><title>validation 0.450 [0.250, 0.631]</title></circle>
+<polyline points="146.1,226.9 146.1,146.3" fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359482951968)"/>
+<circle class="ring" cx="146.1" cy="181.5" r="5" fill="var(--s3)"><title> 0.769 [0.600, 0.900]</title></circle>
+<polyline points="205.6,220.2 205.6,139.6" fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359482951968)"/>
+<circle class="ring" cx="205.6" cy="178.2" r="5" fill="var(--s3)"><title> 0.781 [0.625, 0.925]</title></circle>
+<polyline points="265.1,242.0 265.1,129.5" fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359482951968)"/>
+<circle class="ring" cx="265.1" cy="174.8" r="5" fill="var(--s3)"><title> 0.794 [0.544, 0.963]</title></circle>
+<polyline points="324.6,275.5 324.6,129.5" fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359482951968)"/>
+<circle class="ring" cx="324.6" cy="183.2" r="5" fill="var(--s3)"><title> 0.762 [0.419, 0.963]</title></circle>
+<polyline points="384.1,159.7 384.1,124.5" fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359482951968)"/>
+<circle class="ring" cx="384.1" cy="139.6" r="5" fill="var(--s3)"><title> 0.925 [0.850, 0.981]</title></circle>
+<polyline points="443.6,223.5 443.6,122.8" fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359482951968)"/>
+<circle class="ring" cx="443.6" cy="159.7" r="5" fill="var(--s3)"><title> 0.850 [0.613, 0.988]</title></circle>
+<polyline points="503.1,136.2 503.1,119.4" fill="none" stroke="var(--s3)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359482951968)"/>
+<circle class="ring" cx="503.1" cy="126.1" r="5" fill="var(--s3)"><title> 0.975 [0.938, 1.000]</title></circle>
+<polyline points="100.9,334.3 100.9,221.8" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359482951968)"/>
+<circle class="ring" cx="100.9" cy="282.2" r="5" fill="var(--s2)"><title>test 0.394 [0.200, 0.619]</title></circle>
+<polyline points="160.4,302.4 160.4,148.0" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359482951968)"/>
+<circle class="ring" cx="160.4" cy="225.2" r="5" fill="var(--s2)"><title> 0.606 [0.319, 0.894]</title></circle>
+<polyline points="219.9,292.4 219.9,136.2" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359482951968)"/>
+<circle class="ring" cx="219.9" cy="206.7" r="5" fill="var(--s2)"><title> 0.675 [0.356, 0.938]</title></circle>
+<polyline points="279.4,285.6 279.4,127.8" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359482951968)"/>
+<circle class="ring" cx="279.4" cy="188.2" r="5" fill="var(--s2)"><title> 0.744 [0.381, 0.969]</title></circle>
+<polyline points="338.9,290.6 338.9,129.5" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359482951968)"/>
+<circle class="ring" cx="338.9" cy="188.2" r="5" fill="var(--s2)"><title> 0.744 [0.362, 0.963]</title></circle>
+<polyline points="398.4,295.7 398.4,129.5" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359482951968)"/>
+<circle class="ring" cx="398.4" cy="195.0" r="5" fill="var(--s2)"><title> 0.719 [0.344, 0.963]</title></circle>
+<polyline points="457.9,287.3 457.9,122.8" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359482951968)"/>
+<circle class="ring" cx="457.9" cy="183.2" r="5" fill="var(--s2)"><title> 0.762 [0.375, 0.988]</title></circle>
+<polyline points="517.4,290.6 517.4,121.1" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359482951968)"/>
+<circle class="ring" cx="517.4" cy="188.2" r="5" fill="var(--s2)"><title> 0.744 [0.362, 0.994]</title></circle>
+<text class="lab" x="664.0" y="96" font-weight="600">step 30, four seeds</text>
+<line class="grid" x1="664.0" x2="940.0" y1="388.0" y2="388.0"/>
+<text class="tick" x="658.0" y="392.0" text-anchor="end">0</text>
+<line class="grid" x1="664.0" x2="940.0" y1="320.9" y2="320.9"/>
+<text class="tick" x="658.0" y="324.9" text-anchor="end">0.25</text>
+<line class="grid" x1="664.0" x2="940.0" y1="253.7" y2="253.7"/>
+<text class="tick" x="658.0" y="257.7" text-anchor="end">0.5</text>
+<line class="grid" x1="664.0" x2="940.0" y1="186.6" y2="186.6"/>
+<text class="tick" x="658.0" y="190.6" text-anchor="end">0.75</text>
+<line class="grid" x1="664.0" x2="940.0" y1="119.4" y2="119.4"/>
+<text class="tick" x="658.0" y="123.4" text-anchor="end">1</text>
+<line class="axis" x1="664.0" x2="940.0" y1="388.0" y2="388.0"/>
+<line class="axis" x1="703.4" x2="703.4" y1="388" y2="392"/>
+<text class="tick" x="703.4" y="404" text-anchor="middle">0</text>
+<line class="axis" x1="769.1" x2="769.1" y1="388" y2="392"/>
+<text class="tick" x="769.1" y="404" text-anchor="middle">1</text>
+<line class="axis" x1="834.9" x2="834.9" y1="388" y2="392"/>
+<text class="tick" x="834.9" y="404" text-anchor="middle">2</text>
+<line class="axis" x1="900.6" x2="900.6" y1="388" y2="392"/>
+<text class="tick" x="900.6" y="404" text-anchor="middle">3</text>
+<text class="lab" x="802.0" y="422" text-anchor="middle">training seed</text>
+<text class="lab" x="620.0" y="247.0" text-anchor="middle" transform="rotate(-90 620.0 247.0)">pass@1</text>
+<clipPath id="clip127359426336224"><rect x="664.0" y="104" width="276.0" height="286"/></clipPath>
+<polyline points="693.6,205.0 693.6,179.8" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359426336224)"/>
+<circle class="ring" cx="693.6" cy="192.4" r="5" fill="var(--s2)"><title>resample episodes 0.728 [0.681, 0.775]</title></circle>
+<polyline points="713.3,236.1 713.3,155.5" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359426336224)"/>
+<circle class="ring" cx="713.3" cy="192.4" r="5" fill="var(--s1)"><title>resample tasks 0.728 [0.565, 0.866]</title></circle>
+<polyline points="759.3,215.1 759.3,189.1" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359426336224)"/>
+<circle class="ring" cx="759.3" cy="201.7" r="5" fill="var(--s2)"><title> 0.694 [0.644, 0.741]</title></circle>
+<polyline points="779.0,262.1 779.0,149.6" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359426336224)"/>
+<circle class="ring" cx="779.0" cy="201.7" r="5" fill="var(--s1)"><title> 0.694 [0.469, 0.887]</title></circle>
+<polyline points="825.0,215.1 825.0,187.4" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359426336224)"/>
+<circle class="ring" cx="825.0" cy="200.8" r="5" fill="var(--s2)"><title> 0.697 [0.644, 0.747]</title></circle>
+<polyline points="844.7,262.1 844.7,154.7" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359426336224)"/>
+<circle class="ring" cx="844.7" cy="200.8" r="5" fill="var(--s1)"><title> 0.697 [0.469, 0.869]</title></circle>
+<polyline points="890.7,204.2 890.7,179.0" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359426336224)"/>
+<circle class="ring" cx="890.7" cy="191.6" r="5" fill="var(--s2)"><title> 0.731 [0.684, 0.778]</title></circle>
+<polyline points="910.4,255.4 910.4,144.6" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip127359426336224)"/>
+<circle class="ring" cx="910.4" cy="191.6" r="5" fill="var(--s1)"><title> 0.731 [0.494, 0.906]</title></circle>
+<circle cx="73" cy="72" r="4" fill="var(--s3)"/>
+<text class="t2" x="88" y="76" font-size="12" text-anchor="start">validation</text>
+<circle cx="185" cy="72" r="4" fill="var(--s2)"/>
+<text class="t2" x="200" y="76" font-size="12" text-anchor="start">test</text>
+<circle cx="673.0" cy="72" r="4" fill="var(--s2)"/>
+<text class="t2" x="688.0" y="76" font-size="12" text-anchor="start">resample episodes</text>
+<circle cx="834.0" cy="72" r="4" fill="var(--s1)"/>
+<text class="t2" x="849.0" y="76" font-size="12" text-anchor="start">resample tasks</text>
+</svg>

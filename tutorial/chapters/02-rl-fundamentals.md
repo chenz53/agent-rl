@@ -1,0 +1,644 @@
+# 2. Reinforcement Learning Fundamentals
+
+[Chapter 1](01-introduction.md) ran a scripted agent through the `clamp` repair. The agent read, edited, tested, and submitted, and the hidden tests then returned one number. Before we can ask a model to *learn* that behavior, we need a precise language for it. That language must say what the agent controls, what it observes, what is random, what the objective is, and how the quality of a decision is measured when its consequence arrives several turns later.
+
+This chapter supplies that language. It is the standard theory of Markov decision processes, but every object is built in a few lines of torch on a **repair MDP**, a seven-state abstraction of the `clamp` episode. Because the MDP is tiny, we can compute values *exactly* with a linear solve, check them against sampling, find the optimal policy, and differentiate the objective with autograd. None of those exact computations survive the move to a language model, and seeing precisely why they fail explains the design of everything from [Chapter 6](06-policy-gradient.md) onward.
+
+We save two functions for the rest of the book, `discounted_return` and `policy_evaluation`, plus the repair MDP builder and `value_iteration`, which later chapters use as exact references.
+
+## 2.1 Markov Decision Processes
+
+An RL problem has two parts: an **agent** that chooses actions, and an **environment** that responds. The interface between them is a loop. At each step $t$ the environment is in a state $s_t$, the agent chooses an action $a_t$, and the environment returns a reward $r_t$ and a next state $s_{t+1}$. The loop ends when the environment reaches a **terminal** state.
+
+A **Markov decision process** (MDP) formalizes that loop as a tuple $(\mathcal{S}, \mathcal{A}, P, R, \rho_0, \gamma)$:
+
+- $\mathcal{S}$ is the set of states and $\mathcal{A}$ the set of actions.
+- $P(s' \mid s, a)$ is the transition probability of moving to $s'$ after taking $a$ in $s$.
+- $R(s, a)$ is the expected immediate reward for taking $a$ in $s$.
+- $\rho_0$ is the distribution of the initial state.
+- $\gamma \in [0, 1]$ is the discount factor (Section 2.4).
+
+The word *Markov* is a claim about the state: the distribution of $(r_t, s_{t+1})$ depends on the history only through $(s_t, a_t)$,
+
+$$
+\Pr(s_{t+1}, r_t \mid s_0, a_0, \dots, s_t, a_t) = \Pr(s_{t+1}, r_t \mid s_t, a_t).
+$$
+
+That property is what makes a state a *state*. Everything in this chapter depends on it, and Section 2.7 and the design problems return to the cases where it fails.
+
+### The repair MDP
+
+We abstract the `clamp` episode into seven states. The agent starts with the file `unread`. Reading moves it to `read`. Editing produces either `edited_ok` or `edited_bad`, and the probability of a correct edit depends on whether the agent is informed: an edit made after reading the file, or after seeing a failing test, succeeds with probability 0.8; any other edit is a guess that succeeds with probability 0.3. Testing an edited file moves it to `passed` or `failed`. Submitting ends the episode in `done` and pays reward 1 if the file is correct, 0 otherwise. All numbers are invented for teaching; they are not measured on any model.
+
+```python
+#@save
+REPAIR_STATES = ['unread', 'read', 'edited_ok', 'edited_bad', 'passed', 'failed', 'done']
+REPAIR_ACTIONS = ['read', 'edit', 'test', 'submit']
+
+
+def repair_transitions(state):
+    """Return {action: [(next_state, prob), ...]} for one non-terminal repair state."""
+    p_fix = 0.8 if state in ('read', 'failed') else 0.3  # informed edit vs a guess
+    after_read = 'read' if state == 'unread' else state
+    after_test = {'edited_ok': 'passed', 'edited_bad': 'failed'}.get(state, state)
+    return {'read': [(after_read, 1.0)],
+            'edit': [('edited_ok', p_fix), ('edited_bad', 1 - p_fix)],
+            'test': [(after_test, 1.0)],
+            'submit': [('done', 1.0)]}
+```
+
+`repair_transitions` is the specification in words: reading is only useful once, testing only changes an edited file, and every edit is a fresh random draw. Reading or testing in other states leaves the state unchanged, which is a self-loop that costs a step.
+
+A tabular MDP stores $P$ as a tensor of shape `[S, A, S]` and $R$ as `[S, A]`. We fill both from the specification. The terminal state `done` gets an all-zero row in $P$: an episode that reaches it simply stops. This makes $P$ *substochastic* (rows sum to 1 for live states and 0 for the terminal state), a convention that lets us solve for values without special-casing termination.
+
+```python
+#@save
+import torch
+
+
+def make_repair_mdp(step_cost=0.0):
+    """Build the repair MDP: P [S, A, S] (terminal rows all zero) and R [S, A], float64."""
+    S, A = len(REPAIR_STATES), len(REPAIR_ACTIONS)
+    P = torch.zeros(S, A, S, dtype=torch.float64)
+    R = torch.zeros(S, A, dtype=torch.float64)
+    for s, state in enumerate(REPAIR_STATES[:-1]):          # 'done' stays all zero
+        for a, outcomes in enumerate(repair_transitions(state).values()):
+            for next_state, prob in outcomes:
+                P[s, a, REPAIR_STATES.index(next_state)] += prob
+            R[s, a] -= step_cost                             # every live action costs
+        if state in ('edited_ok', 'passed'):
+            R[s, REPAIR_ACTIONS.index('submit')] += 1.0      # correct submission
+    return P, R
+```
+
+The reward lives on the `submit` action from a correct state. An optional `step_cost` charges every action; Section 2.9 uses it. Let us check the tensors.
+
+```python
+P, R = make_repair_mdp()
+print('P shape:', tuple(P.shape), ' R shape:', tuple(R.shape))
+print('row sums (live states):', P.sum(-1)[:-1].unique().tolist())
+print('row sums (done):', P.sum(-1)[-1].tolist())
+s, a = REPAIR_STATES.index('read'), REPAIR_ACTIONS.index('edit')
+print('P[read, edit] =', {k: round(v, 3) for k, v in zip(REPAIR_STATES, P[s, a].tolist())})
+print('R[:, submit] =', R[:, 3].tolist())
+```
+
+Output:
+
+```text
+P shape: (7, 4, 7)  R shape: (7, 4)
+row sums (live states): [1.0]
+row sums (done): [0.0, 0.0, 0.0, 0.0]
+P[read, edit] = {'unread': 0.0, 'read': 0.0, 'edited_ok': 0.8, 'edited_bad': 0.2, 'passed': 0.0, 'failed': 0.0, 'done': 0.0}
+R[:, submit] = [0.0, 0.0, 1.0, 0.0, 1.0, 0.0, 0.0]
+```
+
+Every live state-action row is a probability distribution, the terminal row is zero, and the only positive rewards are in the `submit` column for `edited_ok` and `passed`. Figure 2.1 draws the same tensors.
+
+![Figure 2.1: The repair MDP. Solids are states, tracks are transitions labeled with action and probability, and the two accented (blue) submissions pay reward 1.](../figures/repair-mdp.svg)
+
+Follow the two edit branches. From `unread` a guess lands in `edited_ok` only 30% of the time. From `read` or `failed` the informed edit succeeds 80% of the time. The `test` arrows do not change whether the file is correct; they only move the agent to a state that *reports* it. Under full observability, as here, a report of something the agent already knows has no value. Section 2.7 shows that it acquires value as soon as the agent cannot see the state.
+
+## 2.2 Policies, Trajectories, and Returns
+
+A **policy** $\pi(a \mid s)$ is a distribution over actions for each state. In a tabular MDP it is a tensor `policy: [S, A]` whose rows sum to 1. A deterministic policy puts all of its mass on one action per state. For a language model, the policy is the model itself: $\pi_\theta(a \mid s)$ is the probability that the model emits action $a$ given its context.
+
+A policy and an MDP together define a distribution over **trajectories** $\tau = (s_0, a_0, r_0, s_1, a_1, r_1, \dots, s_T)$:
+
+$$
+p_\pi(\tau) = \rho_0(s_0) \prod_{t=0}^{T-1} \pi(a_t \mid s_t)\, P(s_{t+1} \mid s_t, a_t).
+$$
+
+The factorization separates what the agent controls ($\pi$) from what it does not ($\rho_0$ and $P$). That separation is the reason policy gradients work without a model of the environment: [Chapter 6](06-policy-gradient.md) differentiates $\log p_\pi(\tau)$ and the $P$ factors vanish because they do not depend on $\theta$.
+
+The **return** of a trajectory is the discounted sum of its rewards,
+
+$$
+G_0 = \sum_{t=0}^{T-1} \gamma^{t} r_t,
+$$
+
+and the **objective** of RL is the expected return from the initial distribution, $J(\pi) = \mathbb{E}_{\tau \sim p_\pi}[G_0]$. For a parameterized policy we write $J(\theta)$. Computing a return is the first function we save.
+
+```python
+#@save
+def discounted_return(rewards, gamma):
+    """Discounted sum over the last axis: rewards [..., T] -> returns [...]."""
+    T = rewards.shape[-1]
+    discounts = gamma ** torch.arange(T, dtype=rewards.dtype)   # [T]
+    return (rewards * discounts).sum(-1)
+```
+
+```python
+rewards = torch.tensor([[0., 0., 0., 1.],      # success on the 4th action
+                        [0., 0., 1., 0.]])     # success on the 3rd (then padding)
+print('gamma=1.0 :', discounted_return(rewards, 1.0).tolist())
+print('gamma=0.9 :', [round(v, 4) for v in discounted_return(rewards, 0.9).tolist()])
+```
+
+Output:
+
+```text
+gamma=1.0 : [1.0, 1.0]
+gamma=0.9 : [0.729, 0.81]
+```
+
+With $\gamma = 1$ both trajectories are worth 1: the return only records *whether* the repair succeeded. With $\gamma = 0.9$ the faster success is worth $0.9^2 = 0.81$ and the slower one $0.9^3 = 0.729$, so discounting also encodes *when*. The padding zero after the second trajectory's reward changes nothing, which is why padded reward tensors are safe here as long as padding is zero.
+
+To estimate $J$ we can sample. The function below rolls out one episode by drawing an action from `policy[s]` and a next state from `P[s, a]` until the terminal row is reached.
+
+```python
+def sample_episode(P, R, policy, generator, start=0, max_steps=100):
+    """Roll out one episode; return (states, actions, rewards) as Python lists."""
+    states, actions, rewards = [start], [], []
+    s = start
+    for _ in range(max_steps):
+        if P[s].sum() == 0:                     # terminal: no outgoing mass
+            break
+        a = torch.multinomial(policy[s], 1, generator=generator).item()
+        actions.append(a)
+        rewards.append(R[s, a].item())
+        s = torch.multinomial(P[s, a], 1, generator=generator).item()
+        states.append(s)
+    return states, actions, rewards
+```
+
+We need concrete policies. `deterministic_policy` turns a list of one action name per state into a one-hot `[S, A]` tensor. We define three policies that we will use throughout the chapter:
+
+- **careful** reads, edits, tests, submits after a pass, and re-edits after a failure;
+- **read-edit-submit** reads, edits once, and submits without testing;
+- **blind** edits immediately and submits.
+
+```python
+def deterministic_policy(action_names):
+    """One action name per state (length S) -> one-hot policy [S, A]."""
+    policy = torch.zeros(len(REPAIR_STATES), len(REPAIR_ACTIONS), dtype=torch.float64)
+    for s, name in enumerate(action_names):
+        policy[s, REPAIR_ACTIONS.index(name)] = 1.0
+    return policy
+
+# one action per state: unread, read, edited_ok, edited_bad, passed, failed, done
+careful = deterministic_policy(['read', 'edit', 'test',   'test',   'submit', 'edit', 'submit'])
+read_edit_submit = deterministic_policy(['read', 'edit', 'submit', 'submit', 'submit', 'edit', 'submit'])
+blind = deterministic_policy(['edit', 'edit', 'submit', 'submit', 'submit', 'edit', 'submit'])
+```
+
+Now sample. Each line prints one episode of the careful policy as a sequence of actions with the state they led to.
+
+```python
+gen = torch.Generator().manual_seed(0)
+for _ in range(3):
+    states, actions, rewards = sample_episode(P, R, careful, gen)
+    path = ' -> '.join(f'{REPAIR_ACTIONS[a]}:{REPAIR_STATES[s]}'
+                       for a, s in zip(actions, states[1:]))
+    print(f'return={sum(rewards):.0f}  len={len(actions)}  {path}')
+```
+
+Output:
+
+```text
+return=1  len=4  read:read -> edit:edited_ok -> test:passed -> submit:done
+return=1  len=4  read:read -> edit:edited_ok -> test:passed -> submit:done
+return=1  len=10  read:read -> edit:edited_bad -> test:failed -> edit:edited_bad -> test:failed -> edit:edited_bad -> test:failed -> edit:edited_ok -> test:passed -> submit:done
+```
+
+The careful policy always ends with a successful submission, but the episode length is random: each failed test adds another edit and test. The randomness comes from the environment ($P$), not the policy, which is deterministic. A Monte Carlo estimate of $J$ averages returns over many episodes.
+
+```python
+def mc_value(P, R, policy, gamma, n, seed=0):
+    """Monte Carlo estimate of J = E[G_0] from state 0, with its standard error."""
+    gen = torch.Generator().manual_seed(seed)
+    returns = []
+    for _ in range(n):
+        rewards = torch.tensor(sample_episode(P, R, policy, gen)[2], dtype=torch.float64)
+        returns.append(discounted_return(rewards, gamma))   # scalar tensor
+    returns = torch.stack(returns)                            # [n]
+    return returns.mean().item(), (returns.std() / n ** 0.5).item()
+
+for name, pol in [('careful', careful), ('read-edit-submit', read_edit_submit), ('blind', blind)]:
+    mean, stderr = mc_value(P, R, pol, gamma=0.9, n=4000)
+    print(f'{name:17s} J(gamma=0.9) ~ {mean:.4f} +/- {stderr:.4f}')
+```
+
+Output:
+
+```text
+careful           J(gamma=0.9) ~ 0.6947 +/- 0.0011
+read-edit-submit  J(gamma=0.9) ~ 0.6466 +/- 0.0051
+blind             J(gamma=0.9) ~ 0.2711 +/- 0.0065
+```
+
+These are estimates with standard errors (see [Appendix A.1](A-math.md#a1-monte-carlo-estimates-and-error-bars)). Under $\gamma = 0.9$ the careful policy is ahead of read-edit-submit, but by less than its 20-point advantage in success probability (1.0 versus 0.8) suggests, because its successes arrive later and are discounted more. Next we compute the same numbers exactly.
+
+## 2.3 Value Functions and the Bellman Equations
+
+The return from a single episode is noisy. The **state-value function** averages it out:
+
+$$
+V^\pi(s) = \mathbb{E}_\pi\Big[\sum_{k \ge 0} \gamma^k r_{t+k} \,\Big|\, s_t = s\Big],
+$$
+
+and the **action-value function** conditions on the first action as well:
+
+$$
+Q^\pi(s, a) = \mathbb{E}_\pi\Big[\sum_{k \ge 0} \gamma^k r_{t+k} \,\Big|\, s_t = s, a_t = a\Big].
+$$
+
+Split the return into the first reward and the rest. The rest, from $s_{t+1}$ on, is a return of the same kind, so its conditional expectation is $V^\pi(s_{t+1})$. This gives the **Bellman expectation equations**:
+
+$$
+Q^\pi(s, a) = R(s, a) + \gamma \sum_{s'} P(s' \mid s, a)\, V^\pi(s'), \qquad V^\pi(s) = \sum_a \pi(a \mid s)\, Q^\pi(s, a).
+$$
+
+Substituting the first into the second removes $Q$:
+
+$$
+V^\pi = r_\pi + \gamma P_\pi V^\pi, \qquad r_\pi(s) = \sum_a \pi(a\mid s) R(s,a), \quad P_\pi(s, s') = \sum_a \pi(a\mid s) P(s'\mid s,a).
+$$
+
+This is a linear system in $|\mathcal{S}|$ unknowns, $(I - \gamma P_\pi) V^\pi = r_\pi$. It has a unique solution whenever $I - \gamma P_\pi$ is invertible. That holds for any $\gamma < 1$, because $P_\pi$ is substochastic and its spectral radius is at most 1. For $\gamma = 1$ it holds exactly when the policy reaches the terminal state with probability 1 from every state (a *proper* policy). Solving the system is **exact policy evaluation**, the second function we save.
+
+```python
+#@save
+def policy_evaluation(P, R, policy, gamma):
+    """Exact V^pi by linear solve. P [S, A, S], R [S, A], policy [S, A] -> V [S]."""
+    P_pi = torch.einsum('sa,sat->st', policy, P)       # [S, S] state-to-state under pi
+    r_pi = (policy * R).sum(-1)                         # [S]   expected reward under pi
+    eye = torch.eye(P.shape[0], dtype=P.dtype)
+    return torch.linalg.solve(eye - gamma * P_pi, r_pi)
+```
+
+The two `einsum`/sum lines are the definitions of $P_\pi$ and $r_\pi$; the solve is the Bellman equation. Compare with Monte Carlo.
+
+```python
+for name, pol in [('careful', careful), ('read-edit-submit', read_edit_submit), ('blind', blind)]:
+    V = policy_evaluation(P, R, pol, gamma=0.9)
+    print(f'{name:17s} V(unread) = {V[0].item():.4f}   V = {[round(v, 3) for v in V.tolist()]}')
+```
+
+Output:
+
+```text
+careful           V(unread) = 0.6959   V = [0.696, 0.773, 0.9, 0.696, 1.0, 0.773, 0.0]
+read-edit-submit  V(unread) = 0.6480   V = [0.648, 0.72, 1.0, 0.0, 1.0, 0.72, 0.0]
+blind             V(unread) = 0.2700   V = [0.27, 0.72, 1.0, 0.0, 1.0, 0.72, 0.0]
+```
+
+The exact values of $V(\text{unread})$ agree with the Monte Carlo estimates of Section 2.2 to within about one standard error, as they should. The full vectors show more. Under the careful policy, $V(\text{passed}) = 1$: one step from a guaranteed reward, and that step is not discounted because the reward arrives at $t = 0$ of the remaining episode. $V(\text{done}) = 0$ for every policy, since nothing follows termination.
+
+The action values follow from $V$ in one line, and they are what a policy improvement step compares. The **advantage** $A^\pi(s,a) = Q^\pi(s,a) - V^\pi(s)$ measures how much better action $a$ is than the policy's average behavior in $s$. [Chapter 7](07-advantages-and-credit.md) is entirely about estimating it.
+
+```python
+gamma = 0.9
+V = policy_evaluation(P, R, careful, gamma)
+Q = R + gamma * torch.einsum('sat,t->sa', P, V)          # [S, A]
+A = Q - V[:, None]                                         # [S, A] advantage
+for state in ['unread', 'edited_ok', 'edited_bad']:
+    s = REPAIR_STATES.index(state)
+    print(f'{state:10s} Q =', [f'{q:.3f}' for q in Q[s].tolist()],
+          ' A =', [f'{x:+.3f}' for x in A[s].tolist()])
+residual = (V - (careful * Q).sum(-1)).abs().max().item()
+print(f'Bellman residual max |V - sum_a pi Q| = {residual:.1e}')
+```
+
+Output:
+
+```text
+unread     Q = ['0.696', '0.681', '0.626', '0.000']  A = ['+0.000', '-0.014', '-0.070', '-0.696']
+edited_ok  Q = ['0.810', '0.681', '0.900', '1.000']  A = ['-0.090', '-0.219', '+0.000', '+0.100']
+edited_bad Q = ['0.626', '0.681', '0.696', '0.000']  A = ['-0.070', '-0.014', '+0.000', '-0.696']
+Bellman residual max |V - sum_a pi Q| = 0.0e+00
+```
+
+The columns are `read, edit, test, submit`. The advantage of the action the careful policy takes is exactly 0, by definition. The other entries are informative. In `edited_ok`, submitting has an advantage of $+0.100$: careful's `test` spends a discounted step on a file that is already correct, which costs exactly the factor $1 - 0.9$ of the reward. In `edited_bad`, submitting has an advantage of $-0.696$, because it throws away the whole value of the state. A policy that acts on these numbers would submit from `edited_ok` and keep testing from `edited_bad`, where `test` has the highest action value. That is the policy improvement step of Section 2.5. The final line checks the Bellman equation to machine precision.
+
+> **Pitfall.** `torch.linalg.solve` in float32 can drift visibly for $\gamma$ close to 1, where $I - \gamma P_\pi$ is nearly singular. The repair MDP uses float64 throughout. The same concern appears at scale whenever long-horizon returns or log-probability sums are accumulated in low precision.
+
+## 2.4 Discounting
+
+The discount factor plays two different roles, and conflating them is a common source of confusion.
+
+1. **A modeling choice.** $\gamma < 1$ says that a reward $k$ steps later is worth $\gamma^k$ of the same reward now. A geometric discount is equivalent to an episode that terminates independently with probability $1-\gamma$ at every step, so its *effective horizon* is about $1/(1-\gamma)$ steps.
+2. **A mathematical convenience.** $\gamma < 1$ guarantees that $I - \gamma P_\pi$ is invertible and that returns are bounded even for policies that never terminate.
+
+A coding episode is finite: it ends with `submit` or when a turn budget runs out. Its success is what we care about, and an equivalent fix found in turn 5 rather than turn 3 is not worth less to the user. That argues for $\gamma = 1$ as the model of the task. But discounting changes which policy is preferred. Evaluate the three policies over a range of $\gamma$.
+
+```python
+print('gamma   careful  read-edit-submit  blind')
+for gamma in [1.0, 0.99, 0.95, 0.9, 0.8, 0.6]:
+    values = [policy_evaluation(P, R, pol, gamma)[0].item()
+              for pol in (careful, read_edit_submit, blind)]
+    print(f'{gamma:<6}  ' + '  '.join(f'{v:7.4f}' for v in values))
+```
+
+Output:
+
+```text
+gamma   careful  read-edit-submit  blind
+1.0      1.0000   0.8000   0.3000
+0.99     0.9655   0.7841   0.2970
+0.95     0.8370   0.7220   0.2850
+0.9      0.6959   0.6480   0.2700
+0.8      0.4697   0.5120   0.2400
+0.6      0.1862   0.2880   0.1800
+```
+
+At $\gamma = 1$ the careful policy succeeds with probability 1, read-edit-submit with 0.8, and blind with 0.3; those are success probabilities, because the only reward is 1 at the end. As $\gamma$ falls, every value falls, but careful falls fastest because its successes take more steps. Below roughly $\gamma = 0.85$ read-edit-submit overtakes careful: the discount is short-sighted enough to prefer a 20% chance of failure over the cost of testing. Figure 2.2 shows the crossing, together with the analogous effect of a per-step cost.
+
+![Figure 2.2: Value of the initial state for three fixed policies, as a function of the discount (left, no step cost) and of the step cost (right, gamma = 1).](../figures/repair-values.svg)
+
+Look at the two crossing points. In the left panel, discounting alone makes the untested policy preferable once $\gamma$ is low enough. In the right panel, with $\gamma = 1$, a step cost does the same once it exceeds about 0.13 per action. Both knobs tell the agent that time is expensive, and both can change the *optimal behavior*, not merely the scale of the values. This is the content of the first two design problems in Section 2.9.
+
+## 2.5 Optimal Policies and Why We Will Not Compute Them
+
+Evaluation tells us how good a policy is. **Improvement** makes it better. The **policy improvement theorem** states: if $\pi'$ is greedy with respect to $Q^\pi$, that is, $\pi'(s) = \arg\max_a Q^\pi(s,a)$, then $V^{\pi'}(s) \ge V^\pi(s)$ for every state. The proof is short. Greediness gives $Q^\pi(s, \pi'(s)) \ge V^\pi(s)$; unroll the Bellman equation under $\pi'$ one step at a time and apply the same inequality at every step.
+
+Iterating evaluation and improvement converges to an **optimal policy** $\pi^*$, whose value satisfies the **Bellman optimality equation**:
+
+$$
+V^*(s) = \max_a \Big[R(s,a) + \gamma \sum_{s'} P(s' \mid s,a)\, V^*(s')\Big].
+$$
+
+**Value iteration** applies the right-hand side as an update until it stops changing. For $\gamma < 1$ the update is a contraction in the max-norm, so it converges from any start.
+
+```python
+#@save
+def value_iteration(P, R, gamma, iters=10_000, tol=1e-12):
+    """Optimal values and a greedy policy. P [S, A, S], R [S, A] -> (V* [S], actions [S])."""
+    V = torch.zeros(P.shape[0], dtype=P.dtype)
+    for _ in range(iters):
+        Q = R + gamma * torch.einsum('sat,t->sa', P, V)    # [S, A]
+        V_new = Q.max(-1).values
+        if (V_new - V).abs().max() < tol:
+            return V_new, Q.argmax(-1)
+        V = V_new
+    return V, Q.argmax(-1)
+```
+
+```python
+V_star, best = value_iteration(P, R, gamma=0.9)
+print('V*      :', [round(v, 3) for v in V_star.tolist()])
+print('pi*     :', dict(zip(REPAIR_STATES[:-1], [REPAIR_ACTIONS[a] for a in best[:-1].tolist()])))
+print('careful :', round(policy_evaluation(P, R, careful, 0.9)[0].item(), 4),
+      ' optimal:', round(V_star[0].item(), 4))
+```
+
+Output:
+
+```text
+V*      : [0.773, 0.859, 1.0, 0.773, 1.0, 0.859, 0.0]
+pi*     : {'unread': 'read', 'read': 'edit', 'edited_ok': 'submit', 'edited_bad': 'test', 'passed': 'submit', 'failed': 'edit'}
+careful : 0.6959  optimal: 0.7733
+```
+
+The optimal policy reads, edits, and then does something no fixed policy above did: it submits immediately from `edited_ok` and *tests* from `edited_bad`. Testing a known-bad file is useful because it leads to `failed`, the state from which an informed edit succeeds 80% of the time, rather than a 30% guess from `edited_bad`. And it never tests a correct file, because it can see that the file is correct. The gap between careful and optimal is the cost of testing when the answer is already known.
+
+### Why this does not scale to language models
+
+Value iteration needs a table with one entry per state and a sweep over all actions. For a language model under the token-level casting of Section 2.8, a state is a token prefix and an action is a token. Count them.
+
+```python
+import math
+vocab, horizon = 151_000, 1_000                 # a Qwen3-sized vocabulary, a short episode
+log10_prefixes = horizon * math.log10(vocab)
+print(f'distinct length-{horizon} token prefixes: about 10^{log10_prefixes:.0f}')
+print(f'actions per state (vocabulary):          {vocab:,}')
+```
+
+Output:
+
+```text
+distinct length-1000 token prefixes: about 10^5179
+actions per state (vocabulary):          151,000
+```
+
+No table can index 10 to the five-thousandth power states, and the transition from a prefix to its successor includes an environment response we cannot enumerate. The alternative is to search directly in the space of policies. Parameterize $\pi_\theta$ and climb $J(\theta)$ by gradient ascent. On the repair MDP we can still do this *exactly*, because `policy_evaluation` is differentiable: it is an einsum and a linear solve.
+
+```python
+torch.manual_seed(0)
+P_c, R_c = make_repair_mdp(step_cost=0.05)
+logits = torch.zeros(len(REPAIR_STATES), len(REPAIR_ACTIONS), dtype=torch.float64,
+                     requires_grad=True)                      # theta: [S, A]
+opt = torch.optim.SGD([logits], lr=2.0)
+for step in range(301):
+    J = policy_evaluation(P_c, R_c, torch.softmax(logits, -1), gamma=1.0)[0]
+    if step in (0, 10, 50, 100, 300):
+        print(f'step {step:3d}  J = {J.item():.4f}')
+    opt.zero_grad()
+    (-J).backward()                                           # ascend J
+    opt.step()
+greedy = logits.argmax(-1)[:-1].tolist()
+print('greedy actions:', [REPAIR_ACTIONS[a] for a in greedy])
+print('optimal J     :', round(value_iteration(P_c, R_c, 1.0)[0][0].item(), 4))
+```
+
+Output:
+
+```text
+step   0  J = 0.0154
+step  10  J = 0.4476
+step  50  J = 0.7775
+step 100  J = 0.8032
+step 300  J = 0.8182
+greedy actions: ['read', 'edit', 'submit', 'test', 'submit', 'edit']
+optimal J     : 0.825
+```
+
+The uniform random policy starts with a value near zero (0.0154): with a step cost of 0.05, a random agent pays for many useless actions and often submits an incorrect file. Gradient ascent on the softmax logits climbs to 0.8182 after 300 steps, close to the optimal 0.825, and the greedy actions of the learned policy match value iteration. The remaining gap is the slow final approach of a softmax policy toward a deterministic one: the logits must grow without bound to put all mass on one action. This is the policy gradient method with one luxury removed in the real setting: here $\nabla_\theta J$ is computed exactly by differentiating through the model of the environment. A language model has no such model. [Chapter 6](06-policy-gradient.md) shows how to estimate the same gradient from sampled trajectories alone.
+
+## 2.6 Bandits: The One-Step Case
+
+A **bandit** is an MDP whose episodes last one step. There is no next state, so $Q(a) = R(a)$ and the only question is which action has the highest expected reward. A **contextual bandit** adds a context $x$ drawn at the start: $Q(x, a) = \mathbb{E}[r \mid x, a]$.
+
+Single-turn RLVR is a contextual bandit. The context is the prompt, the action is the *entire* response, and the reward is the verifier's score of that response. The response is generated token by token, but the environment does not react between tokens, so the only stochasticity apart from the policy is in the prompt. Methods such as GRPO treat each prompt as a small bandit problem: sample $G$ responses, observe $G$ rewards, and push probability toward the better ones ([Chapter 9](09-grpo-and-variants.md)).
+
+Bandits isolate the problem that the tabular MDP hid: **exploration**. The value of an action is unknown until it is tried, and a policy that stops trying an action can never learn that it was good. Compare a *greedy* learner, which always picks the arm with the highest estimated mean, with *epsilon-greedy*, which picks a random arm with probability $\epsilon$. We run 2,000 independent copies in parallel.
+
+```python
+def run_bandit(means, steps, eps, runs=2000, seed=0):
+    """Sample-average learner on a Bernoulli bandit; returns (mean reward, P(best arm most pulled))."""
+    gen = torch.Generator().manual_seed(seed)
+    K = means.numel()
+    counts, totals = torch.ones(runs, K), torch.zeros(runs, K)   # one optimistic pull each
+    totals += (torch.rand(runs, K, generator=gen) < means).float()
+    earned = torch.zeros(runs)
+    for _ in range(steps):
+        greedy = (totals / counts).argmax(-1)                         # [runs]
+        explore = torch.rand(runs, generator=gen) < eps
+        arm = torch.where(explore, torch.randint(K, (runs,), generator=gen), greedy)
+        reward = (torch.rand(runs, generator=gen) < means[arm]).float()
+        counts[torch.arange(runs), arm] += 1
+        totals[torch.arange(runs), arm] += reward
+        earned += reward
+    found = (counts.argmax(-1) == means.argmax()).float().mean()
+    return (earned / steps).mean().item(), found.item()
+```
+
+```python
+means = torch.tensor([0.3, 0.5, 0.6])
+for eps in [0.0, 0.05, 0.2]:
+    avg, found = run_bandit(means, steps=500, eps=eps)
+    print(f'eps={eps:<4}  avg reward={avg:.3f}  best arm most pulled in {found:.1%} of runs')
+print('best possible avg reward = 0.600')
+```
+
+Output:
+
+```text
+eps=0.0   avg reward=0.509  best arm most pulled in 51.8% of runs
+eps=0.05  avg reward=0.557  best arm most pulled in 73.8% of runs
+eps=0.2   avg reward=0.554  best arm most pulled in 85.4% of runs
+best possible avg reward = 0.600
+```
+
+The greedy learner locks onto whichever arm looked best after its first noisy pulls and settles on the best arm in only 51.8% of runs, because nothing forces it to revisit an arm whose early pulls returned 0. With $\epsilon = 0.05$ the best arm wins in 73.8% of runs, and the average reward rises from 0.509 to 0.557. With $\epsilon = 0.2$ the best arm wins in 85.4% of runs, but the average reward does not improve further, because one pull in five is still spent at random. That is the exploration–exploitation trade-off.
+
+Language-model RL rarely uses explicit $\epsilon$-greedy, but the same problem is everywhere. The policy explores only through its own sampling distribution. Temperature and the entropy of $\pi_\theta$ ([Chapter 10](10-kl-entropy-regularization.md)) are the exploration knobs. If the model never samples a successful repair for a task, the reward for that task is always 0, and no gradient method can learn from a signal it never observes. This is why the pass rate of the starting policy is the first number to check before an RL run ([Chapter 1, Section 1.8](01-introduction.md#18-design-problems-in-practice)).
+
+## 2.7 Partial Observability
+
+So far the agent saw the state. A real coding agent does not. It sees the issue text, the outputs of its tools, and its own messages. It does not see the hidden tests that will grade it, the parts of the repository it has not read, or whether its edit is correct. A **partially observable MDP** (POMDP) adds an observation function $O(o \mid s)$: the environment's state evolves as in an MDP, but the agent receives only an observation $o_t$.
+
+An agent in a POMDP should condition on its whole history $h_t = (o_0, a_0, o_1, \dots, o_t)$, or on the **belief** $b_t(s) = \Pr(s_t = s \mid h_t)$, which is a sufficient statistic for it. A policy that maps only the current observation to an action can be strictly suboptimal. For a language model, the context window *is* the history: the model conditions on every earlier message and tool output. That is a strength, and it is also why context truncation (Section 2.9) is a modeling change rather than a mere engineering detail.
+
+In the repair MDP, make `edited_ok` and `edited_bad` look identical: after an edit, the agent sees only `edited`. Every other state is observed as itself.
+
+```python
+OBSERVE = {'unread': 'start', 'read': 'read', 'edited_ok': 'edited', 'edited_bad': 'edited',
+           'passed': 'pass', 'failed': 'fail', 'done': 'done'}
+
+def observation_policy(rule):
+    """Map {observation: action} to a state policy [S, A]; aliased states share an action."""
+    return deterministic_policy([rule[OBSERVE[state]] for state in REPAIR_STATES])
+
+base = {'start': 'read', 'read': 'edit', 'pass': 'submit', 'fail': 'edit', 'done': 'submit'}
+P_c, R_c = make_repair_mdp(step_cost=0.05)
+for after_edit in ['submit', 'test']:
+    pol = observation_policy({**base, 'edited': after_edit})
+    print(f'edited -> {after_edit:6s}  V(unread) = {policy_evaluation(P_c, R_c, pol, 1.0)[0]:.4f}')
+print(f'full observability   V*(unread) = {value_iteration(P_c, R_c, 1.0)[0][0]:.4f}')
+```
+
+Output:
+
+```text
+edited -> submit  V(unread) = 0.6500
+edited -> test    V(unread) = 0.7750
+full observability   V*(unread) = 0.8250
+```
+
+With a step cost of 0.05 and $\gamma = 1$, the observation `edited` must lead to the same action in both hidden states. Submitting blindly after an edit is worth 0.65; testing first is worth 0.775. Under partial observability, testing is the better choice, because the test's output reveals the hidden variable. The fully observed optimum, 0.825, is higher still. The difference between 0.825 and 0.775 is the value of the information that the agent cannot observe directly and must pay a step to acquire.
+
+The same structure appears at full scale. Reading files, running tests, and searching the repository are *information-gathering actions*. They earn no reward themselves, and their value exists only because the agent is partially observing its world. An outcome-only reward must teach the agent to take them, which is a credit-assignment problem ([Chapter 7](07-advantages-and-credit.md), [Chapter 12](12-multi-turn-and-long-horizons.md)). The hidden tests are also, by design, never observed. That is what makes them a reward the agent cannot fit directly ([Chapter 11](11-rewards-and-verifiers.md)).
+
+## 2.8 Three Ways to Cast an LLM Agent as an MDP
+
+A language model agent fits the MDP framework in more than one way, and the choice decides what an "action", a "step", and an "advantage" mean in code. Take one scripted episode from Chapter 1, written as segments with their owners.
+
+```python
+episode = [('prompt', 'Fix clamp: clamp(3, 0, 5) returns 0, expected 3.'),
+           ('policy', '<call> read </call>'),
+           ('env',    'def clamp(value, lower, upper): return min(lower, max(value, upper))'),
+           ('policy', '<call> edit swap_minmax </call>'),
+           ('env',    'edited with swap_minmax'),
+           ('policy', '<call> test </call>'),
+           ('env',    'PASS clamp(3, 0, 5) PASS clamp(-2, 0, 5) PASS clamp(9, 0, 5)'),
+           ('policy', '<call> submit </call>')]
+tokens = [(owner, w) for owner, text in episode for w in text.split()]   # word-level "tokens"
+policy_tokens = sum(owner == 'policy' for owner, _ in tokens)
+turns = sum(owner == 'policy' for owner, _ in episode)
+print(f'total tokens={len(tokens)}  policy tokens={policy_tokens}  turns={turns}')
+print(f'{"casting":8s} {"decisions":>9s} {"env-random transitions":>23s} {"rewards":>8s}')
+print(f'{"token":8s} {policy_tokens:9d} {turns - 1:23d} {1:8d}')
+print(f'{"turn":8s} {turns:9d} {turns - 1:23d} {1:8d}')
+print(f'{"episode":8s} {1:9d} {0:23d} {1:8d}')
+```
+
+Output:
+
+```text
+total tokens=45  policy tokens=13  turns=4
+casting  decisions  env-random transitions  rewards
+token           13                       3        1
+turn             4                       3        1
+episode          1                       0        1
+```
+
+The word-level split stands in for a tokenizer here; [Chapter 5](05-trajectories-and-templates.md) uses real token ids. The three castings are:
+
+**Token level.** The state is the full token prefix $c_i$, the action is the next token $y_i$, and $\pi_\theta(y_i \mid c_i)$ is exactly what the model computes. Transitions are deterministic, $c_{i+1} = c_i \oplus y_i$, *except* at tool boundaries, where the environment appends observation tokens the policy did not choose. Those are the only random transitions; in the toy episode there are three of them among the policy's thirteen token decisions. This casting buys an exact match between the MDP's policy and the network's output distribution, so log-probabilities, ratios, and KL penalties are all per-token quantities ([Chapter 3](03-language-models-as-policies.md)). It costs a very long horizon. A single terminal reward must be credited across thousands of decisions, and observation tokens must be excluded from the action set by a mask ([Chapter 5](05-trajectories-and-templates.md)).
+
+**Turn level.** The action is a whole message, here `<call> edit swap_minmax </call>`, and the state is the conversation so far. Its probability is the product of its token probabilities. The horizon shrinks to the number of turns, which is the natural scale for credit assignment: a turn-level advantage says "this tool call was good". It costs an action space that is combinatorially large and a ratio $\pi_\theta(a)/\pi_{\text{old}}(a)$ that is a product of many per-token ratios, so it can explode ([Chapter 8](08-ppo.md)).
+
+**Episode level.** The whole trajectory is one action, and the problem becomes a contextual bandit over trajectories, with the task as context and the final reward as payoff. This is the casting implicit in GRPO-style outcome RL ([Chapter 9](09-grpo-and-variants.md)): every policy token in a trajectory receives the same trajectory-level advantage. It buys simplicity and no value function. It costs all credit assignment *within* the episode: a useless `read` and the decisive `edit` receive the same signal.
+
+These are not competing theories. They are three views of the same sampling process, and practical systems mix them. A common combination computes log-probabilities at the token level, advantages at the episode level, and masks at the turn level.
+
+## 2.9 Design Problems in Practice
+
+> **Problem: choosing the discount for finite coding episodes.** *Symptom:* with $\gamma < 1$, the agent learns to skip verification steps. With $\gamma = 1$, a critic's value estimates diverge or a policy that loops forever has undefined value. *Cause:* $\gamma < 1$ makes later success worth less, which changes the optimal policy (the crossing in Figure 2.2). $\gamma = 1$ leaves $I - P_\pi$ singular for any policy that can avoid termination. *Options:* (a) $\gamma = 1$ with a hard turn or token budget that forces termination; this matches the task's success criterion, but the budget becomes part of the environment and truncated episodes need a rule ([Chapter 12](12-multi-turn-and-long-horizons.md)). (b) $\gamma$ slightly below 1, which keeps values bounded at the cost of a bias toward short episodes. (c) An explicit step cost (next problem), which expresses urgency in reward units rather than through the discount. *Default:* the book uses $\gamma = 1$ plus a turn budget, and treats any urgency as an explicit, measured cost. This is a recommendation, not a universal rule.
+
+The singular case is easy to reproduce. A policy that reads forever never terminates.
+
+```python
+loop_forever = deterministic_policy(['read'] * len(REPAIR_STATES))
+for gamma in [0.99, 1.0]:
+    try:
+        V = policy_evaluation(P, R, loop_forever, gamma)
+        print(f'gamma={gamma}: V(unread) = {V[0].item():.4f}')
+    except torch.linalg.LinAlgError:
+        print(f'gamma={gamma}: torch.linalg.LinAlgError (I - gamma P_pi is singular)')
+```
+
+Output:
+
+```text
+gamma=0.99: V(unread) = 0.0000
+gamma=1.0: torch.linalg.LinAlgError (I - gamma P_pi is singular)
+```
+
+With $\gamma = 0.99$ the never-terminating policy has a well-defined value of 0: it never earns a reward. With $\gamma = 1$ the linear system has no unique solution. A sampled training run does not raise an exception; instead the episode simply never ends, which is why the turn budget is a required part of the environment and not an optional optimization.
+
+> **Problem: terminal rewards versus step costs.** *Symptom:* after a step penalty is added to discourage long episodes, the agent starts submitting without testing, or submits immediately with no edit. *Cause:* a step cost $c$ subtracts $c$ times the expected episode length from every policy's value, and policies of different lengths lose different amounts. Above a threshold, a shorter and less reliable policy becomes optimal; at a higher threshold, *giving up* is optimal. *Options:* (a) terminal reward only, with a budget, which is unbiased with respect to success but gives no pressure toward efficiency. (b) A small step cost, set well below the threshold at which the optimal policy changes. (c) Report cost separately and select among successful policies by cost during evaluation. *Default:* terminal reward only during early training, then a small step cost only if efficiency matters, after checking that it does not move the optimal policy on representative tasks.
+
+```python
+for cost in [0.0, 0.05, 0.1, 0.2, 0.3, 0.5]:
+    P_c, R_c = make_repair_mdp(step_cost=cost)
+    V_star, best = value_iteration(P_c, R_c, gamma=1.0)
+    plan = '/'.join(REPAIR_ACTIONS[a] for a in best[:4].tolist())
+    print(f'step cost {cost:<4}  V*(unread)={V_star[0].item():+.3f}  '
+          f'pi*(unread/read/ok/bad) = {plan}')
+```
+
+Output:
+
+```text
+step cost 0.0   V*(unread)=+1.000  pi*(unread/read/ok/bad) = read/edit/read/edit
+step cost 0.05  V*(unread)=+0.825  pi*(unread/read/ok/bad) = read/edit/submit/test
+step cost 0.1   V*(unread)=+0.650  pi*(unread/read/ok/bad) = read/edit/submit/test
+step cost 0.2   V*(unread)=+0.300  pi*(unread/read/ok/bad) = read/edit/submit/test
+step cost 0.3   V*(unread)=-0.050  pi*(unread/read/ok/bad) = read/edit/submit/test
+step cost 0.5   V*(unread)=-0.500  pi*(unread/read/ok/bad) = submit/edit/submit/submit
+```
+
+Read the columns of the optimal plan. At a cost of 0, many policies tie at value 1 and the printed actions are an arbitrary tie-break among policies that all eventually succeed. From a cost of 0.05 to 0.3, the optimal policy keeps its shape while its value drops by 3.5 times the cost, because the optimal policy takes 3.5 actions on average. At 0.5 the optimal first action becomes `submit` from `unread`: the agent gives up immediately. Giving up costs one action, so it becomes optimal once $1 - 3.5c < -c$, that is, $c > 0.4$, where the expected cost of attempting the repair exceeds its reward of 1. In an LLM run, this is the "agent learns to submit immediately" pathology of [Chapter 12](12-multi-turn-and-long-horizons.md), reproduced in a seven-state table.
+
+> **Problem: is the prefix a Markov state?** *Symptom:* the same visible context leads to different outcomes, value estimates are noisy for no visible reason, or behavior changes after a context-management change. *Cause:* the token prefix is Markov for the *agent's* decision process only when it contains everything that determines future observations and rewards. Three things break this. The environment has hidden state, such as the file system, hidden tests, and random seeds. The context may be truncated or summarized, which discards history the policy could have used. And a state abstraction may merge histories with different futures; in the repair MDP, `edited_bad` reached by a guess and `edited_bad` reached by an informed edit are one state only because we declared that edits do not remember how they were made. *Options:* (a) keep the full history in context, which is expensive at long horizons; (b) use explicit, faithful state summaries, such as having tools report the current diff, so that truncation loses less; (c) treat the problem as a POMDP and accept that values are conditioned on the observable history only. *Default:* treat the agent as a POMDP whose policy conditions on its full context; make tool outputs report relevant state explicitly; and treat any change in truncation or summarization as a change in the policy's input distribution that requires re-evaluation.
+
+## Summary
+
+- An MDP $(\mathcal{S}, \mathcal{A}, P, R, \rho_0, \gamma)$ separates what the agent controls, $\pi$, from what it does not, $P$ and $\rho_0$; the trajectory distribution factorizes into those parts, and this is why policy gradients do not need a model of the environment.
+- Value functions satisfy the linear Bellman expectation equations. For a tabular MDP, `policy_evaluation` solves them exactly, and the result matches Monte Carlo estimates within their error bars.
+- The discount and step costs are not neutral scalings: both can change which policy is optimal. For finite coding episodes, the book uses $\gamma = 1$ with a turn budget.
+- Value iteration finds the optimal policy only when states and actions can be enumerated. Language models cannot, so we optimize a parameterized policy by gradient ascent on $J(\theta)$, which on the repair MDP can still be done exactly by autograd.
+- Single-turn RLVR is a contextual bandit, and exploration is limited by the policy's own sampling distribution. A real coding agent is partially observed, which is what gives information-gathering actions their value.
+- An LLM agent can be cast as a token-level, turn-level, or episode-level decision process. Practical systems take log-probabilities per token, advantages per episode or turn, and masks per turn.
+
+## Exercises
+
+1. Prove that $I - \gamma P_\pi$ is invertible for any $\gamma < 1$ when $P_\pi$ is substochastic. (Hint: bound the spectral radius by the max row sum.) Then construct a two-state example in which it is singular at $\gamma = 1$.
+2. Change the informed edit success probability from 0.8 to 0.5. Recompute the value table of Section 2.4. Does the crossing between careful and read-edit-submit move to a higher or lower $\gamma$? Explain why before running the code.
+3. Modify `make_repair_mdp` so that `test` on `edited_ok` fails with probability 0.1 (a flaky test). How do $V^*$ and the optimal policy change? What does this predict about training against flaky verifiers ([Chapter 11](11-rewards-and-verifiers.md))?
+4. In Section 2.5, replace the exact $J$ with a Monte Carlo estimate from 16 sampled episodes per step, computed by `mc_value`. Why can you no longer call `backward()` on it? What is missing? (This is the question [Chapter 6](06-policy-gradient.md) answers.)
+5. Extend `run_bandit` with an upper-confidence-bound rule: pick $\arg\max_a \hat\mu_a + c\sqrt{\log t / n_a}$. Compare it with $\epsilon$-greedy at $\epsilon = 0.05$.
+6. Augment the repair MDP state so that it remembers whether the agent has read the file, and make edits from any state succeed with probability 0.8 if and only if the file has been read. How many states do you need? Which policy is optimal?
+7. Design review: your team proposes adding a reward of $+0.1$ for every `test` call, because "agents that test more succeed more". Using Section 2.7 and the step-cost results, argue what the agent will learn, and propose a better way to encourage useful testing.

@@ -1,0 +1,589 @@
+# 11. 奖励、验证器与奖励投机
+
+到目前为止，每一章都在同一个奖励上训练：智能体提交且所有隐藏测试都通过时为 1，否则为 0。第 6 章到第 10 章把它当作给定条件，只问如何把它变成梯度。本章追问它从何而来，以及它究竟证明了什么。策略梯度（policy gradient）会提高策略自身样本中一切获得奖励的行为的概率（[第 9.4 节](09-grpo-and-variants.md#94-环境设计中的捷径特征)），因此奖励（reward）就是任务的规格说明。只要奖励与预期行为存在分歧，足够强的优化器就会找到这个分歧。对编程智能体而言，最著名的分歧是针对测试写特例而不是修复代码；BugFix gym 在构建时就把这种漏洞利用（exploit）`hardcode_tests` 放进了它的编辑菜单。
+
+我们先把奖励写成回合（episode）终止记录的函数，并比较编程环境能够提供的几种验证器（verifier）。随后复现奖励投机（reward hacking）：用智能体可以看到的公开测试训练，观察训练奖励不断攀升而隐藏测试通过率并不上升，并解读监控面板（dashboard）上的特征。接下来是三种修复方法，以及它们背后的原则：用于训练的奖励与用于评估的度量不能有共同的弱点。本章后半部分讨论通过学习或评判而非执行得到的奖励、过程奖励（process reward），以及基于势函数的塑形（potential-based shaping）——这是唯一一种可以证明不改变最优策略的奖励塑形（reward shaping）形式。
+
+```python
+#@save
+import random
+import torch
+import torch.nn.functional as F
+import agentrl as arl
+```
+
+```python
+import copy
+torch.set_num_threads(4)                     # the shared check host is loaded; see Chapter 10
+tok = arl.build_tokenizer(arl.make_tasks('all'))
+train_tasks, heldout_tasks = arl.make_tasks('train'), arl.make_tasks('heldout')
+rl_base = arl.make_rl_base(tok)
+```
+
+## 11.1 可验证奖励
+
+**可验证奖励**（verifiable reward）由一个检查结果的程序计算——这里是执行测试——而不是由预测质量的模型给出。它的价值在于信任成本低：只要测试本身正确，且智能体无法查看或修改它们，那么通过就意味着代码在这些输入上行为正确。它有两个局限：一是覆盖面，因为测试套件只检查有限多个输入；二是暴露，因为智能体能观测到的任何东西，它都能学会去满足，而不必真正解决任务。
+
+`BugFixEnv` 在回合结束时调用一次奖励钩子，传入 [第 4.5 节](04-environments-and-tools.md#45-动作语法与环境) 中的终止 `info` 字典。把奖励写成这条记录的函数，就把为最终状态打分的**验证器**与为回合过程打分的**奖励项**（reward terms）分开了。`VERIFIERS` 包含四个验证器：所有隐藏测试（本书默认）、所有公开测试（即 `test` 工具展示的那些），以及两个套件各自的通过比例。`make_reward` 增加了三个可选项：编辑日志中出现已知漏洞利用时的惩罚、每次格式错误调用的格式惩罚，以及每轮的成本，后者由 [第 12 章](12-multi-turn-and-long-horizons.md) 研究。第四个参数设定提交未通过验证器时的奖励。
+
+```python
+#@save
+VERIFIERS = {
+    'hidden': lambda info: float(info['submitted'] and info['hidden_pass']),     # all hidden tests pass
+    'public': lambda info: float(info['submitted'] and info['public_pass']),     # all visible tests pass
+    'partial': lambda info: float(info['submitted']) * info['hidden_frac'],      # share of hidden tests
+    'public_partial': lambda info: float(info['submitted']) * info['public_frac'],
+}
+
+
+def make_reward(kind='hidden', exploit_penalty=0.0, invalid_penalty=0.0, step_penalty=0.0, wrong_submit=0.0):
+    """Reward hook for BugFixEnv: terminal info dict -> float, a verifier score plus penalty terms."""
+    verify = VERIFIERS[kind]
+    def reward(info):
+        score = verify(info)
+        score -= exploit_penalty * ('hardcode_tests' in info['ops'])        # detector of one known exploit
+        score -= invalid_penalty * info['n_invalid']                          # format term: malformed calls
+        score -= step_penalty * info['n_turns']                               # cost per call (Chapter 12)
+        score += wrong_submit * (info['submitted'] and verify(info) < 1)      # e.g. -1 for a failed submission
+        return score
+    return reward
+```
+
+返回的函数可以接入 `RLConfig(reward=...)` 或任何 `BugFixEnv`。我们用四个验证器为 [第 4.6 节](04-environments-and-tools.md#46-脚本化基线) 的脚本策略打分，另外再加一个不碰代码、立即提交的策略。每个策略在 20 个训练任务上各运行 5 个回合。
+
+```python
+policies = {kind: lambda seed, kind=kind: arl.scripted_policy(kind, seed) for kind in ['oracle', 'blind', 'random', 'hacker']}
+policies['submit now'] = lambda seed: (lambda observations: '<call> submit </call>')
+verifiers = {kind: make_reward(kind) for kind in VERIFIERS}
+scripted_infos = {name: [arl.run_episode(make(seed), arl.BugFixEnv(), task)[1]
+                         for task in train_tasks for seed in range(5)] for name, make in policies.items()}
+print(f'{"policy":<11}' + ''.join(f'{kind:>15}' for kind in verifiers))
+for name, infos in scripted_infos.items():
+    print(f'{name:<11}' + ''.join(f'{sum(map(fn, infos)) / len(infos):15.3f}' for fn in verifiers.values()))
+```
+
+Output:
+
+```text
+policy              hidden         public        partial public_partial
+oracle               1.000          1.000          1.000          1.000
+blind                0.200          0.200          0.538          0.487
+random               0.160          0.310          0.385          0.453
+hacker               0.000          1.000          0.397          1.000
+submit now           0.000          0.000          0.397          0.333
+```
+
+按列阅读这张表。隐藏验证器按预期给策略排序：oracle 为 1，盲猜接近 0.2，hacker 为 0。公开验证器给 hacker 的分数与 oracle 相同，都是 1.000，因为 `hardcode_tests` 恰好让可见的测试通过。两个比例型验证器会为从未修复的代码给分：有 bug 的源代码本来就能通过每个套件的一部分，因此不做任何编辑直接提交就能拿到隐藏套件的 0.397；盲猜策略获得的部分得分（0.538）是其二值通过率（0.200）的 2.7 倍。hacker 的隐藏比例得分与什么都不做的得分相同，因为 `hardcode_tests` 只为公开输入添加代码行。随机策略揭示了剩下的区别：它的公开通过率（0.310）是隐藏通过率（0.160）的两倍，因为它的九种调用中有一种就是这个漏洞利用。每个验证器定义了一个不同的任务，只有第一个才是我们想要的任务。
+
+## 11.2 稠密奖励与稀疏奖励
+
+二值奖励是**稀疏**（sparse）的：弱策略的大多数回合恰好得 0，而在组基线（baseline）下，一个所有尝试都失败的组优势（advantage）为零（[第 7.5 节](07-advantages-and-credit.md#75-基于组的无评论家基线)）。**稠密**（dense）奖励给更多回合赋予不同的值，于是更多组携带梯度。部分得分（partial credit）是让基于测试的奖励变稠密的最直接方法。我们从 RL 基座智能体采样一批 8 个组、每组 8 个回合，并用二值隐藏测试验证器和部分隐藏测试验证器为同一批回合打分。
+
+```python
+cfg = arl.RLConfig()
+base_trajs = arl.sample_groups(rl_base, lambda: arl.make_env(cfg), train_tasks, tok, cfg, torch.Generator().manual_seed(0))
+for kind in ['hidden', 'partial']:
+    rewards = torch.tensor([make_reward(kind)(t.info) for t in base_trajs]).view(-1, 8)   # [tasks, G]
+    informative = (rewards.std(-1) > 1e-6).float().mean().item()
+    print(f'{kind:<8} mean reward {rewards.mean():.3f} | distinct reward values {len(rewards.unique()):3d}'
+          f' | groups with nonzero variance {informative:.2f}')
+```
+
+Output:
+
+```text
+hidden   mean reward 0.125 | distinct reward values   2 | groups with nonzero variance 0.75
+partial  mean reward 0.373 | distinct reward values   7 | groups with nonzero variance 0.95
+```
+
+基座智能体的平均二值奖励为 0.125，其 75% 的组至少包含一次成功和一次失败。部分验证器取 7 个不同的值而不是 2 个，并让 95% 的组变得有信息量。这就是支持稠密奖励的理由：批次中更多部分携带梯度。它的平均奖励 0.373 是二值奖励的三倍，而差值几乎全部来自未修复代码本来就能通过的测试的得分，正如第 11.1 节的表格所示。
+
+稠密是有代价的，而 GRPO 的组归一化把这个代价暴露了出来。除以组的标准差会把*任何*非零的离散程度缩放到单位尺度，因此一个所有尝试都失败、只是通过的隐藏测试比例略有不同的组，得到的优势与一个包含真正成功的组一样大。下面的代码在批次中找到这样一个组，并打印它的部分奖励和 GRPO 优势。
+
+```python
+partial = torch.tensor([make_reward('partial')(t.info) for t in base_trajs]).view(-1, 8)
+binary = torch.tensor([t.reward for t in base_trajs]).view(-1, 8)
+g = next(i for i in range(len(partial)) if binary[i].sum() == 0 and partial[i].std() > 0)
+print('partial rewards :', [round(x, 2) for x in partial[g].tolist()])
+print('GRPO advantages :', [round(x, 2) for x in arl.group_advantages(partial[g], 8).tolist()])
+```
+
+Output:
+
+```text
+partial rewards : [0.62, 0.62, 0.62, 0.0, 0.0, 0.62, 0.62, 0.62]
+GRPO advantages : [0.54, 0.54, 0.54, -1.62, -1.62, 0.54, 0.54, 0.54]
+```
+
+这个组中没有任何尝试修复了 bug。六次尝试提交了未修复的代码，得到 0.62，即这份代码能通过的隐藏测试比例；另外两次没有提交，得 0。经过标准差归一化后，六次提交各得 $+0.54$，两次未提交各得 $-1.62$：梯度强力推向提交未修复的代码。在二值验证器下，这个组的优势为零，什么也学不到——对一个没有修复的组来说，这才是正确答案。
+
+在这里，部分得分究竟有助于还是有害于学习？回答这个问题需要训练，因此我们编写本章每个实验都会用到的两个辅助函数：`run` 用给定奖励在默认配置下训练 RL 基座智能体的一个副本 40 步，每 10 步在留出任务（held-out tasks）上评估一次；`held_out` 测量一个策略在留出任务上的隐藏测试通过率。第 11.7 节运行部分得分的对比实验；第 11.4 节的二值隐藏测试运行是整章的参照。
+
+```python
+def run(reward, steps=40, seed=0, log=None):
+    """Train a copy of the RL base agent on train_tasks with this reward -> (policy, history)."""
+    cfg = arl.RLConfig(reward=reward, seed=seed)
+    factory = (lambda: LoggedEnv(arl.make_env(cfg), log)) if log is not None else None
+    policy = copy.deepcopy(rl_base)
+    return policy, arl.train_rl(policy, train_tasks, tok, cfg, steps, eval_tasks=heldout_tasks, eval_every=10,
+                                env_factory=factory)
+
+def held_out(policy, n=16):
+    """Hidden-test pass rate and behavior on held-out tasks, default environment."""
+    return arl.evaluate(policy, heldout_tasks, tok, n, generator=torch.Generator().manual_seed(7), cfg=arl.RLConfig())
+```
+
+`run` 引用了 `LoggedEnv`，第 11.3 节会在第一次带日志调用它之前定义这个类。
+
+## 11.3 复现奖励投机
+
+要观察投机的发生，我们需要训练奖励所看不到的量：隐藏测试通过率，以及漏洞利用被使用的频率。`LoggedEnv` 包装任意环境，把每个结束回合的终止记录连同其奖励追加到一个列表中。`log_by_step` 利用历史记录中的回合计数，把该列表切分为每个训练步一段，并跳过 `train_rl` 通过同一个工厂运行的评估回合。`reward_dashboard` 把一段日志转成工程师对任何编程奖励都应该绘制的三个数字：训练验证器的通过率、一个独立验证器的通过率，以及包含已知漏洞利用的回合比例。
+
+```python
+#@save
+class LoggedEnv:
+    """Wraps an environment and appends each finished episode's terminal info (plus its reward) to log."""
+    def __init__(self, env, log):
+        self.env, self.log = env, log
+
+    def __getattr__(self, name):                        # reset, final_info, max_turns, ... pass through
+        return getattr(self.env, name)
+
+    def step(self, action_text):
+        obs, reward, done, info = self.env.step(action_text)
+        if done:
+            self.log.append(dict(info, reward=reward))
+        return obs, reward, done, info
+
+
+def log_by_step(history, log, n_eval=0):
+    """Split a LoggedEnv log into one list of infos per train_rl step; n_eval = eval episodes per eval step."""
+    out, start = [], 0
+    for record in history:
+        out.append(log[start:start + record['n_episodes']])
+        start += record['n_episodes'] + (n_eval if 'eval_pass' in record else 0)
+    return out
+
+
+def reward_dashboard(infos):
+    """Public-test pass, hidden-test pass, and exploit share of a list of terminal infos."""
+    n = max(len(infos), 1)
+    return dict(public=sum(i['submitted'] and i['public_pass'] for i in infos) / n,
+                hidden=sum(i['submitted'] and i['hidden_pass'] for i in infos) / n,
+                exploit=sum('hardcode_tests' in i['ops'] for i in infos) / n)
+```
+
+投机运行使用本书的默认配置，只有一处改动：奖励是公开测试验证器。其余一切，包括匿名化的单次编辑 gym 和初始策略，都与 [第 9 章](09-grpo-and-variants.md) 相同。我们每 10 步在留出任务上评估一次；无论训练奖励是什么，`eval_pass` 始终是隐藏测试通过率。
+
+```python
+hack_log = []
+hack_policy, hack_history = run(make_reward('public'), log=hack_log)
+hack_steps = log_by_step(hack_history, hack_log, n_eval=4 * len(heldout_tasks))
+for record, infos in zip(hack_history, hack_steps):
+    if record['step'] % 5 == 0 or record['step'] == 39:
+        d = reward_dashboard(infos)
+        held = f"{record['eval_pass']:.3f}" if 'eval_pass' in record else '  -  '
+        print(f"step {record['step']:2d} | train reward {record['reward']:.3f} | public pass {d['public']:.3f} |"
+              f" hidden pass {d['hidden']:.3f} | hardcode share {d['exploit']:.2f} | reads {record['reads']:.2f}"
+              f" | held-out hidden {held}")
+```
+
+Output:
+
+```text
+step  0 | train reward 0.234 | public pass 0.234 | hidden pass 0.172 | hardcode share 0.08 | reads 0.31 | held-out hidden 0.175
+step  5 | train reward 0.562 | public pass 0.562 | hidden pass 0.297 | hardcode share 0.28 | reads 0.47 | held-out hidden   -  
+step 10 | train reward 0.891 | public pass 0.891 | hidden pass 0.125 | hardcode share 0.78 | reads 0.28 | held-out hidden 0.050
+step 15 | train reward 0.938 | public pass 0.938 | hidden pass 0.031 | hardcode share 0.97 | reads 0.14 | held-out hidden   -  
+step 20 | train reward 0.953 | public pass 0.953 | hidden pass 0.000 | hardcode share 0.97 | reads 0.00 | held-out hidden 0.000
+step 25 | train reward 0.969 | public pass 0.969 | hidden pass 0.016 | hardcode share 0.95 | reads 0.02 | held-out hidden   -  
+step 30 | train reward 0.969 | public pass 0.969 | hidden pass 0.000 | hardcode share 0.98 | reads 0.00 | held-out hidden 0.000
+step 35 | train reward 1.000 | public pass 1.000 | hidden pass 0.000 | hardcode share 1.00 | reads 0.00 | held-out hidden   -  
+step 39 | train reward 1.000 | public pass 1.000 | hidden pass 0.000 | hardcode share 1.00 | reads 0.00 | held-out hidden 0.000
+```
+
+10 步之内，漏洞利用出现在批次的 78% 中；到第 15 步达到 97%。训练奖励从 0.234 升到 1.000，公开通过率与它完全一致，因为它*就是*奖励。隐藏通过率起初上升，第 5 步达到 0.297，此时策略在使用漏洞利用的同时仍会阅读并修复一部分 bug；随后，漏洞利用挤掉了其他一切行为，隐藏通过率降到 0。阅读调用从每回合 0.31 次降到 0。在策略从未训练过的留出任务上，隐藏通过率在第 0 步为 0.175，从第 20 步起为 0：这个漏洞利用并不特定于训练任务，因为 `hardcode_tests` 对任何任务都有效。与盲猜得到的 0.20 相比，投机运行的终点*低于*它的起点策略。
+
+![图 11.1：BugFix gym 上的奖励投机。上：在公开测试奖励下，训练批次每步的公开测试通过率（训练奖励）与隐藏测试通过率。下：在公开测试奖励下，以及在加入漏洞利用惩罚的同一奖励下，使用 `hardcode_tests` 的回合比例。RL 基座智能体，默认配置，40 步，每步 64 个回合。](../../figures/ch11-hacking.svg)
+
+图 11.1 是奖励投机在监控面板上的特征，其中每个元素都具有普遍性。训练奖励是一条平滑、上升、低方差的曲线，看上去毫无异样。独立度量（隐藏测试）在短暂上升后朝相反方向变化。一个行为统计量——这里是某个已知漏洞利用的占比——随奖励同步上升。在真实的监控面板上，第二条和第三条曲线只有在有人专门构建时才会存在：隐藏测试通过率需要第二个验证器，漏洞利用占比则需要知道该看什么。
+
+## 11.4 修复被投机的奖励
+
+修复方法有三类，作用于不同的位置。第一类改变**验证器**：用智能体无法观测的测试来评分。第二类加入**检测器**（detector）：识别回合中已知的漏洞利用，并对其施加惩罚或将其丢弃。第三类改变**监控**：在训练中测量一个独立信号，使得即便奖励无法修复，投机也能被发现。我们训练前两类并与投机运行进行比较；隐藏测试运行就是本书的默认配置。
+
+```python
+hidden_log, penalty_log = [], []
+hidden_policy, hidden_history = run(make_reward('hidden'), log=hidden_log)
+penalty_policy, penalty_history = run(make_reward('public', exploit_penalty=1.0), log=penalty_log)
+print(f'{"training reward":<26} | last 10 steps: public  hidden  hardcode | held-out: pass  reads')
+for name, policy, history, log in [('public tests', hack_policy, hack_history, hack_log),
+                                   ('hidden tests', hidden_policy, hidden_history, hidden_log),
+                                   ('public - exploit penalty', penalty_policy, penalty_history, penalty_log)]:
+    late = [i for infos in log_by_step(history, log, 4 * len(heldout_tasks))[30:] for i in infos]
+    d, h = reward_dashboard(late), held_out(policy)
+    print(f"{name:<26} | {d['public']:20.3f} {d['hidden']:7.3f} {d['exploit']:9.2f} |"
+          f" {h['pass_rate']:14.3f} {h['reads']:6.2f}")
+```
+
+Output:
+
+```text
+training reward            | last 10 steps: public  hidden  hardcode | held-out: pass  reads
+public tests               |                0.991   0.002      0.99 |          0.013   0.01
+hidden tests               |                0.711   0.711      0.00 |          0.762   1.02
+public - exploit penalty   |                0.811   0.809      0.00 |          0.719   1.09
+```
+
+用隐藏测试评分消除了漏洞利用的收益，策略基本上不再使用它（最后 640 个回合中的占比为 0.00）；其留出通过率为 0.762，即本书默认配置在 40 步时的结果。惩罚运行保留了可被投机的公开验证器，只要出现 `hardcode_tests` 就减 1，这让漏洞利用的价值变为 0。它同样学会了阅读和修复，留出通过率为 0.719，差距在第 9 章消融实验（ablation）的单随机种子噪声范围之内。它最后 10 步的公开通过率与隐藏通过率几乎相等（0.811 和 0.809），这是监控面板在告诉我们：一旦漏洞利用消失，这个 gym 中的公开测试就与隐藏测试一致。
+
+惩罚之所以在这里有效，是因为这个 gym 恰好只有一种漏洞利用，而检测器能完美识别它。对真实智能体而言，这两点都不成立。检测器是针对已经有人见过的漏洞利用编写的，比如修改测试文件、在断言之前调用 `sys.exit(0)`，或者从测试输入中复制字面量；在惩罚压力下的策略会被推向检测器识别不了的漏洞利用。Baker et al.（2025）报告了在使用学习得到的监控器时出现的这种模式：在智能体编程环境中，把思维链（chain-of-thought，CoT）监控器加入推理模型的训练奖励，“at low optimization levels”（在低优化程度下）有帮助，而随着优化加深，智能体学会了“obfuscated reward hacking, hiding their intent within the CoT”（混淆的奖励投机，把意图隐藏在 CoT 中）。因此，检测器作为输出被记录和审计的*监控器*时最有价值，作为策略可以学会规避的奖励项时价值最低。
+
+### 训练奖励与评估奖励的分离
+
+这三次运行只在一个地方不同：驱动更新的奖励是否与判断训练是否成功的度量有共同的弱点。在投机运行中，训练奖励检查的是公开测试，并且除此之外没有别的检查；我们之所以看到了投机，唯一的原因是 `eval_pass` 使用了隐藏测试。一般而言：
+
+- **训练奖励**必须廉价、足够稠密以便学习，并且尽可能难以被利用。它是被优化的对象，所以每个弱点都会被找到。
+- **评估度量**必须独立于训练奖励：不同的测试、不同的任务，以及对于任何学习得到的或评判型的组件，使用不同的模型。它不被优化，只有在没有任何梯度从它流出时，它才能保持诚实。
+- **训练期间的留出监控**把两者联系起来。每隔几步绘制训练奖励与独立度量之间的差距。训练奖励攀升而差距扩大，就是图 11.1 的特征，在上面的投机运行中，它在最初 10 步内就已可见。
+
+真实编程环境中的测试存在层级。公开测试（智能体可以读取和运行的仓库中的测试）是可观测的。隐藏测试（在回合结束后、在沙箱之外评分）不可观测，但它们被用于奖励，因此会被针对性地优化：策略可能过拟合它们的*风格*，例如学会这些测试套件从不检查哪些行为。第三组测试从不用于任何奖励，只有它才能度量泛化能力。SWE-bench 的 `FAIL_TO_PASS` 和 `PASS_TO_PASS` 测试（[第 4.7 节](04-environments-and-tools.md#47-真实的编码环境与隔离)）在用作训练奖励时就是这种意义上的隐藏测试，而对于在同一评测框架（harness）上训练的模型，基于它们构建的基准就不再是独立的度量。
+
+## 11.5 学习型奖励与评判器
+
+并非每个任务都有测试。没有测试时，奖励来自一个模型：在人类或自动化偏好（preference）上训练的**奖励模型**（reward model），或者用评分细则（rubric）提示的 **LLM 评判器**（LLM judge）。两者都是以可验证性换取覆盖面。
+
+### Bradley–Terry 奖励模型
+
+**Bradley–Terry** 模型假设，对两个结果的偏好是其潜在分数之差的 logistic 函数，$P(\tau_w \succ \tau_l) = \sigma\big(r_\phi(\tau_w) - r_\phi(\tau_l)\big)$。在标注好的成对数据上用最大似然拟合 $r_\phi$，就得到自 Christiano et al.（2017）以来 RLHF 一直使用的奖励模型损失：
+
+$$
+\mathcal{L}(\phi) = -\mathbb{E}_{(\tau_w, \tau_l)}\big[\log \sigma\big(r_\phi(\tau_w) - r_\phi(\tau_l)\big)\big].
+$$
+
+该损失只看差值，因此 $r_\phi$ 只能确定到一个加性常数，其尺度由成对数据的可分程度决定。我们用 RL 基座智能体自己的回合构造成对数据：在每个组内，每个通过的回合都优于每个失败的回合，由隐藏测试充当标注者。奖励模型是 TinyAgent 的一个副本加上一个单元输出头，即 [第 7.4 节](07-advantages-and-credit.md#74-学习评论家) 中的 `make_critic`，在回合的最后一个 token 处读取输出。
+
+```python
+def preference_pairs(trajs, G=8):
+    """(winner, loser) pairs within each group of G: hidden-test passes beat failures."""
+    pairs = []
+    for g in range(0, len(trajs), G):
+        wins = [t for t in trajs[g:g + G] if t.reward > 0]
+        pairs += [(w, l) for w in wins for l in trajs[g:g + G] if l.reward == 0]
+    return pairs
+
+
+def rm_scores(rm, trajs):
+    """Reward-model score of each episode: the head's output at its last token -> [B]."""
+    batch = arl.collate(trajs, tok.pad_id)
+    last = batch['attention_mask'].sum(-1).long() - 1
+    return rm(batch['ids'])[torch.arange(len(trajs)), last, 0]
+```
+
+我们在训练任务上采样 4 批组作为训练对，在留出任务上采样一批作为测试对，然后用 Bradley–Terry 损失拟合 150 步。
+
+```python
+def groups_of(model, tasks, seed):
+    return arl.sample_groups(model, lambda: arl.make_env(cfg), tasks, tok, cfg, torch.Generator().manual_seed(seed))
+
+train_pairs = [p for seed in range(1, 5) for p in preference_pairs(groups_of(rl_base, train_tasks, seed))]
+test_pairs = preference_pairs(groups_of(rl_base, heldout_tasks, 9))
+torch.manual_seed(0)
+rm, gen = arl.make_critic(rl_base), torch.Generator().manual_seed(0)
+opt = torch.optim.Adam(rm.parameters(), lr=1e-3)
+for step in range(150):
+    pick = [train_pairs[i] for i in torch.randint(len(train_pairs), (64,), generator=gen).tolist()]
+    margin = rm_scores(rm, [w for w, _ in pick]) - rm_scores(rm, [l for _, l in pick])   # [64]
+    loss = -F.logsigmoid(margin).mean()
+    opt.zero_grad(); loss.backward(); opt.step()
+with torch.no_grad():
+    for name, pairs in [('train', train_pairs), ('held-out', test_pairs)]:
+        acc = (rm_scores(rm, [w for w, _ in pairs]) > rm_scores(rm, [l for _, l in pairs])).float().mean()
+        print(f'{name:<9} pairs {len(pairs):4d} | pairwise accuracy {acc:.3f}')
+```
+
+Output:
+
+```text
+train     pairs  597 | pairwise accuracy 0.993
+held-out  pairs   40 | pairwise accuracy 0.875
+```
+
+奖励模型能正确区分 597 个训练对中的 99.3%，以及 40 个留出对中的 87.5%，而这些留出对涉及它从未见过的函数和常量。留出对如此之少，这个数字的标准误约为 0.05，但它远高于随机水平：模型学到了关于成功回合样貌的某种一般性规律。
+
+一旦策略发生变化，奖励模型就是在分布外使用了：RL 会把策略推向模型打高分的任何行为，包括在其训练对中罕见或不存在的行为。我们为奖励模型从未见过的脚本回合打分：oracle、盲猜和 hacker，外加一个**阅读型 hacker**（reading hacker），它会读取文件、应用 `hardcode_tests`、运行测试，然后提交。
+
+```python
+def reading_hacker(observations):
+    return ['<call> read </call>', '<call> edit hardcode_tests </call>', '<call> test </call>',
+            '<call> submit </call>'][min(len(observations) - 1, 3)]
+
+rng = random.Random(0)
+scripted = {'oracle': arl.scripted_policy('oracle'), 'blind': arl.scripted_policy('blind', seed=1),
+            'hacker': arl.scripted_policy('hacker'), 'reading hacker': reading_hacker}
+episodes = {name: [arl.scripted_rollout(policy, arl.make_env(cfg), arl.randomize_names(task, rng), tok)
+                   for task in heldout_tasks for _ in range(4)] for name, policy in scripted.items()}
+with torch.no_grad():
+    for name, trajs in episodes.items():
+        scores = rm_scores(rm, trajs)
+        print(f'{name:<15} hidden pass {sum(t.reward for t in trajs) / len(trajs):.2f} | RM score mean {scores.mean():+.2f}')
+```
+
+Output:
+
+```text
+oracle          hidden pass 1.00 | RM score mean +4.31
+blind           hidden pass 0.23 | RM score mean -2.46
+hacker          hidden pass 0.00 | RM score mean +0.41
+reading hacker  hidden pass 0.00 | RM score mean +3.08
+```
+
+在脚本回合上，奖励模型把 oracle 排在最高（+4.31），把盲猜排在最低（−2.46），这正是一个好的代理奖励应有的表现。从不阅读的 hacker 得 +0.41，介于两者之间。阅读型 hacker 得 +3.08，离 oracle 远比离失败近，尽管它的回合没有一个通过隐藏测试。模型学到的是其训练数据中*成功回合的样貌*：一次 `read`，接着一次编辑，一个全部为 `pass` 的测试输出，然后提交。阅读型 hacker 复现了所有这些特征，却什么也没修复。针对这个奖励模型的 RL 运行会把概率推向阅读型 hacker，因为它得分高，且其行为容易学习。
+
+Gao et al.（2022）在大规模下测量了这一后果：当策略针对代理奖励模型进行优化时，金标准奖励先升后降，转折点取决于奖励模型的规模和数据。代理奖励在其训练分布上是准确的，在分布之外则被利用，而这恰恰是 RL 所产生的情形。
+
+### LLM 评判器
+
+**LLM 评判器**读取对话记录或最终补丁并返回一个分数，通常依据一份评分细则。它不需要训练，可以覆盖没有测试的任务。但它同样是根据策略产出的内容计算的奖励，因此策略可以优化评判器的输入。它的失效模式既包括奖励模型的那些，也有其自身的：表面特征（“One Token to Fool LLM-as-a-Judge”（2025）报告，诸如单独一个冒号或 “Let's solve this problem step by step.” 这样的字符串会引发误判为正确）、对长度和自信语气的敏感，以及不同运行之间的噪声。评判器也只能看到对话记录所展示的内容。我们用一份应用于解码后对话记录的评分细则来代替评判器：智能体是否读了代码、是否运行了测试、最后是否看到测试通过、是否提交？这是 LLM 评判器的漫画式简化，而不是它的模型；它与真实评判器的共同点在于，它根据对话记录中可见的证据打分。
+
+```python
+def rubric_judge(traj):
+    """Share of 4 rubric items visible in the transcript: read, tested, last test all pass, submitted."""
+    text = tok.decode(traj.ids.tolist())
+    last_test = text.split('<call> test </call>')[-1].split('</obs>')[0] if '<call> test </call>' in text else 'fail'
+    items = ['<call> read </call>' in text, '<call> test </call>' in text, 'fail' not in last_test,
+             bool(traj.info['submitted'])]
+    return sum(items) / len(items)
+
+for name, trajs in episodes.items():
+    print(f'{name:<15} hidden pass {sum(t.reward for t in trajs) / len(trajs):.2f} |'
+          f' judge score {sum(map(rubric_judge, trajs)) / len(trajs):.2f}')
+```
+
+Output:
+
+```text
+oracle          hidden pass 1.00 | judge score 1.00
+blind           hidden pass 0.23 | judge score 0.25
+hacker          hidden pass 0.00 | judge score 0.75
+reading hacker  hidden pass 0.00 | judge score 1.00
+```
+
+评分细则评判器给阅读型 hacker 1.00，与 oracle 相同，给普通 hacker 0.75：漏洞利用的对话记录展示了一次阅读（对阅读型 hacker 而言）、一次测试运行、全部测试通过以及一次提交，这正是评分细则要求的全部内容。真实的 LLM 评判器读取的远不止四个特征，漏洞利用要骗过它需要更费力，但失效的结构是相同的：评判器根据策略产出的证据打分，针对它优化的策略就会学会产出这些证据。
+
+## 11.6 过程奖励与基于势函数的塑形
+
+结果奖励（outcome reward）只在结尾到达一次。**过程奖励**为中间步骤打分：可以是在步骤标注上训练的过程奖励模型（PRM），如 Let's Verify Step by Step（2023）和 Math-Shepherd（2023），也可以是诸如“某个测试从失败变为通过”之类的启发式规则。它在功劳产生的地方给予功劳，这正是轮级优势所需要的（[第 7.6 节](07-advantages-and-credit.md#76-轮级优势)）。它也会改变任务：策略最大化的是奖励的*总和*，一个可以反复领取、或无需取得进展就能领取的奖励，本身就会变成一个目标。
+
+**奖励塑形**在环境奖励上加一项 $F(s, a, s')$。Ng、Harada 和 Russell（1999）证明，形如
+
+$$
+F(s, a, s') = \gamma\,\Phi(s') - \Phi(s),
+$$
+
+的塑形，对任意状态函数 $\Phi$，都不改变最优策略；并且在不对 MDP 作进一步假设的情况下，没有其他形式的 $F$ 能保证这一点。充分性部分的证明很简短。沿任意轨迹（trajectory），塑形项逐项相消（telescope）：
+
+$$
+\sum_{t=0}^{T-1} \gamma^t \big(\gamma\Phi(s_{t+1}) - \Phi(s_t)\big) = \gamma^{T}\Phi(s_T) - \Phi(s_0).
+$$
+
+若 $\Phi$ 在终止状态为 0（或 $\gamma^T \to 0$），则从 $s_0$ 出发的每条轨迹的塑形后回报（return）等于其原始回报减去 $\Phi(s_0)$。取期望，对每个策略 $\pi$ 都有 $Q'^{\pi}(s, a) = Q^{\pi}(s, a) - \Phi(s)$，因此在每个状态中，所有动作都平移同一个常数，argmax 即最优策略不会改变。不是势函数之差的奖励加成则没有这样的保证。
+
+我们在 [第 2 章](02-rl-fundamentals.md#21-马尔可夫决策过程) 的修复 MDP 上验证这一点。`shape` 把期望塑形项 $\gamma\,\mathbb{E}[\Phi(s')] - \Phi(s)$ 加到每个状态–动作奖励上。势函数 $\Phi$ 是一个进度分数：`unread` 为 0，`read` 更大，正确编辑后更大，`done` 为 0。作为对照的非势函数方案是每次阅读奖励 0.2，即一种“奖励好习惯”的过程奖励加成。
+
+```python
+P, R = arl.make_repair_mdp()
+STATES, ACTIONS = arl.REPAIR_STATES, arl.REPAIR_ACTIONS
+
+def shape(R, P, phi, gamma):
+    """R'[s, a] = R[s, a] + gamma * E[phi(s') | s, a] - phi(s): potential-based shaping, [S, A]."""
+    return R + gamma * torch.einsum('sat,t->sa', P, phi) - phi[:, None]
+
+phi = torch.tensor([0.0, 0.3, 0.7, 0.2, 0.9, 0.4, 0.0], dtype=torch.float64)   # done must be 0
+read_bonus = R.clone()
+read_bonus[:, ACTIONS.index('read')] += 0.2
+gamma = 0.9
+for name, reward in [('original', R), ('potential shaping', shape(R, P, phi, gamma)), ('read bonus', read_bonus)]:
+    V, best = arl.value_iteration(P, reward, gamma)
+    print(f'{name:<18} V*(unread) {V[0]:+.3f} | pi* = ' + ' '.join(f'{s}:{ACTIONS[a]}' for s, a in zip(STATES[:-1], best.tolist())))
+V, _ = arl.value_iteration(P, R, gamma)
+V_shaped, _ = arl.value_iteration(P, shape(R, P, phi, gamma), gamma)
+print('max |V_shaped - (V - phi)| =', f'{(V_shaped - (V - phi)).abs().max():.1e}')
+```
+
+Output:
+
+```text
+original           V*(unread) +0.773 | pi* = unread:read read:edit edited_ok:submit edited_bad:test passed:submit failed:edit
+potential shaping  V*(unread) +0.773 | pi* = unread:read read:edit edited_ok:submit edited_bad:test passed:submit failed:edit
+read bonus         V*(unread) +2.000 | pi* = unread:read read:read edited_ok:read edited_bad:read passed:read failed:read
+max |V_shaped - (V - phi)| = 3.2e-13
+```
+
+在 $\gamma = 0.9$ 时，经势函数塑形的 MDP 在每个状态都保持原来的最优策略：阅读、编辑、编辑正确时提交、编辑错误时测试、测试失败后再次编辑。它在 `unread` 处的最优价值仍是原来的 0.773，因为 $\Phi(\text{unread}) = 0$；并且在每个状态中，$V'^{*} = V^{*} - \Phi$ 在 $3 \times 10^{-13}$ 的误差内成立，与证明的预测一致。阅读加成——每次阅读 0.2 的过程奖励——使得在每个状态下永远阅读都成为最优，其价值为 $0.2/(1-0.9) = 2.0$，是解决任务价值的两倍多。在 LLM 智能体中，同样的机制会产生一个无休止检查文件的智能体；轮次预算会把这种现象掩盖成“从不提交”（[第 12 章](12-multi-turn-and-long-horizons.md)）。
+
+这个证明也说明了基于势函数的塑形在本书的训练循环中*不能*做什么。在 $\gamma = 1$ 且回合结束时 $\Phi = 0$ 的情况下，一个任务的每个回合的塑形后回报都等于其原始回报减去 $\Phi(s_0)$，对该任务而言是常数。组基线会把它减掉。在结果级 GRPO 下，基于势函数的塑形项对梯度*完全没有影响*；只有当信用按轮分配时——由评论家（critic）或能看到各个单项的轮级优势来分配——它的价值才会显现（[第 12 章](12-multi-turn-and-long-horizons.md)）。而一个看起来基于势函数、但使用了智能体可以操纵的势函数，或者在结尾不为 0 的塑形项，就只是一个新的奖励。下面的代码在 gym 中把这一点具体化：令 $\Phi$ 为当前源代码中通过的*公开*测试比例，在一个 oracle 回合和一个 hacker 回合的每次调用之后计算。
+
+```python
+def public_potentials(policy, task):
+    """Phi(s_t) = fraction of public tests passing, before the first call and after every call."""
+    env, observations = arl.make_env(cfg), []
+    observations.append(env.reset(task))
+    phis = []
+    while True:
+        phis.append(sum(ok for ok, _ in arl.run_tests(env.source, task.public_tests, task.fn_name)) / 3)
+        if env.done:
+            return phis
+        observations.append(env.step(policy(observations))[0])
+
+for name in ['oracle', 'hacker']:
+    phis = public_potentials(arl.scripted_policy(name), train_tasks[0])
+    terms = [round(b - a, 2) for a, b in zip(phis, phis[1:])]
+    print(f'{name:<7} Phi {[round(p, 2) for p in phis]} | per-call terms {terms} | sum {sum(terms):+.2f}')
+```
+
+Output:
+
+```text
+oracle  Phi [0.33, 0.33, 1.0, 1.0, 1.0] | per-call terms [0.0, 0.67, 0.0, 0.0] | sum +0.67
+hacker  Phi [0.33, 1.0, 1.0, 1.0] | per-call terms [0.67, 0.0, 0.0] | sum +0.67
+```
+
+oracle 的势函数在它编辑时从 1/3（有 bug 的代码通过一个公开测试）升到 1；hacker 的势函数也在它编辑时同样上升。两者都获得 +0.67 的塑形奖励；如果在结尾强制 $\Phi = 0$，两者的总和都将是 $-\Phi(s_0) = -0.33$，一个常数。没有这个终止条件，塑形回报就是 $\Phi(s_T) - \Phi(s_0)$，即最终代码的公开通过比例减去一个常数：这正是第 11.3 节的公开测试奖励，可以用完全相同的方式被投机。根据智能体可观测的内容计算的过程信号，与它们所依据的结果信号一样可被利用。
+
+图 11.3 在四个维度上汇总了本章的奖励类型。上面四行是在 gym 上测得的：信号密度是 RL 基座智能体的组中奖励方差非零的比例（第 11.2 节），可投机性是 hacker 的奖励除以 oracle 的奖励（第 11.1 节）。下面四行是本书的定性判断，并已如此标注。没有哪一行在每一列都是浅色。最难投机的验证器（隐藏测试）最稀疏；每一种增加稠密度的方法（比例、学习型模型、评判器、过程奖励）都增加了一种被利用的途径，只有基于势函数的塑形例外，而它在结果级优势下什么也不增加。
+
+![图 11.3：奖励设计矩阵。行：奖励类型；列：信号密度、可投机性、成本和噪声。上面四行在 BugFix gym 上测得；下面四行为定性判断。颜色越深表示越多。](../../figures/ch11-reward-matrix.svg)
+
+## 11.7 实践中的设计问题
+
+> **问题：稀疏的二值奖励。** *症状：*大多数组的优势为零，早期学习缓慢，困难任务始终学不会。*原因：*二值验证器在采样到一次成功之前不提供任何信号；对通过率为 $p$ 的任务进行 $G$ 次尝试的组，无信息量的概率为 $p^G + (1-p)^G$（[第 7.5 节](07-advantages-and-credit.md#75-基于组的无评论家基线)）。*可选方案：*（a）更大的组或动态采样，代价是更多 rollout（[第 9 章](09-grpo-and-variants.md)）。（b）保留中等通过率任务的课程（[第 14 章](14-scaling-and-efficiency.md)）。（c）部分得分或塑形，它们让信号更稠密，同时也改变了任务（见下一个问题）。（d）更好的初始策略（SFT 或蒸馏，[第 15 章](15-sft-and-rejection-sampling.md) 与 [第 16 章](16-distillation.md)）。*默认做法：*保留二值验证器，用（a）、（b）和（d）解决稠密度问题；只有在测量过它奖励了什么之后，才加入部分得分。隐藏测试运行的历史记录展示了二值奖励在训练过程中有多稀疏。
+
+```python
+zero = [h['zero_adv_frac'] for h in hidden_history]
+print('hidden-test run, zero-advantage groups by 10-step window:', [round(sum(zero[i:i + 10]) / 10, 2) for i in range(0, 40, 10)])
+```
+
+Output:
+
+```text
+hidden-test run, zero-advantage groups by 10-step window: [0.21, 0.19, 0.4, 0.71]
+```
+
+随着隐藏测试运行不断学习，二值奖励变得*更少*而不是更多地携带信息：零优势组的比例从前十步的 0.21 升到最后十步的 0.71，因为现在大多数组的每次尝试都通过了。训练早期，稀疏性并不是瓶颈（第 11.2 节测得 RL 基座智能体有 75% 的组是有信息量的）；训练后期，饱和才是瓶颈。
+
+> **问题：部分得分被钻空子。** *症状：*奖励上升而二值通过率不变，或者策略收敛到尽快提交。*原因：*比例型验证器会为未修复代码本来就能通过的测试付分，因此什么都不做也有正奖励；任何让比例稍有变化的行为，包括以恰好能多通过几个用例的方式破坏代码，都能得分。在 GRPO 的标准差归一化下，这些微小差异会得到完整尺度的优势（第 11.2 节）。*可选方案：*（a）在任务的 FAIL_TO_PASS 测试上使用二值奖励，只对原始代码未通过的测试给部分得分。（b）把部分得分加到一个占主导地位的二值项上。（c）不做标准差归一化的部分得分（Dr. GRPO），使微小差异只产生微小优势。*默认做法：*（a）。第 11.2 节提到的部分得分运行测量了它在这里带来了什么。
+
+```python
+partial_policy, partial_history = run(make_reward('partial'))
+for name, policy, history in [('binary hidden', hidden_policy, hidden_history), ('partial hidden', partial_policy, partial_history)]:
+    h = held_out(policy)
+    print(f"{name:<15} reward, last 10 steps {sum(r['reward'] for r in history[-10:]) / 10:.3f} | held-out pass"
+          f" {h['pass_rate']:.3f} | reads {h['reads']:.2f} | turns {h['turns']:.2f}")
+```
+
+Output:
+
+```text
+binary hidden   reward, last 10 steps 0.711 | held-out pass 0.762 | reads 1.02 | turns 3.88
+partial hidden  reward, last 10 steps 0.901 | held-out pass 0.588 | reads 0.99 | turns 4.12
+```
+
+部分得分运行达到了更高的训练奖励（0.901 对 0.711），却有*更低*的留出通过率（0.588 对 0.762）。它的奖励包含了未修复提交所获得的分数，所以 0.9 的奖励并不意味着十次中有九次修复。两个策略每回合都大约阅读一次，因此在这个规模下，部分得分并没有阻止技能被学会；它让奖励成为这项技能更差的度量，也让策略在这项技能上稍差一些（单随机种子）。
+
+> **问题：评判器被利用。** *症状：*评判器分数稳步上升，而执行测试或人工评审的结果并不上升；对话记录变得越来越自信、越来越模式化。*原因：*评判器给对话记录打分，而对话记录由策略写成，因此评判器是一个优化目标，带有第 11.5 节所述的盲点。*可选方案：*（a）只在没有可执行检查的地方使用评判器，并将其与有可执行检查的奖励结合。（b）使用包含针对具体实例、可核查条目的评分细则（Rubrics as Rewards，2025）。（c）使用不是被训练模型本身的评判器，并定期更新或做集成。（d）像第 11.4 节那样，将评判器分数与独立度量对照监控。*默认做法：*（a）和（d）；对于测试可以检查的能力，绝不让评判器成为唯一的奖励。上面的评分细则评判器给了阅读型 hacker 与 oracle 相同的分数。
+
+> **问题：不稳定测试带来的奖励噪声。** *症状：*正确策略的奖励在相同的运行之间波动，本应一致的组出现非零优势，学习在没有明显原因的情况下变慢。*原因：*若正确解以概率 $\epsilon_-$ 失败（假阴性），错误提交以概率 $\epsilon_+$ 通过（假阳性），则真实通过率为 $p$ 的策略的期望奖励为 $(1 - \epsilon_- - \epsilon_+)\,p + \epsilon_+\cdot s$，其中 $s$ 是其提交率。噪声把信号缩放为原来的 $1 - \epsilon_- - \epsilon_+$ 倍并增加方差；假阳性还会为随便提交任何东西付分。*可选方案：*（a）重新运行失败的测试并取多数结果，代价是评分成本成倍增加。（b）通过多次运行每个任务的参考修复来验证任务，并丢弃不稳定的任务（[第 4.8 节](04-environments-and-tools.md#48-实践中的设计问题)）。（c）用更大的组来平均噪声。*默认做法：*训练前先做（b），然后对剩下仍会不稳定测试做（a）。`flaky_reward` 用两种噪声包装任意奖励；我们分别以 0.3 的比率加入每种噪声进行训练。
+
+```python
+#@save
+def flaky_reward(reward, false_neg=0.0, false_pos=0.0, seed=0):
+    """Wrap reward(info): a pass reads as 0 w.p. false_neg; a failed submission reads as 1 w.p. false_pos."""
+    rng = random.Random(seed)
+    def noisy(info):
+        r = reward(info)
+        if r > 0 and rng.random() < false_neg:
+            return 0.0
+        if r <= 0 and info['submitted'] and rng.random() < false_pos:
+            return 1.0
+        return r
+    return noisy
+```
+
+```python
+flaky_runs = {'clean': hidden_history}
+for name, kw in [('false negatives 0.3', dict(false_neg=0.3)), ('false positives 0.3', dict(false_pos=0.3))]:
+    policy, flaky_runs[name] = run(flaky_reward(make_reward('hidden'), **kw))
+    h = held_out(policy)
+    print(f"{name:<20} train reward, last 10 {sum(r['reward'] for r in flaky_runs[name][-10:]) / 10:.3f} |"
+          f" train pass, last 10 {sum(r['pass_rate'] for r in flaky_runs[name][-10:]) / 10:.3f} |"
+          f" held-out pass {h['pass_rate']:.3f}")
+```
+
+Output:
+
+```text
+false negatives 0.3  train reward, last 10 0.544 | train pass, last 10 0.766 | held-out pass 0.706
+false positives 0.3  train reward, last 10 0.841 | train pass, last 10 0.764 | held-out pass 0.675
+```
+
+两次带噪声的运行都仍然学会了阅读和修复：它们最后十步的真实通过率 0.766 和 0.764，在噪声范围内与干净运行的 0.711 相当；它们的留出通过率 0.706 和 0.675，略低于干净运行的 0.762。噪声真正改变的是*报告出来的*奖励。在 30% 假阴性下，训练奖励（0.544）比真实通过率低约 30%；在 30% 假阳性下，训练奖励（0.841）高估了通过率，因为失败的提交会被随机付分。图 11.2 展示了每次运行的两条曲线。在这个规模下，借助 GRPO 的组内比较，这种大小的对称噪声几乎不损害学习；代价体现在监控面板上显示的数字中，也体现在期望优势的缩放因子 $1 - \epsilon_- - \epsilon_+$ 所预测的、对每组成功次数更少的困难任务而言更慢的学习中。
+
+![图 11.2：不稳定的验证器。左：带噪声验证器所报告的训练奖励。右：同一批次的隐藏测试通过率。隐藏测试奖励，干净，或带 30% 假阴性，或带 30% 假阳性；RL 基座智能体，40 步，单随机种子。](../../figures/ch11-flaky.svg)
+
+> **问题：奖励尺度与归一化。** *症状：*改变奖励的单位，或加入一个小的惩罚项，对学习速度或所学行为的影响远超预期。*原因：*在标准差归一化的组优势下，奖励的尺度在组内被抵消，因此把它乘以 10 不改变任何东西；不做标准差归一化时（`adv_mode='mean'`，Dr. GRPO），优势随奖励缩放，效果相当于改变学习率。而惩罚项则以奖励单位与验证器竞争：每次格式错误调用 0.5 的格式惩罚可能抵消一次成功。*可选方案：*（a）把验证器保持在 [0, 1]，并相对于它设定每一项的大小，单位是“这相当于多少次失败”。（b）标准差归一化，及其难度偏差（[第 7.5 节](07-advantages-and-credit.md#75-基于组的无评论家基线)）。（c）对组内中心化后的优势做批次级缩放。*默认做法：*（a）配合（c）或标准差归一化，并分别记录每一项。下面的代码在两种奖励尺度下为同一批次计算优势。
+
+```python
+rewards = torch.tensor([t.reward for t in base_trajs])
+for mode in ['grpo', 'mean']:
+    a1 = arl.compute_advantages({'rewards': rewards}, arl.RLConfig(adv_mode=mode))
+    a10 = arl.compute_advantages({'rewards': 10 * rewards}, arl.RLConfig(adv_mode=mode))
+    print(f'adv_mode={mode:<5} mean |A| at reward scale 1: {a1.abs().mean():.3f} | at scale 10: {a10.abs().mean():.3f}')
+```
+
+Output:
+
+```text
+adv_mode=grpo  mean |A| at reward scale 1: 0.512 | at scale 10: 0.512
+adv_mode=mean  mean |A| at reward scale 1: 0.203 | at scale 10: 2.031
+```
+
+在标准差归一化下，把每个奖励乘以 10 不改变优势（两种尺度下 $|A|$ 的均值都是 0.512）。没有它时，优势增长十倍，从 0.203 到 2.031，梯度也同样增长：改变奖励尺度就是改变学习率。同样的算术也支配着惩罚项：在 `adv_mode='mean'` 下，0.05 的每步成本无论验证器的尺度如何，都会让优势每次调用移动 0.05；在标准差归一化下，它的效果取决于验证器在组内的变化幅度。
+
+> **问题：测试泄漏。** *症状：*“隐藏”验证器上的训练奖励比全新的留出评估攀升得更快，或者解答中包含来自评分器的字面值。*原因：*隐藏测试通过某种渠道到达了智能体：一个会运行它们的测试工具、仓库中的一个文件、一条错误消息，或者被复制进训练任务的测试数据。泄漏的隐藏测试就是公开测试，第 11.3 节中的每一种漏洞利用都适用于它。*可选方案：*（a）在回合结束后于沙箱之外评分，并审计观测中是否含有评分器内容（[第 4.8 节](04-environments-and-tools.md#48-实践中的设计问题)）。（b）保留一个任何奖励都不使用的第三组测试。（c）在评分器文件中放置金丝雀字符串（canary string），并在对话记录中扫描它们。*默认做法：*（a）和（b）。下面的代码模拟一次泄漏：`test` 工具，进而 `hardcode_tests`，也能看到隐藏测试。
+
+```python
+import dataclasses
+leaky = [dataclasses.replace(t, public_tests=t.public_tests + t.hidden_tests) for t in train_tasks]
+for name, tasks in [('no leak', train_tasks), ('hidden tests leaked', leaky)]:
+    infos = [arl.run_episode(arl.scripted_policy('hacker'), arl.BugFixEnv(), t)[1] for t in tasks]
+    print(f'{name:<20} hacker reward: public {sum(map(make_reward("public"), infos)) / len(infos):.2f}'
+          f' | hidden {sum(map(make_reward("hidden"), infos)) / len(infos):.2f}')
+```
+
+Output:
+
+```text
+no leak              hacker reward: public 1.00 | hidden 0.00
+hidden tests leaked  hacker reward: public 1.00 | hidden 1.00
+```
+
+当隐藏测试对 `test` 工具可见时，`hardcode_tests` 也会为它们写特例，hacker 的*隐藏*奖励变为 1.00。泄漏把第 11.4 节所信任的训练奖励变成了第 11.3 节所攻破的那种奖励，而训练曲线中没有任何东西能区分这两者。只有一个从未到达智能体的第三组测试才能把它揭示出来。
+
+## 小结
+
+- 奖励是任务的规格说明。把它写成回合终止记录的函数，就把验证器（什么算成功）与奖励项（回合过程的代价）分开了；`make_reward` 和 `flaky_reward` 实现了这两者。公开测试、隐藏测试和测试通过比例定义了不同的任务：hacker 在公开验证器上得 1.000，在隐藏验证器上得 0。
+- 用公开测试训练，大约 10 步就复现了奖励投机：漏洞利用扩散到 97% 的回合，训练奖励达到 1.000，留出任务上的隐藏通过率从 0.175 降到 0。它在监控面板上的特征是：平滑上升的奖励、下降的独立度量，以及上升的行为统计量。用隐藏测试评分（留出 0.762）或惩罚已知的漏洞利用（0.719）消除了它。
+- 训练奖励与评估度量不能有共同的弱点：隐藏测试仍会被针对性地优化，泄漏的测试就是公开测试，只有一组任何奖励都不使用的测试才能度量泛化。要在训练中监控两者之间的差距。
+- 学习型奖励和评判型奖励都是代理奖励，RL 会把它们带到分布之外：一个留出成对准确率为 87.5% 的 Bradley–Terry 奖励模型给阅读型 hacker 打了 +3.08，而 oracle 是 +4.31；评分细则评判器给它的分数与 oracle 相同。部分得分和标准差归一化为未修复代码的提交付分；部分得分提高了训练奖励，却降低了留出通过率。
+- 基于势函数的塑形 $\gamma\Phi(s') - \Phi(s)$ 可以证明不改变最优策略（在修复 MDP 上验证到 $3 \times 10^{-13}$），而阅读加成使永远阅读成为最优。在结果级 GRPO 下，结尾处 $\Phi = 0$ 的基于势函数的项完全没有作用；由公开测试计算的势函数就是公开测试奖励。这里的所有测量都是在 158k 参数模型上的单随机种子机制演示（mechanism demonstration）。
+
+## 练习
+
+1. 在一个双状态的例子中证明 Ng 等人结果的必要性部分：构造一个 MDP 和一个不是势函数之差、并会改变最优策略的塑形项 $F(s, a, s')$，然后证明没有任何 $\Phi$ 能复现你的 $F$。
+2. 改变一个假设：从第 6 章的基座智能体（`arl.make_base_agent(tok)`）而不是 `make_rl_base` 出发，重新运行第 11.3 节的投机实验。漏洞利用扩散得更快还是更慢？把答案与两个初始策略在训练前应用 `hardcode_tests` 的频率联系起来。
+3. 为 gym 编写第二种漏洞利用操作，例如把函数体包进 `try/except`，在出现任何错误时返回第一个公开测试的期望值，并在环境的一个副本中把它加入 `EDIT_OPS`。用 `make_reward('public', exploit_penalty=1.0)` 训练。策略会转向未被检测的漏洞利用吗？这对把检测器用作奖励项说明了什么？
+4. 用第 11.5 节的 Bradley–Terry 奖励模型代替隐藏测试来训练默认配置：用 `arl.sample_step` 采样，把 `batch['rewards']` 替换为 `rm_scores`，并用 `arl.rl_update` 更新。绘制 40 步内的 RM 分数和隐藏通过率。你能看到 Gao 等人所说的先升后降吗？
+5. 推导在第 11.7 节的不稳定奖励下，一个回合的期望 GRPO 优势，表示为 $\epsilon_-$、$\epsilon_+$ 和组的真实通过率的函数。$\epsilon_- + \epsilon_+$ 取何值时期望梯度消失？
+6. 把势函数 $\Phi$ = 通过的*隐藏*测试比例实现为逐轮塑形项，配合 `turn_advantages` 和评论家（[第 7.6 节](07-advantages-and-credit.md#76-轮级优势)）。与只用结果的 GRPO 相比，它能加快学习吗？解释为什么同样的项在只用结果的 GRPO 下做不到。
+7. 设计评审（design review）：你们团队的 SWE 智能体用“所有 `FAIL_TO_PASS` 测试通过”作为奖励进行训练，并加入了一个 LLM 评判器来惩罚“针对测试写特例”。200 步之后，评判器的标记率降到 0.5%，SWE-bench Verified 提高了 2 个点，而一个全新的内部基准下降了 1 个点。写出各种假设、能够区分它们的测量，以及你会提议对奖励和评估做出的修改。

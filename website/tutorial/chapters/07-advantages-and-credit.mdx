@@ -1,0 +1,649 @@
+---
+title: "7. Advantages and Credit Assignment"
+---
+
+[Chapter 6](/tutorial/chapters/06-policy-gradient) weighted every policy token of a trajectory by the same number, the episode's reward minus a baseline. That estimator is unbiased, and the first REINFORCE run showed both of its costs. It was noisy: two gradient estimates from independent batches of 32 episodes had a cosine similarity of 0.17. And it was indiscriminate: a decisive `edit` and a pointless second `swap_minmax` in the same successful episode received identical credit, so the policy learned to stack edits.
+
+Both costs come from the weight. The policy-gradient theorem allows any weight whose expectation, given the history and the action, equals the action's **advantage** $A^\pi(s, a) = Q^\pi(s, a) - V^\pi(s)$, how much better the action was than the policy's average behavior in that state. This chapter builds the estimators of that quantity that production systems use: returns-to-go, temporal-difference errors and $n$-step returns, generalized advantage estimation (GAE), and the critic-free group baselines of GRPO and RLOO. Every estimator is implemented on token sequences with masks, so that values and advantages exist only on policy tokens and the recursions skip tool spans. We also train a critic on TinyAgent and measure why critics are hard for language agents, and we finish with turn-level advantages, drawn token by token on a real multi-turn episode.
+
+```python
+#@save
+import copy
+import torch
+from torch import nn
+import torch.nn.functional as F
+import agentrl as arl
+```
+
+We start every experiment from the base agent of [Section 6.2](/tutorial/chapters/06-policy-gradient#6-2-a-base-policy-to-learn-from). `sample` draws `n_per_task` episodes of each task in lockstep, so that consecutive episodes form a **group** of attempts at the same task.
+
+```python
+tok = arl.build_tokenizer(arl.make_tasks('all'))
+train_tasks = arl.make_tasks('train')
+base = arl.make_base_agent(tok)
+
+def sample(model, tasks, n_per_task, seed):
+    """n_per_task consecutive episodes of each task (a group per task), temperature 1."""
+    batch_tasks = [t for t in tasks for _ in range(n_per_task)]
+    envs = [arl.BugFixEnv() for _ in batch_tasks]
+    return arl.rollout_batch(model, envs, batch_tasks, tok, generator=torch.Generator().manual_seed(seed))
+```
+
+## 7.1 Returns-to-go on token sequences
+
+[Section 6.5](/tutorial/chapters/06-policy-gradient#6-5-causality-and-reward-to-go) showed that an action should be credited only with rewards that follow it, the **return-to-go** $G_t = \sum_{k \ge 0} \gamma^k r_{t+k}$. On a token sequence two questions need answers before we can compute it: where do rewards live, and what counts as one step of time?
+
+The book's convention answers both. A reward lives on the policy token that earned it. A terminal outcome lives on the last policy token of the episode, which in BugFix trajectories is the `</call>` of the final call, and a per-call cost lives on the last token of its call. Time advances only on policy tokens. Prompt, template, and tool tokens are not actions, so they are not steps of the decision process: the recursion passes over them, and $\gamma$ is applied once per policy token. With $\gamma = 1$, the book's default for finite coding episodes ([Section 2.9](/tutorial/chapters/02-rl-fundamentals#2-9-design-problems-in-practice)), the choice of time unit does not matter. With $\gamma < 1$, it does, and Section 7.7 returns to it.
+
+`outcome_rewards` puts one reward per trajectory on its last policy token, the input format every estimator in this chapter takes.
+
+```python
+#@save
+def outcome_rewards(rewards, mask):
+    """Place each trajectory's reward [B] on its last policy token -> [B, T], zero elsewhere."""
+    T = mask.shape[-1]
+    last = (mask * torch.arange(1, T + 1)).argmax(-1)              # [B] index of the last 1 in each row
+    out = torch.zeros(mask.shape, dtype=rewards.dtype)
+    out[torch.arange(len(rewards)), last] = rewards
+    return out * mask                                               # rows without policy tokens stay zero
+```
+
+The return-to-go runs backward through the sequence. A running sum is updated at policy positions, $G \leftarrow r_t + \gamma G$, and carried unchanged across positions whose mask is 0. That carry is what chains a call's return to the next call across the tool span between them.
+
+```python
+#@save
+def returns_to_go(rewards, mask, gamma=1.0):
+    """Discounted return-to-go over policy tokens only: rewards, mask [B, T] -> [B, T], 0 off-mask."""
+    out = torch.zeros_like(rewards)
+    running = torch.zeros(rewards.shape[0], dtype=rewards.dtype)   # [B] return from the next policy token
+    for t in reversed(range(rewards.shape[1])):
+        on = mask[:, t] > 0
+        running = torch.where(on, rewards[:, t] + gamma * running, running)   # skip tool positions
+        out[:, t] = running * mask[:, t]
+    return out
+```
+
+A hand-built row makes the chaining visible: three calls of two, two, and one tokens, separated by tool spans of three and two tokens, with a cost of 0.1 on the last token of each call and an outcome of 1 at the end.
+
+```python
+mask = torch.tensor([[1., 1, 0, 0, 0, 1, 1, 0, 0, 1]])                    # [1, T]: policy, tool, policy, tool, policy
+rewards = torch.tensor([[0., -0.1, 0, 0, 0, 0, -0.1, 0, 0, 0.9]])          # cost per call; last call also +1
+print('mask        :', mask[0].int().tolist())
+print('gamma = 1   :', [round(v, 3) for v in returns_to_go(rewards, mask, 1.0)[0].tolist()])
+print('gamma = 0.9 :', [round(v, 3) for v in returns_to_go(rewards, mask, 0.9)[0].tolist()])
+```
+
+Output:
+
+```text
+mask        : [1, 1, 0, 0, 0, 1, 1, 0, 0, 1]
+gamma = 1   : [0.7, 0.7, 0.0, 0.0, 0.0, 0.8, 0.8, 0.0, 0.0, 0.9]
+gamma = 0.9 : [0.428, 0.475, 0.0, 0.0, 0.0, 0.639, 0.71, 0.0, 0.0, 0.9]
+```
+
+With $\gamma = 1$, the first call's return is $-0.1 - 0.1 + 0.9 = 0.7$, the sum of everything from its own cost onward, and tool positions carry 0. With $\gamma = 0.9$, the return at position 1 is $0.475 = -0.1 + 0.9 \times 0.639$, where 0.639 is the return at position 5: the discount was applied once across the three tool positions, not four times. A recursion that stepped through tool positions would discount the outcome by $0.9^3$ more for every tool span, so the effective horizon would depend on how verbose the tools were.
+
+On real BugFix batches with an outcome-only reward and $\gamma = 1$, the return-to-go is the episode's reward on every policy token, which is the REINFORCE weight of Chapter 6. The batch below, 8 episodes for each of the 20 training tasks, is reused through the chapter.
+
+```python
+batch = arl.collate(sample(base, train_tasks, 8, seed=0), tok.pad_id)          # 160 episodes, G = 8
+mask = batch['action_mask']                                                     # [B, T-1]
+returns = returns_to_go(outcome_rewards(batch['rewards'], mask), mask)          # [B, T-1]
+print('batch:', tuple(mask.shape), '| policy tokens:', int(mask.sum()))
+print('return-to-go equals the episode reward on every policy token:',
+      torch.equal(returns, batch['rewards'][:, None] * mask))
+```
+
+Output:
+
+```text
+batch: (160, 139) | policy tokens: 1874
+return-to-go equals the episode reward on every policy token: True
+```
+
+## 7.2 Values, TD errors, and n-step returns
+
+The return-to-go is an unbiased sample of $Q^\pi$ for the action it follows, and a noisy one: it carries all the randomness of every later action and observation. A **value function** removes that randomness by averaging over it. For a prefix $c_i$ that ends just before policy token $y_i$, the token-level value is
+
+$$
+V^\pi(c_i) = \mathbb{E}_\pi\big[G_i \mid c_i\big],
+$$
+
+the expected return from that point on. It is defined only where a decision is about to be made, at policy positions. Let $\mathrm{nx}(i)$ denote the next policy position after $i$. Inside a call, $c_{\mathrm{nx}(i)} = c_i \oplus y_i$ and the transition is deterministic. At the end of a call, $c_{\mathrm{nx}(i)}$ also contains the tool's response, which is random. In both cases
+
+$$
+Q^\pi(c_i, y_i) = r_i + \gamma\, \mathbb{E}\big[V^\pi(c_{\mathrm{nx}(i)}) \mid c_i, y_i\big], \qquad V^\pi(c_{\mathrm{nx}(i)}) := 0 \text{ after the last call.}
+$$
+
+The **temporal-difference (TD) error** replaces the expectation with the one sample we have:
+
+$$
+\delta_i = r_i + \gamma\, V(c_{\mathrm{nx}(i)}) - V(c_i).
+$$
+
+If $V = V^\pi$, then $\mathbb{E}[\delta_i \mid c_i, y_i] = Q^\pi(c_i, y_i) - V^\pi(c_i) = A^\pi(c_i, y_i)$: one TD error is an unbiased estimate of the advantage, and it involves the randomness of a single transition rather than of the rest of the episode. Between the two extremes sit the **$n$-step returns**,
+
+$$
+G_i^{(n)} = r_i + \gamma r_{\mathrm{nx}(i)} + \dots + \gamma^{n-1} r_{\mathrm{nx}^{n-1}(i)} + \gamma^n V(c_{\mathrm{nx}^n(i)}),
+$$
+
+which use $n$ real rewards and then bootstrap from the value function. $n = 1$ gives $r_i + \gamma V(c_{\mathrm{nx}(i)})$, and $n = \infty$ gives the return-to-go. A larger $n$ trusts the critic less and the samples more: less bias when $V$ is wrong, more variance.
+
+We verify the TD identity on the repair MDP of Chapter 2, where $V^\pi$ and $A^\pi$ are exact. `sample_steps` runs episodes in parallel and records them in the same `[B, T]` layout as token batches: states, actions, rewards, and a mask that is 1 while the episode is running.
+
+```python
+def sample_steps(P, R, policy, n, generator, max_steps=40):
+    """Run n repair episodes in parallel -> states, actions [n, T+1]; rewards, alive mask [n, T]."""
+    S = R.shape[0]
+    states = torch.zeros(n, max_steps + 1, dtype=torch.long)       # all start in 'unread'
+    actions = torch.zeros(n, max_steps + 1, dtype=torch.long)
+    rewards = torch.zeros(n, max_steps, dtype=P.dtype)
+    alive = torch.zeros(n, max_steps, dtype=P.dtype)
+    for t in range(max_steps):
+        s = states[:, t]
+        a = torch.multinomial(policy[s], 1, generator=generator).squeeze(-1)
+        live = s != S - 1                                          # not yet in 'done'
+        actions[:, t], rewards[:, t], alive[:, t] = a, R[s, a] * live, live.to(P.dtype)
+        probs = P[s, a].clone()
+        probs[~live, -1] = 1.0                                     # 'done' is absorbing
+        states[:, t + 1] = torch.multinomial(probs, 1, generator=generator).squeeze(-1)
+    return states, actions, rewards, alive
+```
+
+The policy is the same random softmax policy as in Section 6.1, now with a cost of 0.05 per step so that rewards arrive along the way. We average the sampled TD errors for each visited state-action pair and compare them with the exact advantage. We also compare the variance of the two unbiased advantage estimates available with an exact critic: the one-step TD error and the full return minus $V$.
+
+```python
+P, R = arl.make_repair_mdp(step_cost=0.05)
+torch.manual_seed(0)
+policy = torch.softmax(0.5 * torch.randn(7, 4, dtype=torch.float64), -1)            # [S, A]
+V = arl.policy_evaluation(P, R, policy, gamma=1.0)                                 # [S] exact
+A = R + torch.einsum('sat,t->sa', P, V) - V[:, None]                                # [S, A] exact advantage
+states, actions, rewards, alive = sample_steps(P, R, policy, 40_000, torch.Generator().manual_seed(0))
+s, a, on = states[:, :-1][alive > 0], actions[:, :-1][alive > 0], alive > 0
+delta = (rewards + V[states[:, 1:]] - V[states[:, :-1]])[on]                        # [visits]
+full = (returns_to_go(rewards, alive) - V[states[:, :-1]])[on]                      # G_t - V(s_t)
+pair = s * 4 + a
+mean_delta = torch.zeros(28, dtype=torch.float64).index_add_(0, pair, delta) / torch.bincount(pair, minlength=28)
+seen = torch.bincount(pair, minlength=28) > 100
+print(f'J = {V[0].item():.4f} | visits: {len(delta)} | mean steps per episode: {alive.sum(1).mean().item():.2f}')
+print(f'max |mean TD error - A(s, a)| over visited pairs: {(mean_delta - A.flatten())[seen].abs().max().item():.4f}')
+print(f'variance: TD error {delta.var().item():.4f} | G - V {full.var().item():.4f}')
+```
+
+Output:
+
+```text
+J = 0.0030 | visits: 103129 | mean steps per episode: 2.58
+max |mean TD error - A(s, a)| over visited pairs: 0.0070
+variance: TD error 0.0388 | G - V 0.1541
+```
+
+This policy is poor ($J = 0.003$: the step costs nearly cancel its rare successes) and its episodes are short, 2.6 steps on average. Over about 100,000 visits, the averaged TD errors match the exact advantages to within 0.007. Both estimators are unbiased here, because the critic is exact, and the TD error has a quarter of the variance of $G - V$ (0.039 against 0.154), because it involves one transition instead of the rest of the episode. A real critic is never exact, and then the TD error inherits its error directly. The next section interpolates between the two.
+
+## 7.3 Generalized advantage estimation
+
+Each $n$-step return gives an advantage estimate $\hat A_i^{(n)} = G_i^{(n)} - V(c_i)$. A telescoping sum rewrites it in TD errors, writing $i_k = \mathrm{nx}^k(i)$ for the $k$-th policy position after $i$:
+
+$$
+\hat A_i^{(n)} = \sum_{k=0}^{n-1} \gamma^k \delta_{i_k}.
+$$
+
+The intermediate values cancel in pairs, leaving the $n$ rewards, the bootstrap value $\gamma^n V(c_{i_n})$, and $-V(c_i)$. **Generalized advantage estimation** (Schulman et al., 2015) averages all of them with geometric weights $(1-\lambda)\lambda^{n-1}$:
+
+$$
+\hat A_i^{\text{GAE}(\gamma, \lambda)} = (1 - \lambda) \sum_{n=1}^{\infty} \lambda^{n-1} \hat A_i^{(n)} = \sum_{k=0}^{\infty} (\gamma \lambda)^k\, \delta_{i_k}.
+$$
+
+The second equality follows by exchanging the sums: $\delta_{i_k}$ appears in every $\hat A^{(n)}$ with $n > k$, with total weight $(1-\lambda)\gamma^k \sum_{n > k} \lambda^{n-1} = (\gamma\lambda)^k$. This is Equation (7.1). Two cases anchor it. With $\lambda = 0$, $\hat A_i = \delta_i$, the one-step TD error: lowest variance, and biased whenever $V$ is wrong. With $\lambda = 1$, the sum telescopes completely to $\hat A_i = G_i - V(c_i)$, the return-to-go minus a baseline: unbiased for the policy gradient whatever $V$ is, because $V(c_i)$ is then only a baseline (Equation 6.3), and with the full variance of the return. $\lambda$ trades between them. The sum also has a one-line recursion, which is how it is computed:
+
+$$
+\hat A_i = \delta_i + \gamma \lambda\, \hat A_{\mathrm{nx}(i)}.
+$$
+
+The masked implementation carries two quantities backward across non-policy positions: the value of the next policy position, needed by $\delta_i$, and the advantage at that position, needed by the recursion. It also returns the **value targets** $\hat A_i + V(c_i)$, which [Chapter 8](/tutorial/chapters/08-ppo) uses to train the critic.
+
+```python
+#@save
+def gae_advantages(rewards, values, mask, gamma=1.0, lam=0.95):
+    """GAE over policy tokens only: rewards, values, mask [B, T] -> (advantages, returns) [B, T], 0 off-mask.
+
+    Tool and other off-mask positions are skipped: delta_t uses the value at the NEXT policy position,
+    and the recursion A_t = delta_t + gamma * lam * A_next chains across them. The value after the
+    last policy token is 0 (the episode ended); bootstrap truncated episodes before calling this.
+    """
+    B, T = rewards.shape
+    advantages = torch.zeros_like(rewards)
+    next_value = torch.zeros(B, dtype=rewards.dtype)               # V at the next policy position
+    next_adv = torch.zeros(B, dtype=rewards.dtype)                 # A at the next policy position
+    for t in reversed(range(T)):
+        on = mask[:, t] > 0
+        delta = rewards[:, t] + gamma * next_value - values[:, t]
+        adv = delta + gamma * lam * next_adv
+        next_adv = torch.where(on, adv, next_adv)                   # carry across tool positions
+        next_value = torch.where(on, values[:, t], next_value)
+        advantages[:, t] = next_adv * mask[:, t]
+    return advantages, (advantages + values) * mask
+```
+
+On the hand-built row of Section 7.1, with made-up values that are deliberately large at the tool positions (a critic's output there is meaningless, and the function must ignore it), we check both anchors and compare with a naive implementation that treats every position as a step.
+
+```python
+mask = torch.tensor([[1., 1, 0, 0, 0, 1, 1, 0, 0, 1]])
+rewards = torch.tensor([[0., -0.1, 0, 0, 0, 0, -0.1, 0, 0, 0.9]])
+values = torch.tensor([[0.5, 0.4, 9, 9, 9, 0.6, 0.7, 9, 9, 0.8]])          # 9 = garbage at tool positions
+adv1, _ = gae_advantages(rewards, values, mask, gamma=1.0, lam=1.0)
+adv0, _ = gae_advantages(rewards, values, mask, gamma=1.0, lam=0.0)
+print('lam=1  :', [round(v, 2) for v in adv1[0].tolist()])
+print('G - V  :', [round(v, 2) for v in ((returns_to_go(rewards, mask) - values) * mask)[0].tolist()])
+print('lam=0  :', [round(v, 2) for v in adv0[0].tolist()])
+naive, _ = gae_advantages(rewards, values, torch.ones_like(mask), gamma=1.0, lam=0.0)
+print('naive  :', [round(v, 2) for v in (naive * mask)[0].tolist()])
+```
+
+Output:
+
+```text
+lam=1  : [0.2, 0.3, 0.0, 0.0, 0.0, 0.2, 0.1, 0.0, 0.0, 0.1]
+G - V  : [0.2, 0.3, -0.0, -0.0, -0.0, 0.2, 0.1, -0.0, -0.0, 0.1]
+lam=0  : [-0.1, 0.1, 0.0, 0.0, 0.0, 0.1, 0.0, 0.0, 0.0, 0.1]
+naive  : [-0.1, 8.5, 0.0, 0.0, -0.0, 0.1, 8.2, 0.0, -0.0, 0.1]
+```
+
+With $\lambda = 1$, GAE equals the return-to-go minus the value on every policy token, as the telescoping argument says (the `-0.0` entries are rounding of zero). With $\lambda = 0$, the advantage of position 1, the last token of the first call, is $-0.1 + V(c_5) - V(c_1) = -0.1 + 0.6 - 0.4 = 0.1$: it bootstraps from the value at the next *policy* position, 0.6, not from the garbage 9 at position 2. The naive recursion steps into the tool span and computes $-0.1 + 9 - 0.4 = 8.5$ for that token, and 8.2 for the last token of the second call. In a real system the critic's outputs at tool positions are not 9; they are untrained numbers that look plausible, so the bug changes training without crashing it.
+
+### Bias and variance across λ
+
+How much bias a $\lambda < 1$ buys depends on how wrong the critic is. On the repair MDP we can measure the bias of the **policy gradient** itself, which is what matters, against the exact gradient from autograd. Every episode contributes $\sum_t \hat A_t \nabla_\theta \log \pi_\theta(a_t \mid s_t)$, and for a softmax table that score is $\mathbf{e}_{a_t} - \pi_\theta(\cdot \mid s_t)$ in row $s_t$. We compare three critics: the exact $V^\pi$; a **stale** critic, the exact value of the uniform policy, which plays the role of a critic that has not caught up with the current policy; and no critic at all, $V = 0$.
+
+```python
+theta = policy.log().requires_grad_()                                                # logits of the same policy
+pi = torch.softmax(theta, -1)
+exact = torch.autograd.grad(arl.policy_evaluation(P, R, pi, 1.0)[0], theta)[0]       # [S, A]
+pi = pi.detach()
+states, actions, rewards, alive = sample_steps(P, R, pi, 40_000, torch.Generator().manual_seed(1))
+score = F.one_hot(actions[:, :-1], 4).double() - pi[states[:, :-1]]                  # [n, T, A]
+rows = (torch.arange(len(states))[:, None].expand(-1, states.shape[1] - 1), states[:, :-1])
+
+def gradient_stats(critic, lam):
+    """Relative bias and per-episode variance of the GAE policy-gradient estimate on the repair MDP."""
+    adv, _ = gae_advantages(rewards, critic[states[:, :-1]], alive, 1.0, lam)
+    per_episode = torch.zeros(len(states), 7, 4, dtype=torch.float64)
+    per_episode.index_put_(rows, adv[..., None] * score * alive[..., None], accumulate=True)
+    bias = (per_episode.mean(0) - exact).norm() / exact.norm()
+    return bias.item(), per_episode.var(0).sum().item()
+```
+
+The values passed to `gae_advantages` are the critic's values of the visited states, `critic[states]`. The function sees the same `[B, T]` layout as a token batch, so this is the same code that runs on TinyAgent.
+
+```python
+value_tables = {'exact V': arl.policy_evaluation(P, R, pi, 1.0),
+           'stale V': arl.policy_evaluation(P, R, torch.full((7, 4), 0.25, dtype=torch.float64), 1.0),
+           'V = 0': torch.zeros(7, dtype=torch.float64)}
+print('lambda   ' + ''.join(f'{name:>22}' for name in value_tables))
+for lam in [0.0, 0.5, 0.8, 0.95, 1.0]:
+    cells = [gradient_stats(table, lam) for table in value_tables.values()]
+    print(f'{lam:<8} ' + ''.join(f'   bias {b:.3f} var {v:.3f}' for b, v in cells))
+noise = (gradient_stats(value_tables['exact V'], 1.0)[1] / len(states)) ** 0.5 / exact.norm().item()
+print(f'Monte Carlo noise floor of the relative bias: about {noise:.3f}')
+```
+
+Output:
+
+```text
+lambda                  exact V               stale V                 V = 0
+0.0         bias 0.012 var 0.072   bias 0.157 var 0.062   bias 0.739 var 0.064
+0.5         bias 0.017 var 0.089   bias 0.090 var 0.082   bias 0.536 var 0.083
+0.8         bias 0.025 var 0.152   bias 0.044 var 0.147   bias 0.313 var 0.155
+0.95        bias 0.034 var 0.261   bias 0.033 var 0.258   bias 0.100 var 0.278
+1.0         bias 0.038 var 0.341   bias 0.038 var 0.340   bias 0.038 var 0.366
+Monte Carlo noise floor of the relative bias: about 0.033
+```
+
+![Figure 7.1: Bias (left) and variance (right) of the GAE policy-gradient estimate on the repair MDP as a function of λ, for an exact, a stale, and no critic. Bias is relative to the norm of the exact gradient; variance is per episode.](/tutorial/figures/ch07-gae-lambda.svg)
+
+The table and Figure 7.1 show the trade-off. With the exact critic, the relative bias stays at or below the Monte Carlo noise floor of about 0.03 for every $\lambda$, as the TD identity predicts, while the variance grows almost fivefold from $\lambda = 0$ to $\lambda = 1$ (0.072 to 0.341). With the stale critic, $\lambda = 0$ has a bias of 16% of the gradient's norm, and the bias falls to the noise floor by $\lambda = 0.95$. With no critic, $\lambda = 0$ uses only the immediate step costs and ignores the outcome, so its bias is 74%, and even $\lambda = 0.95$ leaves 10%. Every column meets at $\lambda = 1$: the critic is then only a baseline, and all three estimates are unbiased, with variances that differ only by how good a baseline each critic is. This is the general shape. $\lambda$ is a knob that converts critic error into variance, and the right setting depends on how good the critic is, which for language agents is the hard question.
+
+## 7.4 Learning a critic
+
+GAE needs $V(c_i)$ at every policy position of every trajectory. For a language agent the standard choice is a **value model**: a transformer of the same architecture as the policy, whose output layer has one unit instead of $V$, trained by regression on value targets. `make_critic` builds one by copying a TinyAgent and replacing its head. `critic_values` aligns its output with the predicted positions: the value at column $j$ is the critic's output at position $j$, which has seen the prefix up to token $j$, exactly the context in which token $j + 1$ was chosen.
+
+```python
+#@save
+def make_critic(model):
+    """Value model: a copy of a TinyAgent whose output head has one unit (ids [B, T] -> [B, T, 1])."""
+    critic = copy.deepcopy(model)
+    critic.head = nn.Linear(critic.head.in_features, 1)
+    return critic
+
+
+def critic_values(critic, ids):
+    """Values of the prefixes that predict ids[:, 1:]: ids [B, T] -> [B, T-1]."""
+    return critic(ids)[..., 0][:, :-1]
+
+
+def explained_variance(pred, target, mask):
+    """1 - Var(target - pred) / Var(target) over masked positions; 1 is perfect, <= 0 is useless."""
+    on = mask > 0
+    return (1 - (target - pred)[on].var() / target[on].var()).item()
+```
+
+**Explained variance** is the standard critic diagnostic: the fraction of the variance of the targets that the critic's predictions remove. A critic that predicts the mean has 0; a perfect one has 1. We train two critics on 480 base-agent episodes (24 per training task) with the Monte Carlo return as target: one initialized from the base agent's weights, the usual practice, and one from a fresh TinyAgent. Both are evaluated on 160 fresh episodes.
+
+```python
+train_batch = arl.collate(sample(base, train_tasks, 24, seed=1), tok.pad_id)
+fresh_batch = arl.collate(sample(base, train_tasks, 8, seed=2), tok.pad_id)
+def targets(b):
+    return returns_to_go(outcome_rewards(b['rewards'], b['action_mask']), b['action_mask'])
+
+def fit_critic(critic, batch, steps=150, batch_size=32, lr=1e-3, seed=0):
+    """Regress critic values on Monte Carlo returns at policy positions (masked MSE)."""
+    opt = torch.optim.Adam(critic.parameters(), lr=lr)
+    gen, y = torch.Generator().manual_seed(seed), targets(batch)
+    for _ in range(steps):
+        idx = torch.randint(len(y), (batch_size,), generator=gen)
+        loss = arl.masked_mean((critic_values(critic, batch['ids'][idx]) - y[idx]) ** 2, batch['action_mask'][idx])
+        opt.zero_grad()
+        loss.backward()
+        opt.step()
+    return critic
+```
+
+```python
+torch.manual_seed(0)
+critics = {'from policy': make_critic(base), 'from scratch': make_critic(arl.TinyAgent(tok.vocab_size))}
+for name, critic in critics.items():
+    fit_critic(critic, train_batch)
+    with torch.no_grad():
+        ev = [explained_variance(critic_values(critic, b['ids']), targets(b), b['action_mask'])
+              for b in (train_batch, fresh_batch)]
+    print(f'critic {name:<12}: explained variance on its training episodes {ev[0]:.3f} | on fresh episodes {ev[1]:.3f}')
+critic = critics['from policy']
+```
+
+Output:
+
+```text
+critic from policy : explained variance on its training episodes 0.143 | on fresh episodes 0.023
+critic from scratch: explained variance on its training episodes 0.216 | on fresh episodes 0.075
+```
+
+Both critics are poor. They explain 14% and 22% of the variance of the episodes they were fitted on, and 2% and 8% on fresh episodes from the same policy and the same tasks. Initializing from the policy did not help here: the critic trained from scratch is better on both sets. With one seed and 480 episodes that difference is not reliable, but it is a warning that "initialize from the policy" is a convention, not a guarantee. Part of the shortfall is irreducible. The target is a 0/1 outcome, and given a prefix, the outcome is still random: a prefix that ends right after a correct edit still has to submit, and a prefix that ends after the issue has a success probability near the task's pass rate. Even the true $V^\pi$ explains only the part of the outcome's variance that is predictable from the prefix. The rest of the gap is overfitting: 480 noisy episodes are not enough to fit a 158k-parameter regressor, and the critic memorizes them.
+
+A critic's values along one episode show what it has learned. We take a successful episode with several turns and print the value at the first token of each call.
+
+```python
+fresh = sample(base, train_tasks, 8, seed=2)
+episode = next(t for t in fresh if t.reward > 0 and t.info['n_turns'] >= 4)
+with torch.no_grad():
+    v = critic_values(critic, episode.ids[None])[0]                           # [T-1]
+m = episode.action_mask
+first = (m * (1 - torch.cat([torch.zeros(1), m[:-1]]))).nonzero().flatten()  # first token of each call
+print(f'task {episode.info["task"]} | reward {episode.reward}')
+for action, j in zip(episode.info['actions'], first.tolist()):
+    print(f'  V before {action:<34} {v[j].item():.3f}')
+```
+
+Output:
+
+```text
+task minmax/limit | reward 1.0
+  V before <call> edit swap_minmax </call>    0.278
+  V before <call> read </call>                0.397
+  V before <call> edit hardcode_tests </call> 0.259
+  V before <call> submit </call>              0.137
+```
+
+The episode fixes `limit` with `swap_minmax` on the first call, then reads, applies the exploit `hardcode_tests` (harmless here, since the bug is already fixed), and submits. The critic's values do not track that progress. They rise after the decisive edit, from 0.278 to 0.397, and then *fall* to 0.137 before a submit that succeeds. The critic must infer from tokens alone whether an edit fixed the bug, which depends on hidden tests it never sees. That is the partial observability of [Section 2.7](/tutorial/chapters/02-rl-fundamentals#2-7-partial-observability), now in the critic.
+
+The difficulties compound at scale, and they are why critic-free methods dominate public recipes for LLM RL. A critic of the policy's size doubles the memory and compute of training. Its targets are binary outcomes of long episodes, which is close to the worst case for regression. It must track a policy that changes every step, so it is always somewhat stale, which by Figure 7.1 is the case where small $\lambda$ hurts. And it must be initialized from somewhere: from the policy, which knows the text but has never predicted a scalar, or from a reward model, which predicts quality but not under this policy ([Section 7.7](#7-7-design-problems-in-practice)). Value-based methods remain in use, for example in PPO pipelines and in work that targets long-horizon credit assignment ([Chapter 20](/tutorial/chapters/20-frontier)), but every one of them must solve these problems first.
+
+## 7.5 Critic-free baselines from groups
+
+If a critic is expensive and inaccurate, take the baseline from data instead. For outcome rewards and $\lambda = 1$, the advantage of every token of trajectory $n$ is $R_n - V(s_0)$, and $V(s_0)$, the task's expected reward under the current policy, can be estimated by sampling the same task several times. Chapter 6's per-task baseline did this with an independent batch. **Group** methods sample $G$ attempts at each task in the same step and use the group itself.
+
+The **group mean** baseline (GRPO, DeepSeekMath; Shao et al., 2024) uses $\hat A_i = R_i - \bar R$, with $\bar R$ the mean of the group, and GRPO additionally divides by the group's standard deviation. The mean includes $R_i$ itself, so it violates the condition of Equation (6.3) slightly. The **leave-one-out** baseline (RLOO; Kool et al., 2019, and Ahmadian et al., 2024 for LLMs) excludes it:
+
+$$
+\hat A_i^{\text{RLOO}} = R_i - \frac{1}{G-1}\sum_{j \ne i} R_j = \frac{G}{G-1}\big(R_i - \bar R\big).
+$$
+
+The second form is a two-line identity, and it settles the bias question. The group-mean advantage is exactly $\frac{G-1}{G}$ times the RLOO advantage, which is unbiased because the other $G - 1$ samples are independent of $R_i$. So the group mean is unbiased up to a constant factor that the learning rate absorbs. Both functions take rewards `[B]` laid out as consecutive groups of `group_size`.
+
+```python
+#@save
+def group_advantages(rewards, group_size, normalize_std=True, eps=1e-6):
+    """GRPO-style advantages: rewards [B] in consecutive groups of G -> (r - group mean) [/ group std], [B]."""
+    r = rewards.view(-1, group_size)                                # [B/G, G]
+    adv = r - r.mean(-1, keepdim=True)
+    if normalize_std:
+        adv = adv / (r.std(-1, keepdim=True) + eps)                 # sample std (Bessel), as torch.std
+    return adv.flatten()
+
+
+def rloo_advantages(rewards, group_size):
+    """Leave-one-out advantages: r_i - mean of the other G-1 rewards in its group -> [B]."""
+    r = rewards.view(-1, group_size)
+    return (r - (r.sum(-1, keepdim=True) - r) / (group_size - 1)).flatten()
+```
+
+`group_advantages` divides by the sample standard deviation (with Bessel's correction), as `torch.std` and the common open-source GRPO implementations do. [Appendix B, Problem 4](/tutorial/chapters/B-design-review#problem-4:-rare-successes-and-standard-deviation-normalization) uses the population version, which differs by the factor $\sqrt{(G-1)/G}$. One group of eight with a single success shows all three variants.
+
+```python
+group = torch.tensor([1., 0, 0, 0, 0, 0, 0, 0])
+print('group mean   :', [round(v, 3) for v in group_advantages(group, 8, normalize_std=False).tolist()])
+print('RLOO         :', [round(v, 3) for v in rloo_advantages(group, 8).tolist()])
+print('mean / std   :', [round(v, 3) for v in group_advantages(group, 8).tolist()])
+print('mean = (G-1)/G * RLOO:', torch.allclose(group_advantages(group, 8, False), 7 / 8 * rloo_advantages(group, 8)))
+```
+
+Output:
+
+```text
+group mean   : [0.875, -0.125, -0.125, -0.125, -0.125, -0.125, -0.125, -0.125]
+RLOO         : [1.0, -0.143, -0.143, -0.143, -0.143, -0.143, -0.143, -0.143]
+mean / std   : [2.475, -0.354, -0.354, -0.354, -0.354, -0.354, -0.354, -0.354]
+mean = (G-1)/G * RLOO: True
+```
+
+The single success gets $+0.875$ from the group mean and $+1$ from RLOO, and each failure $-0.125$ and $-0.143$. The ratio is $7/8$ everywhere. Standard-deviation normalization changes the scale to $+2.47$ and $-0.35$, a factor of 2.83 for this group.
+
+On the base agent, 160 episodes in groups of eight, how many groups carry any signal?
+
+```python
+group_rewards = batch['rewards'].view(-1, 8)                               # [20 tasks, G = 8]
+p_hat = group_rewards.mean(-1)
+print('successes per group:', (p_hat * 8).int().tolist())
+print(f'groups with zero variance: {(group_rewards.std(-1) == 0).float().mean().item():.2f}',
+      '| all-fail:', int((p_hat == 0).sum()), '| all-pass:', int((p_hat == 1).sum()))
+adv = group_advantages(batch['rewards'], 8)
+print(f'episodes with zero advantage: {(adv == 0).float().mean().item():.2f}')
+```
+
+Output:
+
+```text
+successes per group: [0, 0, 0, 0, 1, 3, 2, 1, 1, 0, 0, 1, 3, 5, 2, 1, 1, 2, 2, 1]
+groups with zero variance: 0.30 | all-fail: 6 | all-pass: 0
+episodes with zero advantage: 0.30
+```
+
+A group in which every attempt fails, or every attempt passes, has zero variance and therefore zero advantage for all its members. At the base agent's pass rate, a substantial fraction of the batch carries no gradient at all. Section 7.7 returns to the cost.
+
+### Standard-deviation normalization and difficulty bias
+
+Dividing by the group's standard deviation makes the advantages of every group have unit scale. For a binary reward with $k$ successes in $G$ attempts, the success fraction is $\hat p = k/G$, the population standard deviation is $\sqrt{\hat p(1-\hat p)}$, and normalization multiplies the group's mean-centered advantages by roughly $1/\sqrt{\hat p(1 - \hat p)}$. That factor is smallest, 2, at $\hat p = 1/2$ and grows without bound as $\hat p$ approaches 0 or 1. Liu et al. (2025), in the paper that introduced **Dr. GRPO**, call this a question-level **difficulty bias**: tasks that the policy almost always fails or almost always solves receive larger updates per episode than tasks of medium difficulty. Their remedy is to remove the division, along with the per-sequence length normalization that Section 6.6 analyzed.
+
+The bias is easy to quantify. For a task with true pass rate $p$, the number of successes in a group is binomial. We compute the expected total absolute advantage of a group of eight, which sets how hard that task pushes on the parameters, with and without normalization.
+
+```python
+G = 8
+k = torch.arange(G + 1, dtype=torch.float64)                                # successes in a group
+for p in [0.05, 0.1, 0.25, 0.5, 0.75, 0.9]:
+    prob = torch.distributions.Binomial(G, torch.tensor(p, dtype=torch.float64)).log_prob(k).exp()
+    weight = {}
+    for norm in [False, True]:
+        groups = (torch.arange(G)[None] < k[:, None]).double()             # [G+1, G]: k ones per row
+        adv = group_advantages(groups.flatten(), G, normalize_std=norm).view(G + 1, G)
+        weight[norm] = (prob * adv.abs().sum(-1)).sum().item()             # E[sum_i |A_i|]
+    print(f'p = {p:<5} P(zero-variance group) {prob[0] + prob[-1]:.3f} | E sum|A|: mean only {weight[False]:.3f}',
+          f'| mean/std {weight[True]:.3f} | ratio {weight[True] / weight[False]:.2f}')
+```
+
+Output:
+
+```text
+p = 0.05  P(zero-variance group) 0.663 | E sum|A|: mean only 0.665 | mean/std 1.758 | ratio 2.64
+p = 0.1   P(zero-variance group) 0.430 | E sum|A|: mean only 1.260 | mean/std 3.135 | ratio 2.49
+p = 0.25  P(zero-variance group) 0.100 | E sum|A|: mean only 2.625 | mean/std 5.686 | ratio 2.17
+p = 0.5   P(zero-variance group) 0.008 | E sum|A|: mean only 3.500 | mean/std 6.943 | ratio 1.98
+p = 0.75  P(zero-variance group) 0.100 | E sum|A|: mean only 2.625 | mean/std 5.686 | ratio 2.17
+p = 0.9   P(zero-variance group) 0.430 | E sum|A|: mean only 1.260 | mean/std 3.135 | ratio 2.49
+```
+
+![Figure 7.2: Left: expected total absolute advantage of a group of eight as a function of the task's pass rate, with and without standard-deviation normalization. Right: their ratio, the extra weight normalization gives a task of that difficulty.](/tutorial/figures/ch07-difficulty-bias.svg)
+
+Without normalization, a task's expected push peaks at a pass rate of one half and vanishes at both ends, which is what an unbiased gradient does: a task the policy always solves has nothing left to teach. With normalization, every task's push is larger, and the factor depends on difficulty: 1.98 at $p = 0.5$, rising to 2.49 at $p = 0.1$ and 2.64 at $p = 0.05$. Conditional on a group having any signal, the effect is sharper: with the sample standard deviation, a group with one success in eight is scaled by 2.83, and a group with four by 1.87. Relative to an unbiased gradient, normalization therefore shifts weight toward the hardest and easiest tasks, by about a third at $p = 0.05$ in expectation. The expected push still vanishes at the extremes, because most of those groups have zero variance. Figure 7.2 plots both curves and their ratio. Whether the amplification is harmful depends on what the rare successes are. If they are genuine repairs, upweighting them is a curriculum. If they are lucky guesses, flaky tests, or exploits, normalization amplifies exactly the noise one would least like to train on. Several public coding-agent recipes drop the division ([Chapter 20](/tutorial/chapters/20-frontier)), and [Chapter 9](/tutorial/chapters/09-grpo-and-variants) compares both on TinyAgent.
+
+## 7.6 Turn-level advantages
+
+Every estimator so far, applied to an outcome reward, gives each token a value that depends on its position only through the critic. Without a critic, the advantage is the same on every policy token of the episode. That is the episode-level casting of [Section 2.8](/tutorial/chapters/02-rl-fundamentals#2-8-three-ways-to-cast-an-llm-agent-as-an-mdp), and its cost grows with the episode: in a 50-turn trajectory, a useless `read` and the decisive `edit` receive the same signal, and only the averaging over many episodes separates them.
+
+The turn is the natural unit of credit for an agent. A **turn-level advantage** assigns one number to each call and shares it among that call's tokens. With a critic, the value of the state at the start of each turn gives a turn-level TD error, $\delta_k = r_k + \gamma V(s_{k+1}) - V(s_k)$, and GAE over turns runs the recursion of Equation (7.1) with one step per call instead of one per token. Inside a call, tokens are not separately credited: the call succeeded or failed as a whole. `turn_advantages` builds the turn-level sequences from token tensors, runs `gae_advantages` on them, and broadcasts the result back to the tokens.
+
+```python
+#@save
+def turn_advantages(rewards, values, mask, turn_ids, gamma=1.0, lam=0.95):
+    """Turn-level GAE: one value per call (at its first token), rewards summed per call -> [B, T] on policy tokens."""
+    first = mask * (1 - F.pad(mask, (1, 0))[:, :-1])                       # 1 at the first token of each call
+    turn = turn_ids.clamp(min=0)                                            # prompt (-1) is masked out anyway
+    K = int(turn.max()) + 1
+    turn_rewards = torch.zeros(len(mask), K, dtype=rewards.dtype).scatter_add_(1, turn, rewards * mask)
+    turn_values = torch.zeros(len(mask), K, dtype=values.dtype).scatter_add_(1, turn, values * first)
+    turn_mask = torch.zeros(len(mask), K, dtype=mask.dtype).scatter_add_(1, turn, first)
+    adv, _ = gae_advantages(turn_rewards, turn_values, turn_mask, gamma, lam)   # [B, K]
+    return adv.gather(1, turn) * mask
+```
+
+We compute three schemes for one real episode and its group: **outcome-only** (the RLOO advantage of its group, the same on every token), **token-level GAE** with the critic of Section 7.4 at $\lambda = 0.95$, and **turn-level GAE** with the same critic at $\lambda = 0.95$. We print the per-call mean of each.
+
+```python
+index = next(i for i, t in enumerate(fresh) if t.reward > 0 and t.info['n_turns'] >= 4)
+group = fresh[index - index % 8: index - index % 8 + 8]                     # the episode's group of 8
+episode = fresh[index]
+row = arl.collate([episode], tok.pad_id)
+m, rewards1 = row['action_mask'], outcome_rewards(row['rewards'], row['action_mask'])
+with torch.no_grad():
+    v = critic_values(critic, row['ids'])                                   # [1, T-1]
+schemes = {'outcome (RLOO)': rloo_advantages(torch.tensor([t.reward for t in group]), 8)[index % 8] * m,
+           'token GAE': gae_advantages(rewards1, v, m, 1.0, 0.95)[0],
+           'turn GAE': turn_advantages(rewards1, v, m, row['turn_ids'], 1.0, 0.95)}
+turn = row['turn_ids'][0]
+for name, adv in schemes.items():
+    per_call = [adv[0][(turn == k) & (m[0] > 0)].mean().item() for k in range(episode.info['n_turns'])]
+    print(f'{name:<15}', ' '.join(f'{a:+.3f}' for a in per_call))
+print(f'{"calls":<15}', ' | '.join(a.split()[-2] for a in episode.info['actions']))
+```
+
+Output:
+
+```text
+outcome (RLOO)  +0.857 +0.857 +0.857 +0.857
+token GAE       +0.392 +0.387 +0.634 +0.648
+turn GAE        +0.618 +0.525 +0.697 +0.863
+calls           swap_minmax | read | hardcode_tests | submit
+```
+
+![Figure 7.3: Per-token advantages for one successful multi-turn BugFix episode of the base agent under three schemes. Blue is positive, red is negative, intensity is magnitude; gray cells are prompt, template, and tool tokens, which have no advantage. Observations are collapsed into one cell each.](/tutorial/figures/ch07-advantage-strip.svg)
+
+Figure 7.3 draws the same numbers token by token. The outcome row is uniform: every call of the successful episode gets $+0.857$, the decisive `swap_minmax`, the useless `read`, and the exploit `hardcode_tests` alike. The two critic-based rows differ from call to call, because a call is credited with the change in value that follows it. With this critic, they get the credit backward: the decisive edit receives the *least* credit in both rows (0.39 token-level, 0.62 turn-level), and the exploit and the submit receive the most. That is the critic of the previous section at work: its value fell after the fix, so the steps after the fix look like improvements over a pessimistic baseline. Token-level GAE also varies *within* a call, by the small changes in the critic's value from one token to the next, which are mostly noise: inside `<call> edit swap_minmax </call>`, only the op token is a real decision. Turn-level GAE removes that within-call noise by construction.
+
+None of these rows is "correct". The critic-based rows are only as good as the critic, and a critic with an explained variance of a few percent on fresh episodes can assign credit worse than the uniform outcome row. What the strips show is the structure each scheme can express. Outcome-only credit cannot distinguish calls within an episode; that distinction must come from comparing episodes. Turn-level credit can, if something supplies a value at turn boundaries: a critic, a process reward model, or a verifier that scores intermediate states. That is where current research on long-horizon credit assignment is concentrated ([Chapter 12](/tutorial/chapters/12-multi-turn-and-long-horizons), [Chapter 20](/tutorial/chapters/20-frontier)).
+
+## 7.7 Design problems in practice
+
+> **Problem: zero-variance groups.** *Symptom:* a large fraction of each batch has exactly zero advantage, the effective batch size is much smaller than the nominal one, and learning stalls on tasks that are always failed. *Cause:* with binary rewards and a group baseline, a group whose attempts all fail or all pass has zero variance (Section 7.5), with probability $p^G + (1-p)^G$ for a task of pass rate $p$. *Options:* (a) larger groups, which cost rollouts linearly. (b) Filter zero-variance groups and refill the batch with new samples (dynamic sampling, [Chapter 9](/tutorial/chapters/09-grpo-and-variants)), which costs extra rollouts and adds a sampling bias toward medium-difficulty tasks. (c) Curriculum by pass rate ([Chapter 14](/tutorial/chapters/14-scaling-and-efficiency)). (d) Partial-credit rewards, which risk hacking ([Chapter 11](/tutorial/chapters/11-rewards-and-verifiers)). *Default:* log the zero-variance fraction every step; when it exceeds about a third, filter and refill. On the base agent with $G = 8$, Section 7.5 measured it directly: 6 of 20 groups (30% of episodes) had zero variance, all of them all-fail groups.
+
+> **Problem: initializing the critic.** *Symptom:* the critic's explained variance stays near zero for many steps, GAE advantages at small $\lambda$ are dominated by critic noise, and early training is unstable or slow. *Cause:* a critic initialized from the policy knows the text distribution but has never predicted a scalar; its new head starts from zero information. A critic initialized from a reward model predicts quality, but the value is a property of the *policy*, which the reward model has never seen. *Options:* (a) initialize from the policy and warm up the critic alone for some steps before policy updates start. (b) Initialize from a reward model, which helps when the reward model is the reward. (c) Use $\lambda = 1$ early, when the critic is only a baseline and cannot bias the gradient, and lower it as the critic improves. (d) Drop the critic and use group baselines. *Default:* (d) for outcome-reward coding tasks; if a critic is needed, (a) plus (c), gated on its explained variance. Section 7.4 measured policy and scratch initialization on the same data, and neither reached an explained variance above 0.08 on fresh episodes.
+
+> **Problem: γ and λ for long horizons.** *Symptom:* with token-level GAE, early tokens of long episodes receive almost no credit from the final outcome, and the policy learns only near the end of episodes. *Cause:* GAE weights the TD error $k$ policy tokens ahead by $(\gamma\lambda)^k$. The outcome reaches token $i$ only through the chain of critic values between $i$ and the end, and the direct path decays geometrically. *Options:* (a) $\gamma = \lambda = 1$, which makes the advantage the return minus a baseline, as many LLM PPO setups do. (b) Turn-level GAE, which applies the decay per call instead of per token. (c) A discount per turn rather than per token when urgency is wanted. *Default:* (a) or (b). The block below shows the weight that the direct path gives to an outcome $L$ policy tokens away.
+
+```python
+for lam in [0.95, 0.99, 1.0]:
+    print(f'lambda = {lam:<5}' + ''.join(f' | L = {L:>6}: {lam ** L:.1e}' for L in [12, 200, 2_000, 30_000]))
+```
+
+Output:
+
+```text
+lambda = 0.95  | L =     12: 5.4e-01 | L =    200: 3.5e-05 | L =   2000: 2.8e-45 | L =  30000: 0.0e+00
+lambda = 0.99  | L =     12: 8.9e-01 | L =    200: 1.3e-01 | L =   2000: 1.9e-09 | L =  30000: 1.1e-131
+lambda = 1.0   | L =     12: 1.0e+00 | L =    200: 1.0e+00 | L =   2000: 1.0e+00 | L =  30000: 1.0e+00
+```
+
+At $\lambda = 0.95$, an outcome 12 policy tokens away, a typical BugFix episode, keeps about half its weight. An outcome 2,000 tokens away, a short SWE episode, is invisible through the direct path, and even $\lambda = 0.99$ cannot reach across 30,000 tokens. At the turn level, a 50-turn episode with $\lambda = 0.95$ keeps $0.95^{50} \approx 0.08$.
+
+> **Problem: whitening across the batch versus within the group.** *Symptom:* every attempt at a hard task is pushed down, even when no better attempt at that task was sampled, and successes on easy tasks are pushed up as hard as rare successes on hard ones. *Cause:* normalizing rewards across the whole batch compares an attempt with attempts at *other* tasks. Its advantage then measures the task's difficulty as much as the attempt's quality. *Options:* (a) center within the group, which compares attempts at the same task. (b) Center within the group and then scale by the batch standard deviation, which keeps the comparison and a stable step size without the per-group difficulty weighting of Section 7.5. (c) Batch whitening alone, which is acceptable only when every batch has one task or a learned per-task baseline. *Default:* (b). The block below compares batch whitening with group centering on the base agent's groups.
+
+```python
+r = batch['rewards']
+batch_whitened = (r - r.mean()) / r.std()
+group_centered = group_advantages(r, 8, normalize_std=False)
+success = r > 0
+hard = (p_hat == 0).repeat_interleave(8)                                     # tasks with no success in 8
+easy = (p_hat >= 0.25).repeat_interleave(8)                                  # tasks with 2 or more successes
+print(f'failures on hard tasks:  batch-whitened mean A {batch_whitened[~success & hard].mean():+.3f}',
+      f'| group-centered {group_centered[~success & hard].mean():+.3f}')
+print(f'successes on easy tasks: batch-whitened mean A {batch_whitened[success & easy].mean():+.3f}',
+      f'| group-centered {group_centered[success & easy].mean():+.3f}')
+```
+
+Output:
+
+```text
+failures on hard tasks:  batch-whitened mean A -0.439 | group-centered +0.000
+successes on easy tasks: batch-whitened mean A +2.263 | group-centered +0.612
+```
+
+Batch whitening pushes down every failure on the six tasks the base agent never solved, by $-0.44$ each, although no better attempt at those tasks exists in the batch to move toward; the gradient only lowers the probability of whatever the agent happened to do. Group centering gives them exactly zero. Successes on the easier tasks get $+2.26$ under batch whitening and $+0.61$ under group centering, where a success counts for less when the group has several.
+
+
+> **Problem: outcome advantages reward useless steps.** *Symptom:* successful episodes get longer over training, with redundant reads, repeated tests, or repeated edits, while the pass rate rises. Chapter 6's REINFORCE run learned to stack edits. *Cause:* an outcome-only advantage is shared by every call of a successful episode, so a call that changed nothing is reinforced as strongly as the call that fixed the bug. Only the comparison with other episodes, where the useless call also appears in failures, removes it, and that comparison is noisy. *Options:* (a) a small cost per call, which changes the task and must be tuned against useful information gathering ([Chapter 12](/tutorial/chapters/12-multi-turn-and-long-horizons)). (b) Turn-level advantages from a critic or a process reward. (c) Accept it and rely on averaging, with turn and token counts logged. *Default:* (c) with logging at first, then (a) at a cost small enough that the oracle's four calls still pay. The block below measures how much positive advantage the base agent's successful episodes put on calls that are neither the right edit nor the final submit.
+
+```python
+fix_op = {t.name: t.fix_op for t in train_tasks}
+total = useful = 0
+for traj, a in zip(sample(base, train_tasks, 8, seed=0), group_advantages(batch['rewards'], 8, False).tolist()):
+    if traj.reward > 0:
+        for call in traj.info['actions']:
+            n_tokens = len(call.split())
+            total += a * n_tokens
+            useful += a * n_tokens * (call.endswith(f'{fix_op[traj.info["task"]]} </call>') or 'submit' in call)
+print(f'share of positive outcome advantage on calls other than the right edit and the submit: {1 - useful / total:.2f}')
+```
+
+Output:
+
+```text
+share of positive outcome advantage on calls other than the right edit and the submit: 0.30
+```
+
+Thirty percent of the positive credit that outcome advantages hand out in successful episodes lands on calls that neither fixed the bug nor submitted it: reads, tests, wrong edits that happened not to matter, and the exploit. The REINFORCE run of Chapter 6 shows what that credit buys over 80 steps.
+
+
+## Summary
+
+- Rewards live on the policy token that earned them, time advances only on policy tokens, and every recursion carries its state unchanged across tool spans. `returns_to_go` and `gae_advantages` implement this with masks; a naive recursion that steps through tool positions bootstraps from meaningless values.
+- The TD error $\delta_i = r_i + \gamma V(c_{\mathrm{nx}(i)}) - V(c_i)$ is an unbiased advantage estimate when the critic is exact. GAE averages $n$-step estimates into $\sum_k (\gamma\lambda)^k \delta_{i_k}$: $\lambda = 0$ is low-variance and biased by critic error, and $\lambda = 1$ is the return minus a baseline, unbiased for any critic. On the repair MDP, a stale critic biases the gradient strongly at $\lambda = 0$, and the bias vanishes as $\lambda \to 1$ while the variance grows.
+- A TinyAgent-sized critic trained on 480 base-agent episodes explains at most 22% of the variance of its training episodes and 8% on fresh ones: binary outcomes are noisy given the prefix, the critic overfits, and it cannot see the hidden tests. On one real episode it gave the decisive edit the least credit.
+- Group baselines replace the critic with other attempts at the same task. The group mean is exactly $\frac{G-1}{G}$ times the unbiased leave-one-out (RLOO) advantage. Dividing by the group's standard deviation scales a group with one success in eight by 2.83 and one with four by 1.87, shifting weight toward the hardest and easiest tasks relative to an unbiased gradient; Dr. GRPO removes the division. Zero-variance groups, 30% of the base agent's episodes at $G = 8$, carry no gradient.
+- Turn-level advantages credit whole calls and remove within-call noise, but they need a value at turn boundaries. Outcome-only advantages give every call of a successful episode the same credit, which is how useless steps get reinforced.
+
+## Exercises
+
+1. Prove that $\hat A_i^{(n)} = \sum_{k<n} \gamma^k \delta_{i_k}$ by telescoping, and that GAE with $\lambda = 1$ equals $G_i - V(c_i)$ even when $V$ is wrong. Then show that GAE with $\lambda < 1$ is biased by $\sum_k (\gamma\lambda)^k \gamma\, (1-\lambda)\, \mathbb{E}[V(c_{i_{k+1}}) - V^\pi(c_{i_{k+1}})]$ (up to indexing), and check the expression against the stale-critic column of Section 7.3.
+2. Change an assumption: make `gae_advantages` step through every position, as the naive version does, but set the critic's values at tool positions to the value of the preceding policy token. With $\gamma = 1$, is it now equivalent to the masked version? With $\gamma < 1$? Explain.
+3. Train the critic of Section 7.4 for 600 steps and plot explained variance on training and fresh episodes against steps. At what point does it start to overfit? Repeat with five times as many episodes.
+4. Show that $\mathbb{E}[\hat A_i^{\text{RLOO}} \nabla \log \pi_\theta(\tau_i)] = \nabla J$ exactly, and compute the expected gradient of the group-mean estimator. Then show that the standard-deviation-normalized estimator is not proportional to $\nabla J$ in general, by constructing two tasks with different pass rates.
+5. Using the binomial calculation of Section 7.5, find the group size $G$ at which a task with pass rate 0.1 has a zero-variance probability below 0.25. How many rollouts per step does that imply for 64 tasks?
+6. Implement a turn-level advantage without a critic: estimate the value at each turn boundary by running $M$ continuations from that prefix with the current policy (a Monte Carlo rollout value, as in VinePPO-style methods). Apply it to the episode of Section 7.6 with $M = 8$. How does its per-call profile compare with the critic's, and what does it cost in rollouts?
+7. Design review: your team trains a 64-turn SWE agent with GRPO and outcome rewards. A colleague proposes adding a value model to get turn-level credit. List what must be true about the critic (explained variance, staleness, memory) for this to beat group baselines, the measurements you would ask for before agreeing, and a cheaper intermediate step.

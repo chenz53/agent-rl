@@ -1,0 +1,36 @@
+Loading weights:   0%|          | 0/311 [00:00<?, ?it/s]Loading weights:  85%|████████▌ | 265/311 [00:00<00:00, 2633.10it/s]Loading weights: 100%|██████████| 311/311 [00:00<00:00, 2723.47it/s]
+config: {'group_size': 8, 'prompts_per_step': 8, 'temperature': 1.0, 'max_turns': 6, 'rename': True, 'max_edits': 1, 'reward': 'hidden', 'adv_mode': 'grpo', 'overlong_buffer': 0, 'dynamic_sampling': False, 'max_sample_rounds': 4, 'ratio_level': 'token', 'clip_low': 0.2, 'clip_high': 0.2, 'loss_mode': 'token_mean', 'norm_const': None, 'kl_coef': 0.0, 'kl_kind': 'k3', 'lr': 1e-06, 'epochs': 1, 'minibatches': 2, 'max_grad_norm': 1.0, 'seed': 0} | {'steps': 30, 'group_size': 8, 'prompts': 8, 'lr': 1e-06, 'max_new_tokens': 64, 'micro': 8, 'eval_n': 8, 'seed': 0, 'out': 'tutorial/labs/results/qwen_grpo_bugfix.json'}
+held-out, before       pass@1 0.200 [0.062, 0.388] | reads 0.61 | edits 0.95 | first edit right 0.25 | malformed 1.69 | submitted 0.61
+step  0 | reward 0.078 | reads 0.66 | edits 0.94 | malformed 1.73 | zero-adv 0.62 | entropy 0.545 | kl 2.49e-02 | gap 3.2e-06 | 30s + 7s
+step  1 | reward 0.141 | reads 1.05 | edits 0.97 | malformed 0.77 | zero-adv 0.50 | entropy 0.285 | kl 3.93e-03 | gap 2.1e-06 | 26s + 7s
+step  2 | reward 0.328 | reads 1.06 | edits 1.00 | malformed 0.03 | zero-adv 0.25 | entropy 0.082 | kl 9.75e-04 | gap 7.8e-07 | 17s + 8s
+step  3 | reward 0.219 | reads 1.25 | edits 0.98 | malformed 0.09 | zero-adv 0.50 | entropy 0.063 | kl 3.55e-03 | gap 7.9e-07 | 15s + 7s
+step  4 | reward 0.469 | reads 1.45 | edits 1.00 | malformed 0.14 | zero-adv 0.00 | entropy 0.090 | kl 5.10e-04 | gap 9.2e-07 | 17s + 10s
+step  5 | reward 0.516 | reads 1.48 | edits 0.98 | malformed 0.16 | zero-adv 0.38 | entropy 0.079 | kl 2.43e-04 | gap 6.9e-07 | 17s + 8s
+step  6 | reward 0.406 | reads 1.48 | edits 1.00 | malformed 0.06 | zero-adv 0.50 | entropy 0.041 | kl 2.18e-03 | gap 5.7e-07 | 13s + 7s
+step  7 | reward 0.469 | reads 1.09 | edits 0.98 | malformed 0.02 | zero-adv 0.38 | entropy 0.046 | kl 1.38e-03 | gap 5.5e-07 | 11s + 7s
+step  8 | reward 0.656 | reads 1.06 | edits 0.98 | malformed 0.02 | zero-adv 0.50 | entropy 0.037 | kl 1.28e-03 | gap 3.5e-07 | 10s + 6s
+step  9 | reward 0.703 | reads 1.02 | edits 1.00 | malformed 0.00 | zero-adv 0.25 | entropy 0.032 | kl 5.74e-04 | gap 3.9e-07 | 9s + 7s
+step 10 | reward 0.578 | reads 1.00 | edits 1.00 | malformed 0.00 | zero-adv 0.38 | entropy 0.027 | kl 8.49e-04 | gap 3.8e-07 | 8s + 6s
+step 11 | reward 0.922 | reads 1.00 | edits 1.00 | malformed 0.00 | zero-adv 0.62 | entropy 0.023 | kl 9.28e-04 | gap 2.7e-07 | 9s + 5s
+step 12 | reward 0.859 | reads 1.00 | edits 1.00 | malformed 0.00 | zero-adv 0.88 | entropy 0.018 | kl 3.13e-03 | gap 1.4e-07 | 10s + 3s
+step 13 | reward 0.703 | reads 1.00 | edits 1.00 | malformed 0.00 | zero-adv 0.88 | entropy 0.016 | kl 1.98e-03 | gap 6.3e-08 | 10s + 3s
+step 14 | reward 0.844 | reads 1.00 | edits 1.00 | malformed 0.00 | zero-adv 0.75 | entropy 0.012 | kl 5.47e-05 | gap 1.1e-07 | 11s + 4s
+step 15 | reward 0.625 | reads 0.98 | edits 1.00 | malformed 0.02 | zero-adv 1.00 | entropy 0.000 | kl 0.00e+00 | gap 9.0e-08 | 11s + 2s
+step 16 | reward 0.875 | reads 1.00 | edits 1.00 | malformed 0.00 | zero-adv 1.00 | entropy 0.000 | kl 0.00e+00 | gap 1.0e-07 | 11s + 2s
+step 17 | reward 0.859 | reads 1.00 | edits 0.98 | malformed 0.02 | zero-adv 0.88 | entropy 0.019 | kl 1.18e-06 | gap 5.8e-08 | 11s + 3s
+step 18 | reward 0.875 | reads 1.00 | edits 1.00 | malformed 0.00 | zero-adv 1.00 | entropy 0.000 | kl 0.00e+00 | gap 3.1e-08 | 11s + 2s
+step 19 | reward 0.625 | reads 1.00 | edits 1.00 | malformed 0.00 | zero-adv 1.00 | entropy 0.000 | kl 0.00e+00 | gap 2.9e-08 | 11s + 2s
+step 20 | reward 0.844 | reads 1.00 | edits 1.00 | malformed 0.00 | zero-adv 0.88 | entropy 0.005 | kl 2.12e-03 | gap 1.1e-07 | 11s + 3s
+step 21 | reward 0.859 | reads 1.00 | edits 1.00 | malformed 0.00 | zero-adv 0.88 | entropy 0.017 | kl 5.58e-05 | gap 9.6e-08 | 11s + 3s
+step 22 | reward 0.609 | reads 1.02 | edits 1.00 | malformed 0.02 | zero-adv 0.88 | entropy 0.010 | kl 7.07e-10 | gap 3.7e-08 | 11s + 4s
+step 23 | reward 0.750 | reads 1.00 | edits 1.00 | malformed 0.00 | zero-adv 1.00 | entropy 0.000 | kl 0.00e+00 | gap 3.9e-08 | 11s + 2s
+step 24 | reward 0.750 | reads 1.02 | edits 1.00 | malformed 0.00 | zero-adv 1.00 | entropy 0.000 | kl 0.00e+00 | gap 3.7e-08 | 11s + 2s
+step 25 | reward 0.750 | reads 1.00 | edits 1.00 | malformed 0.00 | zero-adv 1.00 | entropy 0.000 | kl 0.00e+00 | gap 9.8e-08 | 13s + 2s
+step 26 | reward 0.750 | reads 1.00 | edits 1.00 | malformed 0.00 | zero-adv 1.00 | entropy 0.000 | kl 0.00e+00 | gap 3.5e-08 | 11s + 2s
+step 27 | reward 0.625 | reads 1.00 | edits 1.00 | malformed 0.00 | zero-adv 1.00 | entropy 0.000 | kl 0.00e+00 | gap 2.2e-08 | 11s + 2s
+step 28 | reward 0.734 | reads 1.00 | edits 1.00 | malformed 0.00 | zero-adv 0.88 | entropy 0.002 | kl 2.79e-07 | gap 3.0e-08 | 11s + 3s
+step 29 | reward 0.750 | reads 1.00 | edits 1.00 | malformed 0.00 | zero-adv 1.00 | entropy 0.000 | kl 0.00e+00 | gap 4.0e-08 | 11s + 2s
+held-out, after        pass@1 0.800 [0.500, 1.000] | reads 1.02 | edits 1.00 | first edit right 0.80 | malformed 0.00 | submitted 1.00
+paired held-out difference (after - before, 10 tasks): +0.600 [+0.325, +0.875]
+wrote tutorial/labs/results/qwen_grpo_bugfix.json | 9.5 min | peak GPU memory 32.8 GB

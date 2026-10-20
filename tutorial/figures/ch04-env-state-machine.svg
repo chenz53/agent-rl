@@ -1,0 +1,548 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1040 590" width="1040" height="590" role="img" aria-label="The BugFix environment as a state machine"><style>
+svg{--plate:#fcfcfb;--hi:#18181b;--mid:#71717a;--lo:#d4d4d8;--accent:#2a78d6;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+@media (prefers-color-scheme: dark){svg{--plate:#111113;--hi:#fafafa;--mid:#a1a1aa;--lo:#3f3f46;--accent:#3987e5}}
+.plate{fill:var(--plate)}
+.sil{fill:var(--plate);stroke:var(--hi);stroke-width:.9;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.crease{fill:none;stroke:var(--mid);stroke-width:.9;stroke-linecap:round;opacity:.75;vector-effect:non-scaling-stroke}
+.floor{fill:var(--lo)}
+.guide{fill:none;stroke:var(--lo);stroke-width:.9;stroke-dasharray:2 4;vector-effect:non-scaling-stroke}
+.track{fill:none;stroke:var(--mid);stroke-width:.9;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.accent{fill:none;stroke:var(--accent);stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+.pulse{fill:none;stroke:var(--accent);stroke-width:2.6;stroke-linecap:round;stroke-dasharray:10 400;
+  animation:flow 3.2s linear infinite}
+@keyframes flow{from{stroke-dashoffset:410}to{stroke-dashoffset:0}}
+@media (prefers-reduced-motion: reduce){.pulse{animation:none;stroke-dasharray:none;opacity:0}}
+.leader{fill:none;stroke:var(--mid);stroke-width:.7;vector-effect:non-scaling-stroke}
+.dot{fill:var(--hi)}
+.num{fill:var(--mid);font-size:10px;letter-spacing:.08em}
+.name{fill:var(--hi);font-size:12px;font-weight:600;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.desc{fill:var(--mid);font-size:11px;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.cap{fill:var(--mid);font-size:10px;letter-spacing:.14em}
+.read{fill:var(--hi);font-size:11px}
+.tlabel{fill:var(--mid);font-size:10px}
+.cell{fill:var(--plate);stroke:var(--mid);stroke-width:.9}
+.cell-prompt{fill:var(--plate);stroke:var(--mid);stroke-width:.9;stroke-dasharray:1.5 2.5}
+.cell-policy{fill:var(--plate);stroke:var(--accent);stroke-width:1.4}
+.cell-reward{fill:var(--plate);stroke:var(--hi);stroke-width:.9}
+.ctext{fill:var(--hi);font-size:11px}
+.mask{fill:var(--mid);font-size:10px}
+.mask1{fill:var(--accent);font-size:10px;font-weight:600}
+.card{fill:var(--plate);stroke:var(--hi);stroke-width:.9}
+.card-soft{fill:var(--plate);stroke:var(--mid);stroke-width:.9}
+.card-accent{fill:var(--plate);stroke:var(--accent);stroke-width:1.4}
+.card-dot{fill:var(--plate);stroke:var(--mid);stroke-width:.9;stroke-dasharray:1.5 2.5}
+.ctitle{fill:var(--hi);font-size:12px;font-weight:600;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.cline{fill:var(--mid);font-size:11px;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.cmono{fill:var(--hi);font-size:11px}
+.chead{fill:var(--mid);font-size:10px;letter-spacing:.12em}
+.vpos{fill:var(--accent);font-size:13px;font-weight:600}
+.vneg{fill:var(--hi);font-size:13px;font-weight:600}
+.vzero{fill:var(--mid);font-size:13px}
+.ttemplate{fill:var(--mid);font-size:10px}
+.readk{fill:var(--mid);font-size:11px}
+</style><rect class="plate" width="1040" height="590" rx="10"/><circle class="floor" cx="410.0" cy="57.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="72.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="88.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="103.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="119.0" r=".9"/>
+<circle class="floor" cx="544.2" cy="134.5" r=".9"/>
+<circle class="floor" cx="571.1" cy="150.0" r=".9"/>
+<circle class="floor" cx="597.9" cy="165.5" r=".9"/>
+<circle class="floor" cx="624.8" cy="181.0" r=".9"/>
+<circle class="floor" cx="651.6" cy="196.5" r=".9"/>
+<circle class="floor" cx="678.5" cy="212.0" r=".9"/>
+<circle class="floor" cx="705.3" cy="227.5" r=".9"/>
+<circle class="floor" cx="732.2" cy="243.0" r=".9"/>
+<circle class="floor" cx="759.0" cy="258.5" r=".9"/>
+<circle class="floor" cx="785.9" cy="274.0" r=".9"/>
+<circle class="floor" cx="812.7" cy="289.5" r=".9"/>
+<circle class="floor" cx="839.5" cy="305.0" r=".9"/>
+<circle class="floor" cx="866.4" cy="320.5" r=".9"/>
+<circle class="floor" cx="893.2" cy="336.0" r=".9"/>
+<circle class="floor" cx="920.1" cy="351.5" r=".9"/>
+<circle class="floor" cx="946.9" cy="367.0" r=".9"/>
+<circle class="floor" cx="973.8" cy="382.5" r=".9"/>
+<circle class="floor" cx="383.2" cy="72.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="88.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="103.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="119.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="134.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="150.0" r=".9"/>
+<circle class="floor" cx="544.2" cy="165.5" r=".9"/>
+<circle class="floor" cx="571.1" cy="181.0" r=".9"/>
+<circle class="floor" cx="597.9" cy="196.5" r=".9"/>
+<circle class="floor" cx="624.8" cy="212.0" r=".9"/>
+<circle class="floor" cx="651.6" cy="227.5" r=".9"/>
+<circle class="floor" cx="678.5" cy="243.0" r=".9"/>
+<circle class="floor" cx="705.3" cy="258.5" r=".9"/>
+<circle class="floor" cx="732.2" cy="274.0" r=".9"/>
+<circle class="floor" cx="759.0" cy="289.5" r=".9"/>
+<circle class="floor" cx="785.9" cy="305.0" r=".9"/>
+<circle class="floor" cx="812.7" cy="320.5" r=".9"/>
+<circle class="floor" cx="839.5" cy="336.0" r=".9"/>
+<circle class="floor" cx="866.4" cy="351.5" r=".9"/>
+<circle class="floor" cx="893.2" cy="367.0" r=".9"/>
+<circle class="floor" cx="920.1" cy="382.5" r=".9"/>
+<circle class="floor" cx="946.9" cy="398.0" r=".9"/>
+<circle class="floor" cx="356.3" cy="88.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="103.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="119.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="134.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="150.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="165.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="181.0" r=".9"/>
+<circle class="floor" cx="544.2" cy="196.5" r=".9"/>
+<circle class="floor" cx="571.1" cy="212.0" r=".9"/>
+<circle class="floor" cx="597.9" cy="227.5" r=".9"/>
+<circle class="floor" cx="624.8" cy="243.0" r=".9"/>
+<circle class="floor" cx="651.6" cy="258.5" r=".9"/>
+<circle class="floor" cx="678.5" cy="274.0" r=".9"/>
+<circle class="floor" cx="705.3" cy="289.5" r=".9"/>
+<circle class="floor" cx="732.2" cy="305.0" r=".9"/>
+<circle class="floor" cx="759.0" cy="320.5" r=".9"/>
+<circle class="floor" cx="785.9" cy="336.0" r=".9"/>
+<circle class="floor" cx="812.7" cy="351.5" r=".9"/>
+<circle class="floor" cx="839.5" cy="367.0" r=".9"/>
+<circle class="floor" cx="866.4" cy="382.5" r=".9"/>
+<circle class="floor" cx="893.2" cy="398.0" r=".9"/>
+<circle class="floor" cx="920.1" cy="413.5" r=".9"/>
+<circle class="floor" cx="329.5" cy="103.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="119.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="134.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="150.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="165.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="181.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="196.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="212.0" r=".9"/>
+<circle class="floor" cx="544.2" cy="227.5" r=".9"/>
+<circle class="floor" cx="571.1" cy="243.0" r=".9"/>
+<circle class="floor" cx="597.9" cy="258.5" r=".9"/>
+<circle class="floor" cx="624.8" cy="274.0" r=".9"/>
+<circle class="floor" cx="651.6" cy="289.5" r=".9"/>
+<circle class="floor" cx="678.5" cy="305.0" r=".9"/>
+<circle class="floor" cx="705.3" cy="320.5" r=".9"/>
+<circle class="floor" cx="732.2" cy="336.0" r=".9"/>
+<circle class="floor" cx="759.0" cy="351.5" r=".9"/>
+<circle class="floor" cx="785.9" cy="367.0" r=".9"/>
+<circle class="floor" cx="812.7" cy="382.5" r=".9"/>
+<circle class="floor" cx="839.5" cy="398.0" r=".9"/>
+<circle class="floor" cx="866.4" cy="413.5" r=".9"/>
+<circle class="floor" cx="893.2" cy="429.0" r=".9"/>
+<circle class="floor" cx="302.6" cy="119.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="134.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="150.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="165.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="181.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="196.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="212.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="227.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="243.0" r=".9"/>
+<circle class="floor" cx="544.2" cy="258.5" r=".9"/>
+<circle class="floor" cx="571.1" cy="274.0" r=".9"/>
+<circle class="floor" cx="597.9" cy="289.5" r=".9"/>
+<circle class="floor" cx="624.8" cy="305.0" r=".9"/>
+<circle class="floor" cx="651.6" cy="320.5" r=".9"/>
+<circle class="floor" cx="678.5" cy="336.0" r=".9"/>
+<circle class="floor" cx="705.3" cy="351.5" r=".9"/>
+<circle class="floor" cx="732.2" cy="367.0" r=".9"/>
+<circle class="floor" cx="759.0" cy="382.5" r=".9"/>
+<circle class="floor" cx="785.9" cy="398.0" r=".9"/>
+<circle class="floor" cx="812.7" cy="413.5" r=".9"/>
+<circle class="floor" cx="839.5" cy="429.0" r=".9"/>
+<circle class="floor" cx="866.4" cy="444.5" r=".9"/>
+<circle class="floor" cx="275.8" cy="134.5" r=".9"/>
+<circle class="floor" cx="302.6" cy="150.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="165.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="181.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="196.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="212.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="227.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="243.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="258.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="274.0" r=".9"/>
+<circle class="floor" cx="544.2" cy="289.5" r=".9"/>
+<circle class="floor" cx="571.1" cy="305.0" r=".9"/>
+<circle class="floor" cx="597.9" cy="320.5" r=".9"/>
+<circle class="floor" cx="624.8" cy="336.0" r=".9"/>
+<circle class="floor" cx="651.6" cy="351.5" r=".9"/>
+<circle class="floor" cx="678.5" cy="367.0" r=".9"/>
+<circle class="floor" cx="705.3" cy="382.5" r=".9"/>
+<circle class="floor" cx="732.2" cy="398.0" r=".9"/>
+<circle class="floor" cx="759.0" cy="413.5" r=".9"/>
+<circle class="floor" cx="785.9" cy="429.0" r=".9"/>
+<circle class="floor" cx="812.7" cy="444.5" r=".9"/>
+<circle class="floor" cx="839.5" cy="460.0" r=".9"/>
+<circle class="floor" cx="248.9" cy="150.0" r=".9"/>
+<circle class="floor" cx="275.8" cy="165.5" r=".9"/>
+<circle class="floor" cx="302.6" cy="181.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="196.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="212.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="227.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="243.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="258.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="274.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="289.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="305.0" r=".9"/>
+<circle class="floor" cx="544.2" cy="320.5" r=".9"/>
+<circle class="floor" cx="571.1" cy="336.0" r=".9"/>
+<circle class="floor" cx="597.9" cy="351.5" r=".9"/>
+<circle class="floor" cx="624.8" cy="367.0" r=".9"/>
+<circle class="floor" cx="651.6" cy="382.5" r=".9"/>
+<circle class="floor" cx="678.5" cy="398.0" r=".9"/>
+<circle class="floor" cx="705.3" cy="413.5" r=".9"/>
+<circle class="floor" cx="732.2" cy="429.0" r=".9"/>
+<circle class="floor" cx="759.0" cy="444.5" r=".9"/>
+<circle class="floor" cx="785.9" cy="460.0" r=".9"/>
+<circle class="floor" cx="812.7" cy="475.5" r=".9"/>
+<circle class="floor" cx="222.1" cy="165.5" r=".9"/>
+<circle class="floor" cx="248.9" cy="181.0" r=".9"/>
+<circle class="floor" cx="275.8" cy="196.5" r=".9"/>
+<circle class="floor" cx="302.6" cy="212.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="227.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="243.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="258.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="274.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="289.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="305.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="320.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="336.0" r=".9"/>
+<circle class="floor" cx="544.2" cy="351.5" r=".9"/>
+<circle class="floor" cx="571.1" cy="367.0" r=".9"/>
+<circle class="floor" cx="597.9" cy="382.5" r=".9"/>
+<circle class="floor" cx="624.8" cy="398.0" r=".9"/>
+<circle class="floor" cx="651.6" cy="413.5" r=".9"/>
+<circle class="floor" cx="678.5" cy="429.0" r=".9"/>
+<circle class="floor" cx="705.3" cy="444.5" r=".9"/>
+<circle class="floor" cx="732.2" cy="460.0" r=".9"/>
+<circle class="floor" cx="759.0" cy="475.5" r=".9"/>
+<circle class="floor" cx="785.9" cy="491.0" r=".9"/>
+<circle class="floor" cx="195.2" cy="181.0" r=".9"/>
+<circle class="floor" cx="222.1" cy="196.5" r=".9"/>
+<circle class="floor" cx="248.9" cy="212.0" r=".9"/>
+<circle class="floor" cx="275.8" cy="227.5" r=".9"/>
+<circle class="floor" cx="302.6" cy="243.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="258.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="274.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="289.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="305.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="320.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="336.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="351.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="367.0" r=".9"/>
+<circle class="floor" cx="544.2" cy="382.5" r=".9"/>
+<circle class="floor" cx="571.1" cy="398.0" r=".9"/>
+<circle class="floor" cx="597.9" cy="413.5" r=".9"/>
+<circle class="floor" cx="624.8" cy="429.0" r=".9"/>
+<circle class="floor" cx="651.6" cy="444.5" r=".9"/>
+<circle class="floor" cx="678.5" cy="460.0" r=".9"/>
+<circle class="floor" cx="705.3" cy="475.5" r=".9"/>
+<circle class="floor" cx="732.2" cy="491.0" r=".9"/>
+<circle class="floor" cx="759.0" cy="506.5" r=".9"/>
+<circle class="floor" cx="168.4" cy="196.5" r=".9"/>
+<circle class="floor" cx="195.2" cy="212.0" r=".9"/>
+<circle class="floor" cx="222.1" cy="227.5" r=".9"/>
+<circle class="floor" cx="248.9" cy="243.0" r=".9"/>
+<circle class="floor" cx="275.8" cy="258.5" r=".9"/>
+<circle class="floor" cx="302.6" cy="274.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="289.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="305.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="320.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="336.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="351.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="367.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="382.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="398.0" r=".9"/>
+<circle class="floor" cx="544.2" cy="413.5" r=".9"/>
+<circle class="floor" cx="571.1" cy="429.0" r=".9"/>
+<circle class="floor" cx="597.9" cy="444.5" r=".9"/>
+<circle class="floor" cx="624.8" cy="460.0" r=".9"/>
+<circle class="floor" cx="651.6" cy="475.5" r=".9"/>
+<circle class="floor" cx="678.5" cy="491.0" r=".9"/>
+<circle class="floor" cx="705.3" cy="506.5" r=".9"/>
+<circle class="floor" cx="732.2" cy="522.0" r=".9"/>
+<circle class="floor" cx="141.5" cy="212.0" r=".9"/>
+<circle class="floor" cx="168.4" cy="227.5" r=".9"/>
+<circle class="floor" cx="195.2" cy="243.0" r=".9"/>
+<circle class="floor" cx="222.1" cy="258.5" r=".9"/>
+<circle class="floor" cx="248.9" cy="274.0" r=".9"/>
+<circle class="floor" cx="275.8" cy="289.5" r=".9"/>
+<circle class="floor" cx="302.6" cy="305.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="320.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="336.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="351.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="367.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="382.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="398.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="413.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="429.0" r=".9"/>
+<circle class="floor" cx="544.2" cy="444.5" r=".9"/>
+<circle class="floor" cx="571.1" cy="460.0" r=".9"/>
+<circle class="floor" cx="597.9" cy="475.5" r=".9"/>
+<circle class="floor" cx="624.8" cy="491.0" r=".9"/>
+<circle class="floor" cx="651.6" cy="506.5" r=".9"/>
+<circle class="floor" cx="678.5" cy="522.0" r=".9"/>
+<circle class="floor" cx="705.3" cy="537.5" r=".9"/>
+<circle class="floor" cx="114.7" cy="227.5" r=".9"/>
+<circle class="floor" cx="141.5" cy="243.0" r=".9"/>
+<circle class="floor" cx="168.4" cy="258.5" r=".9"/>
+<circle class="floor" cx="195.2" cy="274.0" r=".9"/>
+<circle class="floor" cx="222.1" cy="289.5" r=".9"/>
+<circle class="floor" cx="248.9" cy="305.0" r=".9"/>
+<circle class="floor" cx="275.8" cy="320.5" r=".9"/>
+<circle class="floor" cx="302.6" cy="336.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="351.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="367.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="382.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="398.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="413.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="429.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="444.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="460.0" r=".9"/>
+<circle class="floor" cx="544.2" cy="475.5" r=".9"/>
+<circle class="floor" cx="571.1" cy="491.0" r=".9"/>
+<circle class="floor" cx="597.9" cy="506.5" r=".9"/>
+<circle class="floor" cx="624.8" cy="522.0" r=".9"/>
+<circle class="floor" cx="651.6" cy="537.5" r=".9"/>
+<circle class="floor" cx="678.5" cy="553.0" r=".9"/>
+<circle class="floor" cx="87.8" cy="243.0" r=".9"/>
+<circle class="floor" cx="114.7" cy="258.5" r=".9"/>
+<circle class="floor" cx="141.5" cy="274.0" r=".9"/>
+<circle class="floor" cx="168.4" cy="289.5" r=".9"/>
+<circle class="floor" cx="195.2" cy="305.0" r=".9"/>
+<circle class="floor" cx="222.1" cy="320.5" r=".9"/>
+<circle class="floor" cx="248.9" cy="336.0" r=".9"/>
+<circle class="floor" cx="275.8" cy="351.5" r=".9"/>
+<circle class="floor" cx="302.6" cy="367.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="382.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="398.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="413.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="429.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="444.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="460.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="475.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="491.0" r=".9"/>
+<circle class="floor" cx="544.2" cy="506.5" r=".9"/>
+<circle class="floor" cx="571.1" cy="522.0" r=".9"/>
+<circle class="floor" cx="597.9" cy="537.5" r=".9"/>
+<circle class="floor" cx="624.8" cy="553.0" r=".9"/>
+<circle class="floor" cx="651.6" cy="568.5" r=".9"/>
+<circle class="floor" cx="61.0" cy="258.5" r=".9"/>
+<circle class="floor" cx="87.8" cy="274.0" r=".9"/>
+<circle class="floor" cx="114.7" cy="289.5" r=".9"/>
+<circle class="floor" cx="141.5" cy="305.0" r=".9"/>
+<circle class="floor" cx="168.4" cy="320.5" r=".9"/>
+<circle class="floor" cx="195.2" cy="336.0" r=".9"/>
+<circle class="floor" cx="222.1" cy="351.5" r=".9"/>
+<circle class="floor" cx="248.9" cy="367.0" r=".9"/>
+<circle class="floor" cx="275.8" cy="382.5" r=".9"/>
+<circle class="floor" cx="302.6" cy="398.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="413.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="429.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="444.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="460.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="475.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="491.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="506.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="522.0" r=".9"/>
+<circle class="floor" cx="544.2" cy="537.5" r=".9"/>
+<circle class="floor" cx="571.1" cy="553.0" r=".9"/>
+<circle class="floor" cx="597.9" cy="568.5" r=".9"/>
+<circle class="floor" cx="624.8" cy="584.0" r=".9"/>
+<circle class="floor" cx="34.1" cy="274.0" r=".9"/>
+<circle class="floor" cx="61.0" cy="289.5" r=".9"/>
+<circle class="floor" cx="87.8" cy="305.0" r=".9"/>
+<circle class="floor" cx="114.7" cy="320.5" r=".9"/>
+<circle class="floor" cx="141.5" cy="336.0" r=".9"/>
+<circle class="floor" cx="168.4" cy="351.5" r=".9"/>
+<circle class="floor" cx="195.2" cy="367.0" r=".9"/>
+<circle class="floor" cx="222.1" cy="382.5" r=".9"/>
+<circle class="floor" cx="248.9" cy="398.0" r=".9"/>
+<circle class="floor" cx="275.8" cy="413.5" r=".9"/>
+<circle class="floor" cx="302.6" cy="429.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="444.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="460.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="475.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="491.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="506.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="522.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="537.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="553.0" r=".9"/>
+<circle class="floor" cx="544.2" cy="568.5" r=".9"/>
+<circle class="floor" cx="571.1" cy="584.0" r=".9"/>
+<circle class="floor" cx="597.9" cy="599.5" r=".9"/>
+<circle class="floor" cx="7.3" cy="289.5" r=".9"/>
+<circle class="floor" cx="34.1" cy="305.0" r=".9"/>
+<circle class="floor" cx="61.0" cy="320.5" r=".9"/>
+<circle class="floor" cx="87.8" cy="336.0" r=".9"/>
+<circle class="floor" cx="114.7" cy="351.5" r=".9"/>
+<circle class="floor" cx="141.5" cy="367.0" r=".9"/>
+<circle class="floor" cx="168.4" cy="382.5" r=".9"/>
+<circle class="floor" cx="195.2" cy="398.0" r=".9"/>
+<circle class="floor" cx="222.1" cy="413.5" r=".9"/>
+<circle class="floor" cx="248.9" cy="429.0" r=".9"/>
+<circle class="floor" cx="275.8" cy="444.5" r=".9"/>
+<circle class="floor" cx="302.6" cy="460.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="475.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="491.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="506.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="522.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="537.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="553.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="568.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="584.0" r=".9"/>
+<circle class="floor" cx="544.2" cy="599.5" r=".9"/>
+<circle class="floor" cx="571.1" cy="615.0" r=".9"/>
+<circle class="floor" cx="-19.5" cy="305.0" r=".9"/>
+<circle class="floor" cx="7.3" cy="320.5" r=".9"/>
+<circle class="floor" cx="34.1" cy="336.0" r=".9"/>
+<circle class="floor" cx="61.0" cy="351.5" r=".9"/>
+<circle class="floor" cx="87.8" cy="367.0" r=".9"/>
+<circle class="floor" cx="114.7" cy="382.5" r=".9"/>
+<circle class="floor" cx="141.5" cy="398.0" r=".9"/>
+<circle class="floor" cx="168.4" cy="413.5" r=".9"/>
+<circle class="floor" cx="195.2" cy="429.0" r=".9"/>
+<circle class="floor" cx="222.1" cy="444.5" r=".9"/>
+<circle class="floor" cx="248.9" cy="460.0" r=".9"/>
+<circle class="floor" cx="275.8" cy="475.5" r=".9"/>
+<circle class="floor" cx="302.6" cy="491.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="506.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="522.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="537.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="553.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="568.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="584.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="599.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="615.0" r=".9"/>
+<circle class="floor" cx="544.2" cy="630.5" r=".9"/>
+<circle class="floor" cx="-46.4" cy="320.5" r=".9"/>
+<circle class="floor" cx="-19.5" cy="336.0" r=".9"/>
+<circle class="floor" cx="7.3" cy="351.5" r=".9"/>
+<circle class="floor" cx="34.1" cy="367.0" r=".9"/>
+<circle class="floor" cx="61.0" cy="382.5" r=".9"/>
+<circle class="floor" cx="87.8" cy="398.0" r=".9"/>
+<circle class="floor" cx="114.7" cy="413.5" r=".9"/>
+<circle class="floor" cx="141.5" cy="429.0" r=".9"/>
+<circle class="floor" cx="168.4" cy="444.5" r=".9"/>
+<circle class="floor" cx="195.2" cy="460.0" r=".9"/>
+<circle class="floor" cx="222.1" cy="475.5" r=".9"/>
+<circle class="floor" cx="248.9" cy="491.0" r=".9"/>
+<circle class="floor" cx="275.8" cy="506.5" r=".9"/>
+<circle class="floor" cx="302.6" cy="522.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="537.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="553.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="568.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="584.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="599.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="615.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="630.5" r=".9"/>
+<circle class="floor" cx="517.4" cy="646.0" r=".9"/>
+<circle class="floor" cx="-73.2" cy="336.0" r=".9"/>
+<circle class="floor" cx="-46.4" cy="351.5" r=".9"/>
+<circle class="floor" cx="-19.5" cy="367.0" r=".9"/>
+<circle class="floor" cx="7.3" cy="382.5" r=".9"/>
+<circle class="floor" cx="34.1" cy="398.0" r=".9"/>
+<circle class="floor" cx="61.0" cy="413.5" r=".9"/>
+<circle class="floor" cx="87.8" cy="429.0" r=".9"/>
+<circle class="floor" cx="114.7" cy="444.5" r=".9"/>
+<circle class="floor" cx="141.5" cy="460.0" r=".9"/>
+<circle class="floor" cx="168.4" cy="475.5" r=".9"/>
+<circle class="floor" cx="195.2" cy="491.0" r=".9"/>
+<circle class="floor" cx="222.1" cy="506.5" r=".9"/>
+<circle class="floor" cx="248.9" cy="522.0" r=".9"/>
+<circle class="floor" cx="275.8" cy="537.5" r=".9"/>
+<circle class="floor" cx="302.6" cy="553.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="568.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="584.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="599.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="615.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="630.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="646.0" r=".9"/>
+<circle class="floor" cx="490.5" cy="661.5" r=".9"/>
+<circle class="floor" cx="-100.1" cy="351.5" r=".9"/>
+<circle class="floor" cx="-73.2" cy="367.0" r=".9"/>
+<circle class="floor" cx="-46.4" cy="382.5" r=".9"/>
+<circle class="floor" cx="-19.5" cy="398.0" r=".9"/>
+<circle class="floor" cx="7.3" cy="413.5" r=".9"/>
+<circle class="floor" cx="34.1" cy="429.0" r=".9"/>
+<circle class="floor" cx="61.0" cy="444.5" r=".9"/>
+<circle class="floor" cx="87.8" cy="460.0" r=".9"/>
+<circle class="floor" cx="114.7" cy="475.5" r=".9"/>
+<circle class="floor" cx="141.5" cy="491.0" r=".9"/>
+<circle class="floor" cx="168.4" cy="506.5" r=".9"/>
+<circle class="floor" cx="195.2" cy="522.0" r=".9"/>
+<circle class="floor" cx="222.1" cy="537.5" r=".9"/>
+<circle class="floor" cx="248.9" cy="553.0" r=".9"/>
+<circle class="floor" cx="275.8" cy="568.5" r=".9"/>
+<circle class="floor" cx="302.6" cy="584.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="599.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="615.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="630.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="646.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="661.5" r=".9"/>
+<circle class="floor" cx="463.7" cy="677.0" r=".9"/>
+<circle class="floor" cx="-126.9" cy="367.0" r=".9"/>
+<circle class="floor" cx="-100.1" cy="382.5" r=".9"/>
+<circle class="floor" cx="-73.2" cy="398.0" r=".9"/>
+<circle class="floor" cx="-46.4" cy="413.5" r=".9"/>
+<circle class="floor" cx="-19.5" cy="429.0" r=".9"/>
+<circle class="floor" cx="7.3" cy="444.5" r=".9"/>
+<circle class="floor" cx="34.1" cy="460.0" r=".9"/>
+<circle class="floor" cx="61.0" cy="475.5" r=".9"/>
+<circle class="floor" cx="87.8" cy="491.0" r=".9"/>
+<circle class="floor" cx="114.7" cy="506.5" r=".9"/>
+<circle class="floor" cx="141.5" cy="522.0" r=".9"/>
+<circle class="floor" cx="168.4" cy="537.5" r=".9"/>
+<circle class="floor" cx="195.2" cy="553.0" r=".9"/>
+<circle class="floor" cx="222.1" cy="568.5" r=".9"/>
+<circle class="floor" cx="248.9" cy="584.0" r=".9"/>
+<circle class="floor" cx="275.8" cy="599.5" r=".9"/>
+<circle class="floor" cx="302.6" cy="615.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="630.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="646.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="661.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="677.0" r=".9"/>
+<circle class="floor" cx="436.8" cy="692.5" r=".9"/>
+<circle class="floor" cx="-153.8" cy="382.5" r=".9"/>
+<circle class="floor" cx="-126.9" cy="398.0" r=".9"/>
+<circle class="floor" cx="-100.1" cy="413.5" r=".9"/>
+<circle class="floor" cx="-73.2" cy="429.0" r=".9"/>
+<circle class="floor" cx="-46.4" cy="444.5" r=".9"/>
+<circle class="floor" cx="-19.5" cy="460.0" r=".9"/>
+<circle class="floor" cx="7.3" cy="475.5" r=".9"/>
+<circle class="floor" cx="34.1" cy="491.0" r=".9"/>
+<circle class="floor" cx="61.0" cy="506.5" r=".9"/>
+<circle class="floor" cx="87.8" cy="522.0" r=".9"/>
+<circle class="floor" cx="114.7" cy="537.5" r=".9"/>
+<circle class="floor" cx="141.5" cy="553.0" r=".9"/>
+<circle class="floor" cx="168.4" cy="568.5" r=".9"/>
+<circle class="floor" cx="195.2" cy="584.0" r=".9"/>
+<circle class="floor" cx="222.1" cy="599.5" r=".9"/>
+<circle class="floor" cx="248.9" cy="615.0" r=".9"/>
+<circle class="floor" cx="275.8" cy="630.5" r=".9"/>
+<circle class="floor" cx="302.6" cy="646.0" r=".9"/>
+<circle class="floor" cx="329.5" cy="661.5" r=".9"/>
+<circle class="floor" cx="356.3" cy="677.0" r=".9"/>
+<circle class="floor" cx="383.2" cy="692.5" r=".9"/>
+<circle class="floor" cx="410.0" cy="708.0" r=".9"/>
+<path class="track" d="M110.7,293.5 L185.8,293.5"/><path class="track" d="M179.5,296.6 L185.8,293.5 L179.5,290.5"/>
+<path class="track" d="M258.3,293.5 L333.5,293.5"/><path class="track" d="M327.2,296.6 L333.5,293.5 L327.2,290.5"/>
+<path class="track" d="M406.0,293.5 L453.0,293.5 L453.0,192.8 L508.0,192.8"/><path class="track" d="M501.7,195.8 L508.0,192.8 L501.7,189.7"/>
+<path class="track" d="M453.0,293.5 L508.0,293.5"/><path class="track" d="M501.7,296.6 L508.0,293.5 L501.7,290.5"/>
+<path class="accent" d="M453.0,293.5 L453.0,402.0 L508.0,402.0"/><path class="accent" d="M501.7,405.1 L508.0,402.0 L501.7,399.0"/>
+<path class="track" d="M580.5,192.8 L635.5,192.8 L635.5,243.2 L669.1,243.2"/><path class="track" d="M662.8,246.2 L669.1,243.2 L662.8,240.1"/>
+<path class="track" d="M580.5,293.5 L635.5,293.5 L635.5,243.2"/>
+<path class="track" d="M741.6,243.2 L857.0,243.2"/><path class="track" d="M850.7,246.2 L857.0,243.2 L850.7,240.1"/>
+<path class="track" d="M724.1,215.3 L724.1,99.8 L222.1,99.8 L222.1,254.8"/><path class="track" d="M219.0,248.5 L222.1,254.8 L225.1,248.5"/>
+<path class="accent" d="M580.5,402.0 L669.1,402.0"/><path class="accent" d="M662.8,405.1 L669.1,402.0 L662.8,399.0"/>
+<path class="accent" d="M580.5,402.0 L669.1,402.0"/>
+<path class="pulse" d="M580.5,402.0 L669.1,402.0"/>
+<path class="sil" d="M540.8,160.1 Q544.2,158.1 547.7,160.1 L575.7,176.2 Q579.1,178.2 579.1,182.2 L579.1,184.8 Q579.1,188.8 575.7,190.8 L547.7,206.9 Q544.2,208.9 540.8,206.9 L512.8,190.8 Q509.3,188.8 509.3,184.8 L509.3,182.2 Q509.3,178.2 512.8,176.2 Z"/><path class="crease" d="M544.2,198.4 L575.9,180.1 M544.2,198.4 L512.6,180.1 M544.2,198.4 L544.2,205.4"/>
+<path class="sil" d="M701.9,210.4 Q705.3,208.4 708.8,210.4 L736.8,226.6 Q740.2,228.6 740.2,232.6 L740.2,235.1 Q740.2,239.1 736.8,241.1 L708.8,257.3 Q705.3,259.3 701.9,257.3 L673.9,241.1 Q670.4,239.1 670.4,235.1 L670.4,232.6 Q670.4,228.6 673.9,226.6 Z"/><path class="crease" d="M705.3,248.7 L737.0,230.4 M705.3,248.7 L673.6,230.4 M705.3,248.7 L705.3,255.8"/>
+<path class="sil" d="M889.8,210.4 Q893.2,208.4 896.7,210.4 L924.7,226.6 Q928.1,228.6 928.1,232.6 L928.1,235.1 Q928.1,239.1 924.7,241.1 L896.7,257.3 Q893.2,259.3 889.8,257.3 L861.8,241.1 Q858.3,239.1 858.3,235.1 L858.3,232.6 Q858.3,228.6 861.8,226.6 Z"/><path class="crease" d="M893.2,248.7 L924.9,230.4 M893.2,248.7 L861.6,230.4 M893.2,248.7 L893.2,255.8"/>
+<path class="sil" d="M71.0,260.8 Q74.4,258.8 77.9,260.8 L105.9,277.0 Q109.3,279.0 109.3,283.0 L109.3,285.5 Q109.3,289.5 105.9,291.5 L77.9,307.6 Q74.4,309.6 71.0,307.6 L43.0,291.5 Q39.5,289.5 39.5,285.5 L39.5,283.0 Q39.5,279.0 43.0,277.0 Z"/><path class="crease" d="M74.4,299.1 L106.1,280.8 M74.4,299.1 L42.7,280.8 M74.4,299.1 L74.4,306.1"/>
+<path class="sil" d="M218.6,260.8 Q222.1,258.8 225.5,260.8 L253.5,277.0 Q257.0,279.0 257.0,283.0 L257.0,285.5 Q257.0,289.5 253.5,291.5 L225.5,307.6 Q222.1,309.6 218.6,307.6 L190.6,291.5 Q187.2,289.5 187.2,285.5 L187.2,283.0 Q187.2,279.0 190.6,277.0 Z"/><path class="crease" d="M222.1,299.1 L253.8,280.8 M222.1,299.1 L190.4,280.8 M222.1,299.1 L222.1,306.1"/>
+<path class="sil" d="M366.3,260.8 Q369.7,258.8 373.2,260.8 L401.2,277.0 Q404.6,279.0 404.6,283.0 L404.6,285.5 Q404.6,289.5 401.2,291.5 L373.2,307.6 Q369.7,309.6 366.3,307.6 L338.3,291.5 Q334.8,289.5 334.8,285.5 L334.8,283.0 Q334.8,279.0 338.3,277.0 Z"/><path class="crease" d="M369.7,299.1 L401.4,280.8 M369.7,299.1 L338.1,280.8 M369.7,299.1 L369.7,306.1"/>
+<path class="sil" d="M540.8,260.8 Q544.2,258.8 547.7,260.8 L575.7,277.0 Q579.1,279.0 579.1,283.0 L579.1,285.5 Q579.1,289.5 575.7,291.5 L547.7,307.6 Q544.2,309.6 540.8,307.6 L512.8,291.5 Q509.3,289.5 509.3,285.5 L509.3,283.0 Q509.3,279.0 512.8,277.0 Z"/><path class="crease" d="M544.2,299.1 L575.9,280.8 M544.2,299.1 L512.6,280.8 M544.2,299.1 L544.2,306.1"/>
+<path class="sil" d="M540.8,369.3 Q544.2,367.3 547.7,369.3 L575.7,385.5 Q579.1,387.5 579.1,391.5 L579.1,394.0 Q579.1,398.0 575.7,400.0 L547.7,416.1 Q544.2,418.1 540.8,416.1 L512.8,400.0 Q509.3,398.0 509.3,394.0 L509.3,391.5 Q509.3,387.5 512.8,385.5 Z"/><path class="crease" d="M544.2,407.6 L575.9,389.3 M544.2,407.6 L512.6,389.3 M544.2,407.6 L544.2,414.6"/>
+<path class="sil" d="M701.9,369.3 Q705.3,367.3 708.8,369.3 L736.8,385.5 Q740.2,387.5 740.2,391.5 L740.2,394.0 Q740.2,398.0 736.8,400.0 L708.8,416.1 Q705.3,418.1 701.9,416.1 L673.9,400.0 Q670.4,398.0 670.4,394.0 L670.4,391.5 Q670.4,387.5 673.9,385.5 Z"/><path class="crease" d="M705.3,407.6 L737.0,389.3 M705.3,407.6 L673.6,389.3 M705.3,407.6 L705.3,414.6"/>
+<text class="tlabel" x="295.9" y="287.1" text-anchor="middle">text</text><text class="tlabel" x="461.0" y="223.3" text-anchor="start">None</text><text class="tlabel" x="461.0" y="356.6" text-anchor="start">submit</text><text class="tlabel" x="799.3" y="236.8" text-anchor="middle">yes</text><text class="tlabel" x="463.7" y="93.4" text-anchor="middle">no: next turn</text><text class="tlabel" x="624.8" y="395.6" text-anchor="middle">grade</text><circle class="dot" cx="74.4" cy="309.6" r="1.8"/><path class="leader" d="M74.4,309.6 L74.4,343.6 L78.4,343.6"/><text x="84.41515603352997" y="347.65" text-anchor="start"><tspan class="num">01  </tspan><tspan class="name">reset(task)</tspan></text><text class="desc" x="84.41515603352997" y="362.65" text-anchor="start">issue text</text><circle class="dot" cx="222.1" cy="279.0" r="1.8"/><path class="leader" d="M222.1,279.0 L222.1,231.0 L226.1,231.0"/><text x="232.0724873787768" y="234.95999999999998" text-anchor="start"><tspan class="num">02  </tspan><tspan class="name">awaiting call</tspan></text><text class="desc" x="232.0724873787768" y="249.95999999999998" text-anchor="start">turn k</text><circle class="dot" cx="369.7" cy="309.6" r="1.8"/><path class="leader" d="M369.7,309.6 L369.7,343.6 L365.7,343.6"/><text x="359.72981872402363" y="347.65" text-anchor="end"><tspan class="num">03  </tspan><tspan class="name">parse_call</tspan></text><text class="desc" x="359.72981872402363" y="362.65" text-anchor="end">grammar check</text><circle class="dot" cx="544.2" cy="178.2" r="1.8"/><path class="leader" d="M544.2,178.2 L544.2,130.2 L548.2,130.2"/><text x="554.233937586588" y="134.21" text-anchor="start"><tspan class="num">04  </tspan><tspan class="name">malformed / unknown</tspan></text><text class="desc" x="554.233937586588" y="149.21" text-anchor="start">error observation</text><circle class="dot" cx="544.2" cy="309.6" r="1.8"/><path class="leader" d="M544.2,309.6 L544.2,343.6 L548.2,343.6"/><text x="554.233937586588" y="347.65" text-anchor="start"><tspan class="num">05  </tspan><tspan class="name">read / test / edit</tspan></text><text class="desc" x="554.233937586588" y="362.65" text-anchor="start">tool observation</text><circle class="dot" cx="544.2" cy="418.1" r="1.8"/><path class="leader" d="M544.2,418.1 L544.2,452.1 L548.2,452.1"/><text x="554.233937586588" y="456.15" text-anchor="start"><tspan class="num">06  </tspan><tspan class="name">submit</tspan></text><text class="desc" x="554.233937586588" y="471.15" text-anchor="start">grade on hidden tests</text><circle class="dot" cx="705.3" cy="259.3" r="1.8"/><path class="leader" d="M705.3,259.3 L705.3,293.3 L709.3,293.3"/><text x="715.3146626904936" y="297.275" text-anchor="start"><tspan class="num">07  </tspan><tspan class="name">turn == max_turns?</tspan></text><text class="desc" x="715.3146626904936" y="312.275" text-anchor="start">budget check</text><circle class="dot" cx="893.2" cy="259.3" r="1.8"/><path class="leader" d="M893.2,259.3 L893.2,293.3 L897.2,293.3"/><text x="903.2421753117168" y="297.275" text-anchor="start"><tspan class="num">08  </tspan><tspan class="name">done: stop=budget</tspan></text><text class="desc" x="903.2421753117168" y="312.275" text-anchor="start">reward 0</text><circle class="dot" cx="705.3" cy="418.1" r="1.8"/><path class="leader" d="M705.3,418.1 L705.3,452.1 L709.3,452.1"/><text x="715.3146626904936" y="456.15" text-anchor="start"><tspan class="num">09  </tspan><tspan class="name">done: stop=submit</tspan></text><text class="desc" x="715.3146626904936" y="471.15" text-anchor="start">reward = reward_fn(info)</text><text class="cap" x="24" y="34" text-anchor="start">FIG 4.1 · THE BUGFIX ENVIRONMENT AS A STATE MACHINE</text><text class="readk" x="24" y="50" text-anchor="start">every call consumes one turn; only submit reaches the hidden-test grader</text><text class="readk" x="1016" y="530" text-anchor="end">info always records public_pass and hidden_pass,</text><text class="readk" x="1016" y="547" text-anchor="end">so the reward can be swapped without touching the tools</text><text class="readk" x="1016" y="564" text-anchor="end">accent: the one path that computes reward</text></svg>

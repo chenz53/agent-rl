@@ -1,0 +1,96 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 940 380" width="940" height="380" role="img" aria-label="Scripted baselines on the BugFix gym (train split)">
+<style>
+svg{--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--neutral:#f0efec;--panel:#f4f3ef;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--s6:#008300;--s7:#6250d6;--s8:#e34948;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme: dark){svg{--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--neutral:#383835;--panel:#232322;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--s7:#9085e9;--s8:#e66767}}
+.bg{fill:var(--surface)} .t{fill:var(--ink)} .t2{fill:var(--ink2)} .m{fill:var(--muted)}
+.title{font-size:15px;font-weight:600;fill:var(--ink)} .sub{font-size:12px;fill:var(--ink2)}
+.lab{font-size:12px;fill:var(--ink2)} .tick{font-size:11px;fill:var(--muted);font-variant-numeric:tabular-nums}
+.grid{stroke:var(--grid);stroke-width:1} .axis{stroke:var(--axis);stroke-width:1}
+.box{fill:var(--panel);stroke:var(--axis);stroke-width:1} .edge{stroke:var(--ink2);stroke-width:1.5;fill:none}
+.ring{stroke:var(--surface);stroke-width:2} .note{font-size:11px;fill:var(--ink2)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--ink2)"/></marker></defs>
+<rect class="bg" width="940" height="380" rx="8"/>
+<text class="title" x="20" y="30">Scripted baselines on the BugFix gym (train split)</text>
+<text class="sub" x="20" y="48">Left: hidden-test reward by family. Right: public pass rate vs hidden reward.</text>
+<line class="grid" x1="64" x2="504.0" y1="328.0" y2="328.0"/>
+<text class="tick" x="58" y="332.0" text-anchor="end">0</text>
+<line class="grid" x1="64" x2="504.0" y1="270.9" y2="270.9"/>
+<text class="tick" x="58" y="274.9" text-anchor="end">0.25</text>
+<line class="grid" x1="64" x2="504.0" y1="213.7" y2="213.7"/>
+<text class="tick" x="58" y="217.7" text-anchor="end">0.5</text>
+<line class="grid" x1="64" x2="504.0" y1="156.6" y2="156.6"/>
+<text class="tick" x="58" y="160.6" text-anchor="end">0.75</text>
+<line class="grid" x1="64" x2="504.0" y1="99.4" y2="99.4"/>
+<text class="tick" x="58" y="103.4" text-anchor="end">1</text>
+<line class="axis" x1="64" x2="504.0" y1="328.0" y2="328.0"/>
+<text class="tick" x="108.0" y="344" text-anchor="middle">minmax</text>
+<text class="tick" x="196.0" y="344" text-anchor="middle">range</text>
+<text class="tick" x="284.0" y="344" text-anchor="middle">compare</text>
+<text class="tick" x="372.0" y="344" text-anchor="middle">zero</text>
+<text class="tick" x="460.0" y="344" text-anchor="middle">init</text>
+<text class="lab" x="284.0" y="362" text-anchor="middle">bug family</text>
+<text class="lab" x="20" y="208.0" text-anchor="middle" transform="rotate(-90 20 208.0)">hidden-test reward</text>
+<clipPath id="clip140157822602224"><rect x="64" y="86" width="440.0" height="244"/></clipPath>
+<path d="M77.2,328.0 V103.4 Q77.2,99.4 81.2,99.4 H87.1 Q91.1,99.4 91.1,103.4 V328.0 Z" fill="var(--s1)"><title>oracle, minmax: 1</title></path>
+<path d="M165.2,328.0 V103.4 Q165.2,99.4 169.2,99.4 H175.1 Q179.1,99.4 179.1,103.4 V328.0 Z" fill="var(--s1)"><title>oracle, range: 1</title></path>
+<path d="M253.2,328.0 V103.4 Q253.2,99.4 257.2,99.4 H263.1 Q267.1,99.4 267.1,103.4 V328.0 Z" fill="var(--s1)"><title>oracle, compare: 1</title></path>
+<path d="M341.2,328.0 V103.4 Q341.2,99.4 345.2,99.4 H351.1 Q355.1,99.4 355.1,103.4 V328.0 Z" fill="var(--s1)"><title>oracle, zero: 1</title></path>
+<path d="M429.2,328.0 V103.4 Q429.2,99.4 433.2,99.4 H439.1 Q443.1,99.4 443.1,103.4 V328.0 Z" fill="var(--s1)"><title>oracle, init: 1</title></path>
+<path d="M93.1,328.0 V277.7 Q93.1,273.7 97.1,273.7 H103.0 Q107.0,273.7 107.0,277.7 V328.0 Z" fill="var(--s3)"><title>blind, minmax: 0.2375</title></path>
+<path d="M181.1,328.0 V287.7 Q181.1,283.7 185.1,283.7 H191.0 Q195.0,283.7 195.0,287.7 V328.0 Z" fill="var(--s3)"><title>blind, range: 0.1938</title></path>
+<path d="M269.1,328.0 V284.9 Q269.1,280.9 273.1,280.9 H279.0 Q283.0,280.9 283.0,284.9 V328.0 Z" fill="var(--s3)"><title>blind, compare: 0.2062</title></path>
+<path d="M357.1,328.0 V282.0 Q357.1,278.0 361.1,278.0 H367.0 Q371.0,278.0 371.0,282.0 V328.0 Z" fill="var(--s3)"><title>blind, zero: 0.2188</title></path>
+<path d="M445.1,328.0 V292.0 Q445.1,288.0 449.1,288.0 H455.0 Q459.0,288.0 459.0,292.0 V328.0 Z" fill="var(--s3)"><title>blind, init: 0.175</title></path>
+<path d="M109.0,328.0 V307.7 Q109.0,303.7 113.0,303.7 H118.9 Q122.9,303.7 122.9,307.7 V328.0 Z" fill="var(--s2)"><title>random, minmax: 0.1062</title></path>
+<path d="M197.0,328.0 V316.3 Q197.0,312.3 201.0,312.3 H206.9 Q210.9,312.3 210.9,316.3 V328.0 Z" fill="var(--s2)"><title>random, range: 0.06875</title></path>
+<path d="M285.0,328.0 V304.9 Q285.0,300.9 289.0,300.9 H294.9 Q298.9,300.9 298.9,304.9 V328.0 Z" fill="var(--s2)"><title>random, compare: 0.1187</title></path>
+<path d="M373.0,328.0 V304.9 Q373.0,300.9 377.0,300.9 H382.9 Q386.9,300.9 386.9,304.9 V328.0 Z" fill="var(--s2)"><title>random, zero: 0.1187</title></path>
+<path d="M461.0,328.0 V312.0 Q461.0,308.0 465.0,308.0 H470.9 Q474.9,308.0 474.9,312.0 V328.0 Z" fill="var(--s2)"><title>random, init: 0.0875</title></path>
+<path d="M124.9,328.0 V328.0 Q124.9,328.0 124.9,328.0 H138.8 Q138.8,328.0 138.8,328.0 V328.0 Z" fill="var(--s8)"><title>hacker, minmax: 0</title></path>
+<path d="M212.9,328.0 V328.0 Q212.9,328.0 212.9,328.0 H226.8 Q226.8,328.0 226.8,328.0 V328.0 Z" fill="var(--s8)"><title>hacker, range: 0</title></path>
+<path d="M300.9,328.0 V328.0 Q300.9,328.0 300.9,328.0 H314.8 Q314.8,328.0 314.8,328.0 V328.0 Z" fill="var(--s8)"><title>hacker, compare: 0</title></path>
+<path d="M388.9,328.0 V328.0 Q388.9,328.0 388.9,328.0 H402.8 Q402.8,328.0 402.8,328.0 V328.0 Z" fill="var(--s8)"><title>hacker, zero: 0</title></path>
+<path d="M476.9,328.0 V328.0 Q476.9,328.0 476.9,328.0 H490.8 Q490.8,328.0 490.8,328.0 V328.0 Z" fill="var(--s8)"><title>hacker, init: 0</title></path>
+<line class="axis" x1="64" x2="504.0" y1="282.3" y2="282.3" stroke-dasharray="4 3"/>
+<text class="note" x="500.0" y="277.3" text-anchor="end">guess 1 of 5 ops</text>
+<line class="grid" x1="628.0" x2="880.0" y1="328.0" y2="328.0"/>
+<text class="tick" x="622.0" y="332.0" text-anchor="end">0</text>
+<line class="grid" x1="628.0" x2="880.0" y1="270.9" y2="270.9"/>
+<text class="tick" x="622.0" y="274.9" text-anchor="end">0.25</text>
+<line class="grid" x1="628.0" x2="880.0" y1="213.7" y2="213.7"/>
+<text class="tick" x="622.0" y="217.7" text-anchor="end">0.5</text>
+<line class="grid" x1="628.0" x2="880.0" y1="156.6" y2="156.6"/>
+<text class="tick" x="622.0" y="160.6" text-anchor="end">0.75</text>
+<line class="grid" x1="628.0" x2="880.0" y1="99.4" y2="99.4"/>
+<text class="tick" x="622.0" y="103.4" text-anchor="end">1</text>
+<line class="axis" x1="628.0" x2="880.0" y1="328.0" y2="328.0"/>
+<text class="tick" x="659.5" y="344" text-anchor="middle">oracle</text>
+<text class="tick" x="722.5" y="344" text-anchor="middle">blind</text>
+<text class="tick" x="785.5" y="344" text-anchor="middle">random</text>
+<text class="tick" x="848.5" y="344" text-anchor="middle">hacker</text>
+<text class="lab" x="754.0" y="362" text-anchor="middle">policy</text>
+<text class="lab" x="584.0" y="208.0" text-anchor="middle" transform="rotate(-90 584.0 208.0)">rate</text>
+<clipPath id="clip140157822564160"><rect x="628.0" y="86" width="252.0" height="244"/></clipPath>
+<path d="M637.5,328.0 V103.4 Q637.5,99.4 641.5,99.4 H654.5 Q658.5,99.4 658.5,103.4 V328.0 Z" fill="var(--s2)"><title>public pass, oracle: 1</title></path>
+<path d="M700.5,328.0 V284.9 Q700.5,280.9 704.5,280.9 H717.5 Q721.5,280.9 721.5,284.9 V328.0 Z" fill="var(--s2)"><title>public pass, blind: 0.2062</title></path>
+<path d="M763.5,328.0 V286.9 Q763.5,282.9 767.5,282.9 H780.5 Q784.5,282.9 784.5,286.9 V328.0 Z" fill="var(--s2)"><title>public pass, random: 0.1975</title></path>
+<path d="M826.5,328.0 V103.4 Q826.5,99.4 830.5,99.4 H843.5 Q847.5,99.4 847.5,103.4 V328.0 Z" fill="var(--s2)"><title>public pass, hacker: 1</title></path>
+<path d="M660.5,328.0 V103.4 Q660.5,99.4 664.5,99.4 H677.5 Q681.5,99.4 681.5,103.4 V328.0 Z" fill="var(--s1)"><title>hidden reward, oracle: 1</title></path>
+<path d="M723.5,328.0 V284.9 Q723.5,280.9 727.5,280.9 H740.5 Q744.5,280.9 744.5,284.9 V328.0 Z" fill="var(--s1)"><title>hidden reward, blind: 0.2062</title></path>
+<path d="M786.5,328.0 V309.1 Q786.5,305.1 790.5,305.1 H803.5 Q807.5,305.1 807.5,309.1 V328.0 Z" fill="var(--s1)"><title>hidden reward, random: 0.1</title></path>
+<path d="M849.5,328.0 V328.0 Q849.5,328.0 849.5,328.0 H870.5 Q870.5,328.0 870.5,328.0 V328.0 Z" fill="var(--s1)"><title>hidden reward, hacker: 0</title></path>
+<rect x="66" y="66" width="12" height="12" rx="3" fill="var(--s1)"/>
+<text class="t2" x="88" y="76" font-size="12" text-anchor="start">oracle</text>
+<rect x="150" y="66" width="12" height="12" rx="3" fill="var(--s3)"/>
+<text class="t2" x="172" y="76" font-size="12" text-anchor="start">blind</text>
+<rect x="227" y="66" width="12" height="12" rx="3" fill="var(--s2)"/>
+<text class="t2" x="249" y="76" font-size="12" text-anchor="start">random</text>
+<rect x="311" y="66" width="12" height="12" rx="3" fill="var(--s8)"/>
+<text class="t2" x="333" y="76" font-size="12" text-anchor="start">hacker</text>
+<rect x="630.0" y="66" width="12" height="12" rx="3" fill="var(--s2)"/>
+<text class="t2" x="652.0" y="76" font-size="12" text-anchor="start">public pass</text>
+<rect x="749.0" y="66" width="12" height="12" rx="3" fill="var(--s1)"/>
+<text class="t2" x="771.0" y="76" font-size="12" text-anchor="start">hidden reward</text>
+</svg>

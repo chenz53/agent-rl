@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" width="1000" height="400" role="img" aria-label="Dynamic sampling: a fuller batch, paid for in rollouts">
+<style>
+svg{--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--neutral:#f0efec;--panel:#f4f3ef;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--s6:#008300;--s7:#6250d6;--s8:#e34948;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme: dark){svg{--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--neutral:#383835;--panel:#232322;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--s7:#9085e9;--s8:#e66767}}
+.bg{fill:var(--surface)} .t{fill:var(--ink)} .t2{fill:var(--ink2)} .m{fill:var(--muted)}
+.title{font-size:15px;font-weight:600;fill:var(--ink)} .sub{font-size:12px;fill:var(--ink2)}
+.lab{font-size:12px;fill:var(--ink2)} .tick{font-size:11px;fill:var(--muted);font-variant-numeric:tabular-nums}
+.grid{stroke:var(--grid);stroke-width:1} .axis{stroke:var(--axis);stroke-width:1}
+.box{fill:var(--panel);stroke:var(--axis);stroke-width:1} .edge{stroke:var(--ink2);stroke-width:1.5;fill:none}
+.ring{stroke:var(--surface);stroke-width:2} .note{font-size:11px;fill:var(--ink2)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--ink2)"/></marker></defs>
+<rect class="bg" width="1000" height="400" rx="8"/>
+<text class="title" x="20" y="30">Dynamic sampling: a fuller batch, paid for in rollouts</text>
+<text class="sub" x="20" y="48">Mean of 3 seeds. Right: training batch reward (5-step mean) against episodes sampled so far.</text>
+<line class="grid" x1="64" x2="440.0" y1="348.0" y2="348.0"/>
+<text class="tick" x="58" y="352.0" text-anchor="end">0</text>
+<line class="grid" x1="64" x2="440.0" y1="296.0" y2="296.0"/>
+<text class="tick" x="58" y="300.0" text-anchor="end">0.2</text>
+<line class="grid" x1="64" x2="440.0" y1="244.0" y2="244.0"/>
+<text class="tick" x="58" y="248.0" text-anchor="end">0.4</text>
+<line class="grid" x1="64" x2="440.0" y1="192.0" y2="192.0"/>
+<text class="tick" x="58" y="196.0" text-anchor="end">0.6</text>
+<line class="grid" x1="64" x2="440.0" y1="140.0" y2="140.0"/>
+<text class="tick" x="58" y="144.0" text-anchor="end">0.8</text>
+<line class="grid" x1="64" x2="440.0" y1="88.0" y2="88.0"/>
+<text class="tick" x="58" y="92.0" text-anchor="end">1</text>
+<line class="axis" x1="64" x2="440.0" y1="348.0" y2="348.0"/>
+<line class="axis" x1="64.0" x2="64.0" y1="348" y2="352"/>
+<text class="tick" x="64.0" y="364" text-anchor="middle">0</text>
+<line class="axis" x1="160.4" x2="160.4" y1="348" y2="352"/>
+<text class="tick" x="160.4" y="364" text-anchor="middle">10</text>
+<line class="axis" x1="256.8" x2="256.8" y1="348" y2="352"/>
+<text class="tick" x="256.8" y="364" text-anchor="middle">20</text>
+<line class="axis" x1="353.2" x2="353.2" y1="348" y2="352"/>
+<text class="tick" x="353.2" y="364" text-anchor="middle">30</text>
+<text class="lab" x="252.0" y="382" text-anchor="middle">step</text>
+<text class="lab" x="20" y="218.0" text-anchor="middle" transform="rotate(-90 20 218.0)">share of zero-advantage groups</text>
+<clipPath id="clip129140927014304"><rect x="64" y="86" width="376.0" height="264"/></clipPath>
+<polyline points="64.0,250.5 73.6,272.2 83.3,304.7 92.9,315.5 102.6,304.7 112.2,315.5 121.8,326.3 131.5,348.0 141.1,337.2 150.8,337.2 160.4,326.3 170.1,337.2 179.7,326.3 189.3,326.3 199.0,304.7 208.6,337.2 218.3,283.0 227.9,315.5 237.5,293.8 247.2,304.7 256.8,293.8 266.5,261.3 276.1,283.0 285.7,261.3 295.4,250.5 305.0,239.7 314.7,261.3 324.3,239.7 333.9,250.5 343.6,218.0 353.2,261.3 362.9,218.0 372.5,218.0 382.2,228.8 391.8,239.7 401.4,261.3 411.1,239.7 420.7,261.3 430.4,196.3 440.0,250.5" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip129140927014304)"/>
+<line class="grid" x1="564.0" x2="940.0" y1="348.0" y2="348.0"/>
+<text class="tick" x="558.0" y="352.0" text-anchor="end">0</text>
+<line class="grid" x1="564.0" x2="940.0" y1="296.0" y2="296.0"/>
+<text class="tick" x="558.0" y="300.0" text-anchor="end">0.2</text>
+<line class="grid" x1="564.0" x2="940.0" y1="244.0" y2="244.0"/>
+<text class="tick" x="558.0" y="248.0" text-anchor="end">0.4</text>
+<line class="grid" x1="564.0" x2="940.0" y1="192.0" y2="192.0"/>
+<text class="tick" x="558.0" y="196.0" text-anchor="end">0.6</text>
+<line class="grid" x1="564.0" x2="940.0" y1="140.0" y2="140.0"/>
+<text class="tick" x="558.0" y="144.0" text-anchor="end">0.8</text>
+<line class="grid" x1="564.0" x2="940.0" y1="88.0" y2="88.0"/>
+<text class="tick" x="558.0" y="92.0" text-anchor="end">1</text>
+<line class="axis" x1="564.0" x2="940.0" y1="348.0" y2="348.0"/>
+<line class="axis" x1="636.7" x2="636.7" y1="348" y2="352"/>
+<text class="tick" x="636.7" y="364" text-anchor="middle">1</text>
+<line class="axis" x1="714.3" x2="714.3" y1="348" y2="352"/>
+<text class="tick" x="714.3" y="364" text-anchor="middle">2</text>
+<line class="axis" x1="792.0" x2="792.0" y1="348" y2="352"/>
+<text class="tick" x="792.0" y="364" text-anchor="middle">3</text>
+<line class="axis" x1="869.6" x2="869.6" y1="348" y2="352"/>
+<text class="tick" x="869.6" y="364" text-anchor="middle">4</text>
+<text class="lab" x="752.0" y="382" text-anchor="middle">episodes sampled (thousands)</text>
+<text class="lab" x="520.0" y="218.0" text-anchor="middle" transform="rotate(-90 520.0 218.0)">batch reward</text>
+<clipPath id="clip129140931490160"><rect x="564.0" y="86" width="376.0" height="264"/></clipPath>
+<polyline points="564.0,308.7 569.0,306.0 573.9,298.3 578.9,293.2 583.9,294.4 588.8,287.9 593.8,281.6 598.8,276.5 603.8,271.4 608.7,260.8 613.7,251.6 618.7,241.8 623.6,234.2 628.6,226.4 633.6,216.1 638.5,211.8 643.5,206.4 648.5,194.4 653.4,190.4 658.4,186.6 663.4,174.1 668.4,168.4 673.3,164.6 678.3,156.5 683.3,151.1 688.2,155.2 693.2,149.2 698.2,148.1 703.1,144.6 708.1,142.7 713.1,141.1 718.0,142.4 723.0,145.4 728.0,145.4 733.0,143.0 737.9,141.4 742.9,140.5 747.9,139.5 752.8,135.7 757.8,138.4" fill="none" stroke="var(--s2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip129140931490160)"/>
+<polyline points="569.0,304.7 580.6,304.0 590.5,303.3 600.4,297.9 608.7,294.2 615.3,287.6 622.0,279.3 630.3,272.6 638.5,264.4 645.2,255.6 651.8,249.4 656.8,240.6 665.0,235.9 673.3,230.1 678.3,227.3 688.2,217.3 696.5,214.8 704.8,202.6 713.1,197.4 721.4,186.0 731.3,182.5 741.2,174.8 751.2,167.5 761.1,163.6 771.0,161.4 781.0,157.5 790.9,153.7 800.9,153.9 810.8,150.4 820.7,150.0 830.7,146.1 843.9,143.5 853.9,141.5 865.5,138.1 877.1,130.3 890.3,129.9 900.2,126.5 913.5,124.6 926.7,122.6 940.0,124.9" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip129140931490160)"/>
+<line x1="564.0" x2="582.0" y1="72" y2="72" stroke="var(--s2)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="588.0" y="76" font-size="12" text-anchor="start">default</text>
+<line x1="655.0" x2="673.0" y1="72" y2="72" stroke="var(--s1)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="679.0" y="76" font-size="12" text-anchor="start">dynamic sampling</text>
+</svg>

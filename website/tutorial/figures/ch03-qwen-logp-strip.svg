@@ -1,0 +1,124 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 300" width="1000" height="300" role="img" aria-label="Qwen3-0.6B log-probability of each token of clamp">
+<style>
+svg{--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--neutral:#f0efec;--panel:#f4f3ef;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--s6:#008300;--s7:#6250d6;--s8:#e34948;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme: dark){svg{--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--neutral:#383835;--panel:#232322;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--s7:#9085e9;--s8:#e66767}}
+.bg{fill:var(--surface)} .t{fill:var(--ink)} .t2{fill:var(--ink2)} .m{fill:var(--muted)}
+.title{font-size:15px;font-weight:600;fill:var(--ink)} .sub{font-size:12px;fill:var(--ink2)}
+.lab{font-size:12px;fill:var(--ink2)} .tick{font-size:11px;fill:var(--muted);font-variant-numeric:tabular-nums}
+.grid{stroke:var(--grid);stroke-width:1} .axis{stroke:var(--axis);stroke-width:1}
+.box{fill:var(--panel);stroke:var(--axis);stroke-width:1} .edge{stroke:var(--ink2);stroke-width:1.5;fill:none}
+.ring{stroke:var(--surface);stroke-width:2} .note{font-size:11px;fill:var(--ink2)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--ink2)"/></marker></defs>
+<rect class="bg" width="1000" height="300" rx="8"/>
+<text class="title" x="20" y="30">Qwen3-0.6B log-probability of each token of clamp</text>
+<text class="sub" x="20" y="48">Cells show log pi(token | prefix); darker = less likely. Ġ (space) shown as ·, Ċ (newline) as ⏎.</text>
+<text class="t" x="20" y="110" font-size="12" text-anchor="start" font-weight="600">buggy</text>
+<text class="t2" x="20" y="126" font-size="11" text-anchor="start">sum -41.0</text>
+<rect x="90.0" y="90" width="56.4" height="30" rx="4" fill="#0d366b"><title>·clamp: log-prob -13.44</title></rect>
+<text class="t mono" x="118.2" y="103" font-size="11" text-anchor="middle" style="fill:#ffffff">·clamp</text>
+<text class="t" x="118.2" y="115" font-size="9" text-anchor="middle" style="fill:#ffffff">-13.4</text>
+<rect x="148.4" y="90" width="56.4" height="30" rx="4" fill="#b7d3f6"><title>(value: log-prob -0.64</title></rect>
+<text class="t mono" x="176.60000000000002" y="103" font-size="11" text-anchor="middle" style="fill:#0b0b0b">(value</text>
+<text class="t" x="176.60000000000002" y="115" font-size="9" text-anchor="middle" style="fill:#52514e">-0.6</text>
+<rect x="206.8" y="90" width="30.0" height="30" rx="4" fill="#cde2fb"><title>,: log-prob -0.01</title></rect>
+<text class="t mono" x="221.8" y="103" font-size="11" text-anchor="middle" style="fill:#0b0b0b">,</text>
+<text class="t" x="221.8" y="115" font-size="9" text-anchor="middle" style="fill:#52514e">-0.0</text>
+<rect x="238.8" y="90" width="56.4" height="30" rx="4" fill="#5598e7"><title>·lower: log-prob -3.09</title></rect>
+<text class="t mono" x="267.0" y="103" font-size="11" text-anchor="middle" style="fill:#0b0b0b">·lower</text>
+<text class="t" x="267.0" y="115" font-size="9" text-anchor="middle" style="fill:#52514e">-3.1</text>
+<rect x="297.2" y="90" width="30.0" height="30" rx="4" fill="#cde2fb"><title>,: log-prob -0.05</title></rect>
+<text class="t mono" x="312.20000000000005" y="103" font-size="11" text-anchor="middle" style="fill:#0b0b0b">,</text>
+<text class="t" x="312.20000000000005" y="115" font-size="9" text-anchor="middle" style="fill:#52514e">-0.1</text>
+<rect x="329.2" y="90" width="56.4" height="30" rx="4" fill="#cde2fb"><title>·upper: log-prob -0.00</title></rect>
+<text class="t mono" x="357.40000000000003" y="103" font-size="11" text-anchor="middle" style="fill:#0b0b0b">·upper</text>
+<text class="t" x="357.40000000000003" y="115" font-size="9" text-anchor="middle" style="fill:#52514e">-0.0</text>
+<rect x="387.6" y="90" width="34.2" height="30" rx="4" fill="#9ec5f4"><title>):⏎: log-prob -1.29</title></rect>
+<text class="t mono" x="404.70000000000005" y="103" font-size="11" text-anchor="middle" style="fill:#0b0b0b">):⏎</text>
+<text class="t" x="404.70000000000005" y="115" font-size="9" text-anchor="middle" style="fill:#52514e">-1.3</text>
+<rect x="423.8" y="90" width="34.2" height="30" rx="4" fill="#cde2fb"><title>···: log-prob -0.00</title></rect>
+<text class="t mono" x="440.90000000000003" y="103" font-size="11" text-anchor="middle" style="fill:#0b0b0b">···</text>
+<text class="t" x="440.90000000000003" y="115" font-size="9" text-anchor="middle" style="fill:#52514e">-0.0</text>
+<rect x="90.0" y="126" width="63.8" height="30" rx="4" fill="#b7d3f6"><title>·return: log-prob -0.86</title></rect>
+<text class="t mono" x="121.9" y="139" font-size="11" text-anchor="middle" style="fill:#0b0b0b">·return</text>
+<text class="t" x="121.9" y="151" font-size="9" text-anchor="middle" style="fill:#52514e">-0.9</text>
+<rect x="155.8" y="126" width="41.6" height="30" rx="4" fill="#3987e5"><title>·min: log-prob -4.03</title></rect>
+<text class="t mono" x="176.60000000000002" y="139" font-size="11" text-anchor="middle" style="fill:#0b0b0b">·min</text>
+<text class="t" x="176.60000000000002" y="151" font-size="9" text-anchor="middle" style="fill:#52514e">-4.0</text>
+<rect x="199.4" y="126" width="56.4" height="30" rx="4" fill="#256abf"><title>(lower: log-prob -5.17</title></rect>
+<text class="t mono" x="227.60000000000002" y="139" font-size="11" text-anchor="middle" style="fill:#ffffff">(lower</text>
+<text class="t" x="227.60000000000002" y="151" font-size="9" text-anchor="middle" style="fill:#ffffff">-5.2</text>
+<rect x="257.8" y="126" width="30.0" height="30" rx="4" fill="#cde2fb"><title>,: log-prob -0.02</title></rect>
+<text class="t mono" x="272.8" y="139" font-size="11" text-anchor="middle" style="fill:#0b0b0b">,</text>
+<text class="t" x="272.8" y="151" font-size="9" text-anchor="middle" style="fill:#52514e">-0.0</text>
+<rect x="289.8" y="126" width="41.6" height="30" rx="4" fill="#3987e5"><title>·max: log-prob -3.74</title></rect>
+<text class="t mono" x="310.6" y="139" font-size="11" text-anchor="middle" style="fill:#0b0b0b">·max</text>
+<text class="t" x="310.6" y="151" font-size="9" text-anchor="middle" style="fill:#52514e">-3.7</text>
+<rect x="333.4" y="126" width="56.4" height="30" rx="4" fill="#3987e5"><title>(value: log-prob -3.79</title></rect>
+<text class="t mono" x="361.6" y="139" font-size="11" text-anchor="middle" style="fill:#0b0b0b">(value</text>
+<text class="t" x="361.6" y="151" font-size="9" text-anchor="middle" style="fill:#52514e">-3.8</text>
+<rect x="391.8" y="126" width="30.0" height="30" rx="4" fill="#cde2fb"><title>,: log-prob -0.00</title></rect>
+<text class="t mono" x="406.80000000000007" y="139" font-size="11" text-anchor="middle" style="fill:#0b0b0b">,</text>
+<text class="t" x="406.80000000000007" y="151" font-size="9" text-anchor="middle" style="fill:#52514e">-0.0</text>
+<rect x="423.8" y="126" width="56.4" height="30" rx="4" fill="#cde2fb"><title>·upper: log-prob -0.00</title></rect>
+<text class="t mono" x="452.00000000000006" y="139" font-size="11" text-anchor="middle" style="fill:#0b0b0b">·upper</text>
+<text class="t" x="452.00000000000006" y="151" font-size="9" text-anchor="middle" style="fill:#52514e">-0.0</text>
+<rect x="482.2" y="126" width="34.2" height="30" rx="4" fill="#2a78d6"><title>))⏎: log-prob -4.82</title></rect>
+<text class="t mono" x="499.30000000000007" y="139" font-size="11" text-anchor="middle" style="fill:#ffffff">))⏎</text>
+<text class="t" x="499.30000000000007" y="151" font-size="9" text-anchor="middle" style="fill:#ffffff">-4.8</text>
+<text class="t" x="20" y="202" font-size="12" text-anchor="start" font-weight="600">fixed</text>
+<text class="t2" x="20" y="218" font-size="11" text-anchor="start">sum -30.3</text>
+<rect x="90.0" y="182" width="56.4" height="30" rx="4" fill="#0d366b"><title>·clamp: log-prob -13.44</title></rect>
+<text class="t mono" x="118.2" y="195" font-size="11" text-anchor="middle" style="fill:#ffffff">·clamp</text>
+<text class="t" x="118.2" y="207" font-size="9" text-anchor="middle" style="fill:#ffffff">-13.4</text>
+<rect x="148.4" y="182" width="56.4" height="30" rx="4" fill="#b7d3f6"><title>(value: log-prob -0.64</title></rect>
+<text class="t mono" x="176.60000000000002" y="195" font-size="11" text-anchor="middle" style="fill:#0b0b0b">(value</text>
+<text class="t" x="176.60000000000002" y="207" font-size="9" text-anchor="middle" style="fill:#52514e">-0.6</text>
+<rect x="206.8" y="182" width="30.0" height="30" rx="4" fill="#cde2fb"><title>,: log-prob -0.01</title></rect>
+<text class="t mono" x="221.8" y="195" font-size="11" text-anchor="middle" style="fill:#0b0b0b">,</text>
+<text class="t" x="221.8" y="207" font-size="9" text-anchor="middle" style="fill:#52514e">-0.0</text>
+<rect x="238.8" y="182" width="56.4" height="30" rx="4" fill="#5598e7"><title>·lower: log-prob -3.09</title></rect>
+<text class="t mono" x="267.0" y="195" font-size="11" text-anchor="middle" style="fill:#0b0b0b">·lower</text>
+<text class="t" x="267.0" y="207" font-size="9" text-anchor="middle" style="fill:#52514e">-3.1</text>
+<rect x="297.2" y="182" width="30.0" height="30" rx="4" fill="#cde2fb"><title>,: log-prob -0.05</title></rect>
+<text class="t mono" x="312.20000000000005" y="195" font-size="11" text-anchor="middle" style="fill:#0b0b0b">,</text>
+<text class="t" x="312.20000000000005" y="207" font-size="9" text-anchor="middle" style="fill:#52514e">-0.1</text>
+<rect x="329.2" y="182" width="56.4" height="30" rx="4" fill="#cde2fb"><title>·upper: log-prob -0.00</title></rect>
+<text class="t mono" x="357.40000000000003" y="195" font-size="11" text-anchor="middle" style="fill:#0b0b0b">·upper</text>
+<text class="t" x="357.40000000000003" y="207" font-size="9" text-anchor="middle" style="fill:#52514e">-0.0</text>
+<rect x="387.6" y="182" width="34.2" height="30" rx="4" fill="#9ec5f4"><title>):⏎: log-prob -1.29</title></rect>
+<text class="t mono" x="404.70000000000005" y="195" font-size="11" text-anchor="middle" style="fill:#0b0b0b">):⏎</text>
+<text class="t" x="404.70000000000005" y="207" font-size="9" text-anchor="middle" style="fill:#52514e">-1.3</text>
+<rect x="423.8" y="182" width="34.2" height="30" rx="4" fill="#cde2fb"><title>···: log-prob -0.00</title></rect>
+<text class="t mono" x="440.90000000000003" y="195" font-size="11" text-anchor="middle" style="fill:#0b0b0b">···</text>
+<text class="t" x="440.90000000000003" y="207" font-size="9" text-anchor="middle" style="fill:#52514e">-0.0</text>
+<rect x="90.0" y="218" width="63.8" height="30" rx="4" fill="#b7d3f6"><title>·return: log-prob -0.86</title></rect>
+<text class="t mono" x="121.9" y="231" font-size="11" text-anchor="middle" style="fill:#0b0b0b">·return</text>
+<text class="t" x="121.9" y="243" font-size="9" text-anchor="middle" style="fill:#52514e">-0.9</text>
+<rect x="155.8" y="218" width="41.6" height="30" rx="4" fill="#b7d3f6"><title>·max: log-prob -0.90</title></rect>
+<text class="t mono" x="176.60000000000002" y="231" font-size="11" text-anchor="middle" style="fill:#0b0b0b">·max</text>
+<text class="t" x="176.60000000000002" y="243" font-size="9" text-anchor="middle" style="fill:#52514e">-0.9</text>
+<rect x="199.4" y="218" width="56.4" height="30" rx="4" fill="#cde2fb"><title>(lower: log-prob -0.26</title></rect>
+<text class="t mono" x="227.60000000000002" y="231" font-size="11" text-anchor="middle" style="fill:#0b0b0b">(lower</text>
+<text class="t" x="227.60000000000002" y="243" font-size="9" text-anchor="middle" style="fill:#52514e">-0.3</text>
+<rect x="257.8" y="218" width="30.0" height="30" rx="4" fill="#cde2fb"><title>,: log-prob -0.00</title></rect>
+<text class="t mono" x="272.8" y="231" font-size="11" text-anchor="middle" style="fill:#0b0b0b">,</text>
+<text class="t" x="272.8" y="243" font-size="9" text-anchor="middle" style="fill:#52514e">-0.0</text>
+<rect x="289.8" y="218" width="41.6" height="30" rx="4" fill="#cde2fb"><title>·min: log-prob -0.06</title></rect>
+<text class="t mono" x="310.6" y="231" font-size="11" text-anchor="middle" style="fill:#0b0b0b">·min</text>
+<text class="t" x="310.6" y="243" font-size="9" text-anchor="middle" style="fill:#52514e">-0.1</text>
+<rect x="333.4" y="218" width="56.4" height="30" rx="4" fill="#5598e7"><title>(value: log-prob -3.22</title></rect>
+<text class="t mono" x="361.6" y="231" font-size="11" text-anchor="middle" style="fill:#0b0b0b">(value</text>
+<text class="t" x="361.6" y="243" font-size="9" text-anchor="middle" style="fill:#52514e">-3.2</text>
+<rect x="391.8" y="218" width="30.0" height="30" rx="4" fill="#cde2fb"><title>,: log-prob -0.00</title></rect>
+<text class="t mono" x="406.80000000000007" y="231" font-size="11" text-anchor="middle" style="fill:#0b0b0b">,</text>
+<text class="t" x="406.80000000000007" y="243" font-size="9" text-anchor="middle" style="fill:#52514e">-0.0</text>
+<rect x="423.8" y="218" width="56.4" height="30" rx="4" fill="#cde2fb"><title>·upper: log-prob -0.00</title></rect>
+<text class="t mono" x="452.00000000000006" y="231" font-size="11" text-anchor="middle" style="fill:#0b0b0b">·upper</text>
+<text class="t" x="452.00000000000006" y="243" font-size="9" text-anchor="middle" style="fill:#52514e">-0.0</text>
+<rect x="482.2" y="218" width="34.2" height="30" rx="4" fill="#184f95"><title>))⏎: log-prob -6.48</title></rect>
+<text class="t mono" x="499.30000000000007" y="231" font-size="11" text-anchor="middle" style="fill:#ffffff">))⏎</text>
+<text class="t" x="499.30000000000007" y="243" font-size="9" text-anchor="middle" style="fill:#ffffff">-6.5</text>
+<text class="t2" x="90" y="284" font-size="11" text-anchor="start">first token &quot;def&quot; has no prefix and is not scored</text>
+</svg>

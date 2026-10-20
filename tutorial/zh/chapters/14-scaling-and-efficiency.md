@@ -1,0 +1,550 @@
+# 14. 规模扩展与效率
+
+[第 13 章](13-rollout-systems.md)安排了 RL 系统的各个组件，让硬件保持忙碌。本章讨论忙碌的硬件把时间和内存花在了什么上。这些答案不如目标函数那样引人注目，却更常是一次运行失败的原因：被计算出来又被丢弃的填充（padding）token，一条把微批次（microbatch）撑爆内存的 60k token 轨迹（trajectory），一个比模型本身还大的 logits 张量，一个在微批次大小改变时悄然改变的梯度，以及花在策略（policy）总能解决的任务上的 rollout。它们每一个既是成本问题，也是正确性问题，因为每种修复（打包、token 预算、分块、梯度累积、过滤）如果做错，都可能改变梯度。
+
+我们构建并保存四个工具：带有正确块对角注意力掩码的序列打包（packing）、token 预算微批次、带检查点的分块对数概率（log-probability），以及针对任务分布的通过率过滤。每个工具都与它所替代的直接计算进行核对，本章最后给出把 token 数换算成 GPU 小时的算术。
+
+```python
+#@save
+import torch
+from torch.utils.checkpoint import checkpoint
+import agentrl as arl
+```
+
+```python
+import copy
+torch.set_num_threads(4)                       # the shared check host is heavily loaded
+tok = arl.build_tokenizer(arl.make_tasks('all'))
+train_tasks, heldout_tasks = arl.make_tasks('train'), arl.make_tasks('heldout')
+rl_base = arl.make_rl_base(tok)
+cfg = arl.RLConfig()
+trajs = arl.sample_groups(rl_base, lambda: arl.make_env(cfg), train_tasks[:8], tok, cfg,
+                          torch.Generator().manual_seed(0))                     # 64 real episodes
+```
+
+## 14.1 填充及其浪费
+
+`collate` 把一个批次中的每个回合（episode）都填充到最长回合的长度。仅从长度就能看出代价：一个填充后的批次要计算 $B \cdot T_{\max}$ 个位置，其中真实的只有 $\sum_i T_i$ 个。
+
+```python
+lengths = torch.tensor([len(t.ids) for t in trajs])                            # [64] tokens per episode
+real, padded = lengths.sum().item(), len(lengths) * lengths.max().item()
+q = lengths.float().quantile(torch.tensor([0.5, 0.9]))
+print(f'episode tokens: min {lengths.min()} | median {q[0]:.0f} | p90 {q[1]:.0f} | max {lengths.max()}')
+print(f'padded batch: {padded} positions for {real} real tokens -> {1 - real / padded:.0%} of compute is padding')
+```
+
+Output:
+
+```text
+episode tokens: min 10 | median 18 | p90 79 | max 149
+padded batch: 9536 positions for 2472 real tokens -> 74% of compute is padding
+```
+
+TinyAgent 的回合长度从 10 个 token（立即提交）到 149 个（包含多次观测的长回合），中位数为 18。把它们全部填充到 149，要为 2,472 个真实 token 计算 9,536 个位置，因此前向和反向传播中有 74% 花在了填充上。智能体（agent）轨迹在任何规模上都有这种形状：大多数回合很短，少数很长，而长回合决定了批次的宽度。
+
+**序列打包**把多条序列拼接到一个固定长度的行中，把各行填得几乎满。它消除了浪费，同时也引入了两种算错的方式。在打包的行中，第二条序列的 token 位于第一条序列的 token 之后。普通的因果掩码允许它关注前面的 token，于是它的对数概率以一个不相关的回合为条件：这就是**注意力泄漏**（attention leak）。此外，在使用绝对位置或旋转位置编码时，它的位置索引会从第一条序列接着往下数，而不是从 0 开始。正确的打包需要一个**块对角因果掩码**（block-diagonal causal mask，token 只关注自己序列中更早的 token），以及在每个序列边界处**重新开始的位置 id**。FlashAttention 的变长接口等打包训练 kernel 接收的是以累积序列长度表示的边界，而不是掩码；计算是相同的。
+
+`pack_sequences` 用首次适应递减（first-fit decreasing）把轨迹放入长度为 `max_tokens` 的行：最长的先放，每条放进第一个有空间的行。它返回打包后的 id、逐 token 的位置 id 和段 id（序列在所在行中的索引，填充为 $-1$），以及与 `collate` 相同 `[R, L-1]` 布局的动作掩码（action mask）和采样器对数概率。一条序列的最后一个位置不为自己预测任何东西，因此本会预测下一条序列第一个 token 的那个掩码项保持为 0。
+
+```python
+#@save
+def pack_sequences(trajs, max_tokens, pad_id=0):
+    """First-fit-decreasing packing of Trajectory objects into rows of max_tokens -> dict of [R, L] / [R, L-1]."""
+    rows, used = [], []
+    for i in sorted(range(len(trajs)), key=lambda i: -len(trajs[i].ids)):
+        n = len(trajs[i].ids)
+        if n > max_tokens:
+            raise ValueError(f'trajectory of {n} tokens does not fit in a row of {max_tokens}')
+        r = next((r for r, u in enumerate(used) if u + n <= max_tokens), None)
+        if r is None:
+            rows.append([]), used.append(0)
+            r = len(rows) - 1
+        rows[r].append(i)
+        used[r] += n
+    R = len(rows)
+    out = dict(ids=torch.full((R, max_tokens), pad_id), position_ids=torch.zeros(R, max_tokens, dtype=torch.long),
+               segment_ids=torch.full((R, max_tokens), -1), action_mask=torch.zeros(R, max_tokens - 1),
+               sample_logp=torch.zeros(R, max_tokens - 1), rows=rows)
+    for r, members in enumerate(rows):
+        offset = 0
+        for k, i in enumerate(members):
+            t, n = trajs[i], len(trajs[i].ids)
+            out['ids'][r, offset:offset + n] = t.ids
+            out['position_ids'][r, offset:offset + n] = torch.arange(n)       # positions restart per sequence
+            out['segment_ids'][r, offset:offset + n] = k
+            out['action_mask'][r, offset:offset + n - 1] = t.action_mask     # last position predicts nothing
+            out['sample_logp'][r, offset:offset + n - 1] = t.sample_logp
+            offset += n
+    return out
+```
+
+TinyAgent 的 `forward` 根据序列长度自行构建因果掩码，所以打包后的前向传播必须由各个部件拼装：token 嵌入加上给定位置 id 处的位置嵌入，带显式掩码的 transformer 块，最终的归一化层和输出头。`packed_logits` 根据段 id 构建掩码：如果 $i \le j$ 且两者属于同一段，位置 $j$ 就可以关注位置 $i$。PyTorch 的注意力接受形状为 `[R * n_heads, L, L]` 的浮点张量作为逐行掩码，禁止关注的位置为 $-\infty$。填充位置只关注自身，所以 softmax 的每一行都不为空。
+
+```python
+#@save
+def packed_logits(model, ids, position_ids, segment_ids):
+    """TinyAgent forward on packed rows with a block-diagonal causal mask: ids [R, L] -> logits [R, L, V]."""
+    L = ids.shape[1]
+    h = model.tok_emb(ids) + model.pos_emb(position_ids)                             # [R, L, D]
+    causal = torch.ones(L, L, dtype=torch.bool).tril()                               # [L, L]
+    allowed = causal & (segment_ids[:, :, None] == segment_ids[:, None, :])          # [R, L, L] same segment
+    allowed |= torch.eye(L, dtype=torch.bool)                                        # padding sees itself
+    mask = torch.zeros(allowed.shape).masked_fill(~allowed, float('-inf'))
+    mask = mask.repeat_interleave(model.blocks.layers[0].self_attn.num_heads, dim=0) # [R * heads, L, L]
+    return model.head(model.norm(model.blocks(h, mask=mask)))
+```
+
+我们把 64 个回合打包进长度为 256 个 token（TinyAgent 的最大长度）的行中，并把每个策略 token 的打包对数概率与每个回合单独运行时的结果比较。三个变体分别展示两个 bug 和修复。
+
+```python
+packed = pack_sequences(trajs, 256, tok.pad_id)
+print(f'{len(trajs)} episodes -> {len(packed["rows"])} rows of 256 | fill {(packed["segment_ids"] >= 0).float().mean():.1%}')
+mask = packed['action_mask']                                                         # [R, L-1]
+with torch.no_grad():
+    alone = arl.pad_rows([arl.sequence_log_probs(rl_base, t.ids[None])[0] for t in trajs], 255, 0.0)
+    reference = torch.zeros_like(mask)                                               # alone, in packed layout
+    for r, members in enumerate(packed['rows']):
+        offset = 0
+        for i in members:
+            n = len(trajs[i].ids)
+            reference[r, offset:offset + n - 1] = alone[i, :n - 1]
+            offset += n
+    variants = {'causal mask, running positions': (torch.arange(256).expand_as(packed['ids']), 0 * packed['segment_ids']),
+                'causal mask, restarted positions': (packed['position_ids'], 0 * packed['segment_ids']),
+                'block mask, restarted positions': (packed['position_ids'], packed['segment_ids'])}
+    for name, (pos, seg) in variants.items():
+        logp = arl.selected_log_probs(packed_logits(rl_base, packed['ids'], pos, seg)[:, :-1], packed['ids'][:, 1:])
+        err = ((logp - reference).abs() * mask).max().item()
+        print(f'{name:<34} max |packed - alone| on policy tokens: {err:.1e} nats')
+```
+
+Output:
+
+```text
+64 episodes -> 10 rows of 256 | fill 96.6%
+causal mask, running positions     max |packed - alone| on policy tokens: 6.4e+00 nats
+causal mask, restarted positions   max |packed - alone| on policy tokens: 1.7e+00 nats
+block mask, restarted positions    max |packed - alone| on policy tokens: 1.4e-06 nats
+```
+
+打包把 64 个回合放进 10 行，填充率为 96.6%，而填充批次中真实 token 只占 26%。使用普通因果掩码、位置贯穿整行时，策略 token 的对数概率与未打包时相差最多 6.4 nats，概率上约差 600 倍。重置位置修复了一部分；仅通过注意力的泄漏仍会让某些对数概率偏移 1.7 nats。使用块掩码并重置位置后，打包计算与未打包计算的差异在 $1.4 \times 10^{-6}$ 以内，即 float32 的舍入误差。泄漏版本不会大声报错：形状是对的，损失是有限的，训练在错误的条件分布上继续进行。
+
+![图 14.1：同样 64 个 TinyAgent 回合的两种布局：填充批次（左，每个回合一行，填充到最长回合）与打包进 256 token 的行（右）。蓝色：策略 token；水绿色：提示、模板和工具 token；灰色：填充。](../../figures/ch14-packing.svg)
+
+图 14.1 以相同比例绘制了两种布局，因此面积就是计算量。填充批次大部分是灰色；打包后的行几乎是实心的。打包行中的深色刻度是块掩码必须遵守的序列边界。
+
+## 14.2 Token 预算与长度均衡的微批次
+
+打包解决了行内的浪费；下一个问题是一个微批次里放多少条序列。每个微批次固定序列**条数**，会让内存与恰好落入其中的最长序列成正比。智能体轨迹有长尾，所以固定条数要么在大多数微批次上浪费内存，要么在运气不好的那个上内存溢出。**token 预算**固定的则是内存真正依赖的量：每个微批次容纳尽可能多的序列，只要总填充位置不超过 `max_tokens`。先按长度排序（**长度均衡**的微批次）可以让长度相近的序列放在一起，进一步减少填充。
+
+```python
+#@save
+def token_budget_batches(lengths, max_tokens):
+    """Group sequence indices into microbatches whose padded size (count * longest) <= max_tokens -> list of lists."""
+    order = sorted(range(len(lengths)), key=lambda i: -int(lengths[i]))
+    batches, current = [], []
+    for i in order:                                   # longest first: the first member sets the padded width
+        if current and (len(current) + 1) * int(lengths[current[0]]) > max_tokens:
+            batches.append(current)
+            current = []
+        current.append(i)
+    return batches + ([current] if current else [])
+```
+
+TinyAgent 的回合过于均匀，显示不出这种效果，因此我们使用一种典型的智能体轨迹长尾长度分布：中位数为 8k token 的对数正态分布，在 64k 上下文处截顶。三种方案看到的是同样的 512 条轨迹。对每种方案，我们报告微批次数量（反向传播步数的代理指标）、填充位置所占比例，以及按填充 token 计最大的微批次，它决定了激活内存的峰值。
+
+```python
+gen = torch.Generator().manual_seed(0)
+agent_lengths = (8192 * torch.exp(0.8 * torch.randn(512, generator=gen))).clamp(256, 65_536).long()   # [512]
+def describe(name, batches):
+    sizes = [len(b) * int(agent_lengths[b].max()) for b in batches]                 # padded positions
+    waste = 1 - agent_lengths.sum().item() / sum(sizes)
+    print(f'{name:<30} | {len(batches):4d} microbatches | padding {waste:5.1%} | largest {max(sizes) / 1e3:6.0f}k tokens')
+
+random_order = torch.randperm(512, generator=gen)
+describe('8 per microbatch, random', [random_order[i:i + 8] for i in range(0, 512, 8)])
+describe('8 per microbatch, sorted', [agent_lengths.argsort()[i:i + 8] for i in range(0, 512, 8)])
+describe('token budget 128k, sorted', [torch.tensor(b) for b in token_budget_batches(agent_lengths, 131_072)])
+```
+
+Output:
+
+```text
+8 per microbatch, random       |   64 microbatches | padding 59.3% | largest    524k tokens
+8 per microbatch, sorted       |   64 microbatches | padding  3.6% | largest    524k tokens
+token budget 128k, sorted      |   51 microbatches | padding  3.0% | largest    131k tokens
+```
+
+随机顺序下每个微批次 8 条轨迹时，59% 的计算位置是填充，最大的微批次有 524k 个填充 token：它包含一条达到 64k 上限的轨迹，代价就是 8 乘以 64k。分组前先按长度排序可以去掉大部分填充（3.6%），因为相邻序列长度相近，但最大微批次仍是 524k，因为最长的 8 条轨迹仍然在同一个微批次里。token 预算让填充保持在低水平（3.0%），并把每个微批次限制在 131k token，最长的轨迹被单独或两两放进微批次。它需要的微批次也更少，是 51 个而不是 64 个，因为许多短轨迹被归入同一个微批次。峰值内存现在由预算决定，这是工程师可以选择的数，而不是由策略恰好生成的最长轨迹决定。
+
+## 14.3 logits 的内存
+
+[第 3.6 节](03-language-models-as-policies.md#36-真实词表qwen3-06b)介绍了 `chunked_log_probs`，并指出仅靠分块只能节省前向内存，不能节省反向内存。下面是一个训练微批次的算术。对 $N_{\text{tok}}$ 个 token 和词表（vocabulary）大小 $V$，完整的 logits 张量有 $N_{\text{tok}} V$ 个数。Qwen3 的 $V$ 是 151,936，所以一个 token 的 logits 在 fp32 下是 0.6 MB，一个 32k token 的微批次在 log-softmax 输出和梯度*之前*就有 20 GB 的 logits，而这两者各自也同样大。在隐藏宽度 $D$ 下，模型自身的逐 token 激活每层只是 $D$ 的几倍，而对 Qwen3 的各个规模，$V$ 是 $D$ 的 37 到 148 倍。
+
+```python
+V = 151_936
+print(f'{"model":<11} {"D":>5} {"V / D":>6} | fp32 logits per token | logits of a 32k-token microbatch')
+for name, D in [('Qwen3-0.6B', 1024), ('Qwen3-8B', 4096), ('Qwen3-32B', 5120)]:
+    print(f'{name:<11} {D:5d} {V / D:6.0f} | {4 * V / 1e6:17.2f} MB | {4 * V * 32_768 / 1e9:13.1f} GB')
+```
+
+Output:
+
+```text
+model           D  V / D | fp32 logits per token | logits of a 32k-token microbatch
+Qwen3-0.6B   1024    148 |              0.61 MB |          19.9 GB
+Qwen3-8B     4096     37 |              0.61 MB |          19.9 GB
+Qwen3-32B    5120     30 |              0.61 MB |          19.9 GB
+```
+
+修复分两部分。沿时间轴分块，使前向传播中任一时刻只存在一个分块的 logits；并在反向传播中**重新计算**每个分块的 logits，而不是保存它们。`torch.utils.checkpoint` 负责第二部分：它运行分块时不保存中间结果，并在反向时重放。`checkpointed_log_probs` 就是第 3 章的 `chunked_log_probs` 加上这一处改动。
+
+```python
+#@save
+def checkpointed_log_probs(hidden, weight, ids, chunk_size=1024):
+    """Chunked selected-token log-probs, recomputed in backward: hidden [B, T, D], weight [V, D], ids [B, T] -> [B, T]."""
+    def chunk_logp(h, w, i):
+        return arl.selected_log_probs(h @ w.T, i)                                 # [B, C]; logits live only here
+    pieces = [checkpoint(chunk_logp, hidden[:, s:s + chunk_size], weight, ids[:, s:s + chunk_size],
+                         use_reentrant=False) for s in range(0, hidden.shape[1], chunk_size)]
+    return torch.cat(pieces, dim=1)
+```
+
+我们在 GPU 上测量经过 Qwen3-0.6B 输出层的一次前向和反向传播的峰值内存，用随机的 bf16 隐藏状态代替最后一层的输出。只测量 logits 的计算：不包括 transformer 自身的激活。
+
+```python
+from transformers import AutoConfig, AutoModelForCausalLM
+device = 'cuda'                                                   # peak-memory counters need the check host's GPU
+weight = AutoModelForCausalLM.from_pretrained('Qwen/Qwen3-0.6B', dtype=torch.bfloat16).lm_head.weight
+weight = weight.detach().to(device).requires_grad_(True)                          # [V, D] = [151936, 1024]
+
+def peak_memory(logp_fn, T):
+    """Peak GPU memory (GB) of logp_fn's forward + backward for T tokens, and the log-probs it returned."""
+    gen = torch.Generator(device=device).manual_seed(0)
+    hidden = torch.randn(1, T, weight.shape[1], device=device, dtype=torch.bfloat16, generator=gen).requires_grad_()
+    ids = torch.randint(weight.shape[0], (1, T), device=device, generator=gen)
+    torch.cuda.synchronize()
+    torch.cuda.reset_peak_memory_stats()
+    start = torch.cuda.memory_allocated()
+    logp = logp_fn(hidden, weight, ids)                                            # [1, T]
+    logp.sum().backward()
+    torch.cuda.synchronize()
+    weight.grad = None
+    return (torch.cuda.max_memory_allocated() - start) / 1e9, logp.detach()
+
+methods = {'full logits': lambda h, w, i: arl.selected_log_probs(h @ w.T, i),
+           'chunked (Ch. 3)': lambda h, w, i: arl.chunked_log_probs(h, w, i, chunk_size=1024),
+           'chunked + recompute': lambda h, w, i: checkpointed_log_probs(h, w, i, chunk_size=1024)}
+for T in [4096, 16_384]:
+    results = {name: peak_memory(fn, T) for name, fn in methods.items()}
+    agree = max((r[1] - results['full logits'][1]).abs().max().item() for r in results.values())
+    print(f'T = {T:6d} | ' + ' | '.join(f'{n} {r[0]:4.1f} GB' for n, r in results.items()) + f' | max diff {agree:.0e}')
+```
+
+Output:
+
+```text
+T =   4096 | full logits  7.5 GB | chunked (Ch. 3)  3.7 GB | chunked + recompute  2.2 GB | max diff 0e+00
+T =  16384 | full logits 29.9 GB | chunked (Ch. 3) 11.2 GB | chunked + recompute  2.2 GB | max diff 0e+00
+```
+
+分配器的峰值内存会随着 GPU 上之前运行过的东西而有零点零几 GB 的波动，所以只打印到一位小数。三种方法返回完全相同的对数概率。在 4,096 个 token 时，仅一个输出层的完整计算峰值就达到 7.5 GB，约每个 logit 12 字节：bf16 矩阵乘法输出、它的 fp32 副本，以及 fp32 的 log-softmax，其中一些在反向传播时同时存活。分块把它减半，但它同样随 $T$ 增长（16k token 时为 11.2 GB），因为 autograd 为反向传播保存了每个分块的 log-softmax：分块只是去掉了临时的完整张量。重新计算让峰值与序列长度无关：两个长度下都是 2.2 GB，即一个分块的量加上权重梯度。代价是对输出层再做一次前向传播，占该步 FLOPs 的百分之几。
+
+![图 14.2：一个 8B 模型在 8 块 GPU 上完全切分时，一个 RL 训练微批次的每 GPU 内存，按组成部分划分（在明确假设下的算术）。logits 分别显示完整张量、分块、分块加重新计算三种情况。](../../figures/ch14-memory.svg)
+
+图 14.2 把 logits 与 GPU 上的其他所有内容放在一起比较：一个 8B 模型，参数、梯度和 Adam 状态在 8 块 GPU 上完全切分，每个微批次 32k token。使用完整 logits 张量时，logits 是最大的一项，比切分后的模型和优化器加起来还大。分块把它降到第二位；重新计算则把它降为很小的一项。这就是为什么对长上下文 RL 来说，logits 的处理方式是第一个内存决策，排在激活检查点或切分策略之前。
+
+## 14.4 梯度累积与损失归一化
+
+内存放不下的批次被拆分成多个微批次，在优化器步之前把它们的梯度加起来。这个和必须等于整个批次损失的梯度，而使用 `token_mean` 时通常并不相等。`token_mean` 除以批次中策略 token 的数量。如果微批次循环*对每个微批次*计算 `token_mean`，再除以微批次数量，那么每个微批次得到相等的总权重，于是一个 token 的权重变成 $1 / (K n_k)$ 而不是 $1/N$，其中 $n_k$ 是其所在微批次的 token 数，$K$ 是微批次数量，$N = \sum_k n_k$。短微批次中的 token 被加权过高。修复方法是把每个微批次的 token 和都除以*全局* $N$，`aggregate_loss` 已经通过 `mode='constant'` 加 `norm_const=N` 支持这一点。当每个数据并行 rank 在梯度 all-reduce 之前用自己的 token 数做归一化时，跨 rank 也会出现同样的 bug。
+
+```python
+batch = arl.collate(trajs, tok.pad_id)
+advantages = arl.compute_advantages(batch, cfg)                                     # [64]
+def accumulated_grad(model, chunks, normalize):
+    """Sum of microbatch gradients of the REINFORCE loss; 'local' = token_mean per microbatch / K, 'global' = sum / N."""
+    model.zero_grad()
+    n_global = batch['action_mask'].sum()
+    for rows in chunks:
+        logp, m = arl.sequence_log_probs(model, batch['ids'][rows]), batch['action_mask'][rows]
+        if normalize == 'local':
+            loss = arl.reinforce_loss(logp, advantages[rows], m) / len(chunks)
+        else:
+            loss = arl.reinforce_loss(logp, advantages[rows], m, mode='constant', norm_const=n_global)
+        loss.backward()
+    return torch.cat([p.grad.flatten() for p in model.parameters()])
+```
+
+参照是对全部 64 个回合做一次反向传播。我们把它拆成 4 个微批次，分别按随机顺序和按长度排序的顺序（token 预算调度器就会这样做）。
+
+```python
+model = copy.deepcopy(rl_base)
+full = accumulated_grad(model, [torch.arange(64)], 'local')
+by_length = batch['action_mask'].sum(-1).argsort()
+for split, chunks in [('random', torch.randperm(64, generator=torch.Generator().manual_seed(0)).chunk(4)),
+                      ('length-sorted', by_length.chunk(4))]:
+    tokens = [int(batch['action_mask'][c].sum()) for c in chunks]
+    for normalize in ['local', 'global']:
+        g = accumulated_grad(model, chunks, normalize)
+        print(f'{split:<13} {normalize:<6} | policy tokens per microbatch {tokens} | relative error'
+              f' {(g - full).norm() / full.norm():.1e} | cosine {torch.cosine_similarity(g, full, 0):.4f}')
+```
+
+Output:
+
+```text
+random        local  | policy tokens per microbatch [159, 208, 185, 191] | relative error 8.2e-02 | cosine 0.9967
+random        global | policy tokens per microbatch [159, 208, 185, 191] | relative error 1.3e-07 | cosine 1.0000
+length-sorted local  | policy tokens per microbatch [96, 112, 180, 355] | relative error 5.2e-01 | cosine 0.8782
+length-sorted global | policy tokens per microbatch [96, 112, 180, 355] | relative error 1.3e-07 | cosine 1.0000
+```
+
+使用全局归一化因子时，两种拆分都以 $1.3 \times 10^{-7}$ 的精度复现了整批梯度，即舍入误差。使用逐微批次的 `token_mean` 时，随机拆分就已经有 8% 的相对误差（余弦相似度 0.997），因为各微批次含有 159 到 208 个策略 token。按长度排序的拆分（token 预算调度器产生的正是这种拆分）每个微批次含 96 到 355 个 token，误差升到 52%（余弦相似度 0.88）：梯度指向一个可测量的不同方向。由于短微批次由短回合组成，而在这个 gym 中短回合多数是立即提交，这个 bug 会系统性地过度加权某一种行为。训练期间打印的损失值对此毫无提示。
+
+## 14.5 按通过率过滤任务
+
+[第 9 章](09-grpo-and-variants.md#97-实践中的设计问题)的默认运行把后期的大部分 rollout 花在了优势（advantage）为零的组上：到第 60 到 80 步，约 80% 的采样组要么每次尝试都通过，要么每次都失败。这些回合每个都要付出一次完整 rollout 的代价，却不贡献任何梯度。最便宜的修复位于损失的上游：不要采样结果已经确定的任务。有了对每个任务通过率的滚动估计 $\hat p_j$，**通过率过滤**只在 $\text{low} < \hat p_j < \text{high}$ 时保留任务 $j$ 用于采样。当 $\text{low} = 0$、$\text{high} = 1$ 时，它恰好丢弃上一组全部失败或全部通过的任务。一个更柔和的变体按与 $\hat p_j (1 - \hat p_j)$ 成正比的概率采样任务，这是伯努利奖励的方差，也就是一个组的优势信号的期望大小。
+
+```python
+#@save
+def filter_by_pass_rate(tasks, pass_rates, low=0.0, high=1.0):
+    """Tasks whose estimated pass rate lies strictly inside (low, high)."""
+    return [task for task, p in zip(tasks, pass_rates) if low < p < high]
+```
+
+`train_curriculum` 就是任务池会变化的 `train_rl`。每个任务的估计值是它上一组的平均奖励，初始化为 0.5，使每个任务一开始都会被采样；这些估计不需要额外的 rollout。每一步从过滤范围内的任务中采样 `prompts_per_step` 个任务，再从范围外的任务中随机抽取 `revisit` 个，这样被排除任务的估计会不时得到更新，策略遗忘的任务也能回来。当通过过滤的任务很少时，这一步采样的回合就更少：这正是目的所在。大型任务集可以用有信息量的任务把批次填满；我们的 20 个训练任务则把节省直接体现为没有花掉的 rollout。
+
+```python
+#@save
+def train_curriculum(model, tasks, tok, cfg, steps, low=0.0, high=1.0, revisit=1):
+    """train_rl sampling only tasks inside filter_by_pass_rate (plus `revisit` others) -> history of dicts."""
+    torch.manual_seed(cfg.seed)
+    gen = torch.Generator().manual_seed(cfg.seed)
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
+    estimate, history, G = {t.name: 0.5 for t in tasks}, [], cfg.group_size
+    for step in range(steps):
+        pool = filter_by_pass_rate(tasks, [estimate[t.name] for t in tasks], low, high)
+        excluded = [t for t in tasks if t not in pool]
+        again = [excluded[i] for i in torch.randperm(len(excluded), generator=gen)[:revisit].tolist()]
+        kept, sampled = arl.sample_step(model, lambda: arl.make_env(cfg), pool + again, tok, cfg, gen)
+        flat = 0
+        for g in range(0, len(sampled), G):
+            rewards = [t.reward for t in sampled[g:g + G]]
+            estimate[sampled[g].info['task']] = sum(rewards) / G               # last group's pass rate
+            flat += len(set(rewards)) == 1
+        batch = arl.collate(kept, tok.pad_id)
+        stats = arl.rl_update(model, optimizer, batch, arl.compute_advantages(batch, cfg), cfg, None, gen)
+        history.append(dict(step=step, pool=len(pool), n_episodes=len(sampled),
+                            zero_adv_frac=flat / (len(sampled) // G), **arl.behavior_stats(sampled), **stats))
+    return history
+```
+
+当 `low=-1`、`high=2` 时，每个任务都能通过过滤，任务池就是整个训练集（train split），循环每步采样 8 个任务，与 `train_rl` 完全相同，因此不过滤的一组跑的是同一份代码。每次运行训练 60 步，每组两个随机种子（seed），并在留出（held-out）任务上评估，每个任务 16 个回合。
+
+```python
+curriculum = {}
+for arm, (low, high) in {'all tasks': (-1.0, 2.0), 'filter (0, 1)': (0.0, 1.0)}.items():
+    for seed in [0, 1]:
+        model = copy.deepcopy(rl_base)
+        hist = curriculum[arm, seed] = train_curriculum(model, train_tasks, tok, arl.RLConfig(seed=seed), 60, low, high)
+        held = arl.evaluate(model, heldout_tasks, tok, 16, generator=torch.Generator().manual_seed(seed), cfg=cfg)
+        sampled = [sum(h['n_episodes'] for h in hist[:k]) for k in (20, 40, 60)]
+        zero = ' '.join(f'{sum(h["zero_adv_frac"] for h in hist[i:i + 20]) / 20:.2f}' for i in range(0, 60, 20))
+        print(f'{arm:<14} seed {seed} | episodes after 20/40/60 steps {sampled} | zero-adv share {zero}'
+              f' | held-out {held["pass_rate"]:.3f}')
+```
+
+Output:
+
+```text
+all tasks      seed 0 | episodes after 20/40/60 steps [1280, 2560, 3840] | zero-adv share 0.20 0.56 0.68 | held-out 0.756
+all tasks      seed 1 | episodes after 20/40/60 steps [1280, 2560, 3840] | zero-adv share 0.14 0.39 0.61 | held-out 0.819
+filter (0, 1)  seed 0 | episodes after 20/40/60 steps [1272, 1728, 2088] | zero-adv share 0.18 0.40 0.47 | held-out 0.731
+filter (0, 1)  seed 1 | episodes after 20/40/60 steps [1280, 1808, 2184] | zero-adv share 0.17 0.43 0.38 | held-out 0.769
+```
+
+前 20 步两组相同：每个估计都从 0.5 开始，策略还很弱，几乎每个任务都产生混合结果的组。之后，开始有任务在全部 8 次尝试中都通过并离开过滤后的任务池，到第 60 步，池中只剩一到三个任务。过滤组在 60 步中分别采样了 2,088 和 2,184 个回合，不过滤组为 3,840 个，少了 43% 到 46%；在最后 20 步中，过滤组的零优势比例为 0.38 到 0.47，不过滤组为 0.61 到 0.68。过滤组的留出通过率为 0.73 和 0.77，不过滤组为 0.76 和 0.82：两个种子中都低约 0.04，约为一次 160 回合评估的一个标准误。诚实的解读是：只用略多于一半的 rollout 达到了大致相同的留出通过率，可能有一点小代价，但两个种子无法分辨。这个代价有一个合理的机制：训练后期，过滤组每一步只包含少数几个任务，因此每个梯度涉及的任务更少，这与[第 9.7 节](09-grpo-and-variants.md#97-实践中的设计问题)中组大小与提示数之间的权衡相同。
+
+只按上一组过滤是最粗糙的估计量（estimator）。一个曾经 8 次中 8 次通过的任务，下一次可能只有 8 次中 6 次通过；当 $G = 8$、真实通过率为 0.9 时，一个组有 43% 的概率全部通过。生产中的课程学习使用多次访问的滚动平均，保留一个小概率重新采样被排除的任务，并在数据集很大时于每个轮次（epoch）之前离线过滤。
+
+> **证据。**本书测得，每组两个随机种子，在 20 个训练任务上训练 60 步。rollout 的节省是过滤的直接结果，是稳健的；留出通过率的比较则在种子噪声范围之内。图 14.3 又增加了两个种子。
+
+![图 14.3：BugFix gym 上的通过率过滤，每组四个随机种子。左：留出通过率（每个任务 8 个回合）随累计采样回合数的变化。右：每步采样的回合数。](../../figures/ch14-filtering.svg)
+
+图 14.3 用每组四个种子展示了同样的比较。左图是累计回合数：两组在约第 20 步之后分开，此时任务开始饱和，过滤组的曲线随着任务池清空而变平。右图中每次运行是一个点：过滤组的运行位于约 2,100 到 2,600 个回合处，不过滤组位于 3,840。它们的留出通过率相互重叠（0.72 到 0.81，对比 0.76 到 0.85），过滤组平均略低，与上面两个种子的情况一致。
+
+## 14.6 吞吐量核算
+
+本章和上一章中的每个设计决策都是在用一种资源换另一种资源，而只有在预算下才能评判这种交换。预算有两半，行为各不相同：生成和训练。
+
+**生成**是一系列解码步。每一步为每条序列产生一个 token，并且必须从内存中读取全部权重和每条序列的 KV cache，因此它的速度由内存带宽而不是 FLOPs 决定。TinyAgent 先展示了问题的另一半。`rollout_batch` 没有 KV cache：每个解码步都在整个前缀上重新运行模型。我们统计它在第 14.1 节的 64 个回合上处理的位置数，并与带 KV cache 的解码器比较，后者每个位置只处理一次。
+
+```python
+kv_free = kv_cached = 0
+for t in trajs:
+    policy_positions = t.action_mask.nonzero().flatten() + 1                    # index of each sampled token in ids
+    kv_free += int(policy_positions.sum())                                      # a decode step reruns its whole prefix
+    kv_cached += len(t.ids)                                                     # each position computed once
+print(f'positions processed while sampling 64 episodes: no KV cache {kv_free:,} | KV cache {kv_cached:,}'
+      f' | ratio {kv_free / kv_cached:.1f}x')
+```
+
+Output:
+
+```text
+positions processed while sampling 64 episodes: no KV cache 22,661 | KV cache 2,472 | ratio 9.2x
+```
+
+没有 KV cache 时，采样这 64 个回合处理了 22,661 个位置，而不是 2,472 个，多了 9.2 倍，而且这个倍数随回合长度线性增长。TinyAgent 负担得起；更大的模型都负担不起。KV cache 把生成的计算成本从长度的二次方变为线性，同时把瓶颈转移到内存：每个解码步都必须读取缓存。
+
+对于真实模型，一个每 GPU 的一阶 **roofline** 估计就足以看清时间花在哪里。对 $b$ 条上下文长度为 $c$ 的序列，一个解码步读取一次权重（bf16 下 $2N$ 字节）以及每条序列的 KV cache（$c$ 乘以每 token 的 KV 大小），因此至少需要 $(2N + b\, c\, s_{\text{KV}})/\text{bandwidth}$ 秒，产出 $b$ 个 token。训练要处理每条轨迹的每个 token（提示、策略和工具 token 一视同仁，因为它们都是梯度的输入），前向加反向每个 token 约 $6N$ FLOPs，按某个模型 FLOPs 利用率（MFU）计算。下面的代码块从本地缓存中 Qwen3-8B 的真实配置读取每 token 的 KV 大小，并使用 H200 公布的带宽（4.8 TB/s）和稠密 bf16 吞吐量（989 TFLOP/s，是 NVIDIA 所列含稀疏性的 1,979 TFLOP/s 的一半）。利用率和批大小是假设。
+
+```python
+from pathlib import Path
+snapshot = next((Path.home() / '.cache/huggingface/hub/models--Qwen--Qwen3-8B/snapshots').iterdir())
+qcfg = AutoConfig.from_pretrained(snapshot)                                     # local config.json only
+N = 8.2e9                                                                        # parameters
+kv_bytes = 2 * qcfg.num_hidden_layers * qcfg.num_key_value_heads * qcfg.head_dim * 2   # K and V, bf16, per token
+BANDWIDTH, PEAK, MFU = 4.8e12, 989e12, 0.4                                      # H200; MFU is an assumption
+print(f'Qwen3-8B KV cache: {kv_bytes / 1e3:.0f} KB per token of context')
+def decode_tokens_per_s(b, c):
+    return b / ((2 * N + b * c * kv_bytes) / BANDWIDTH)
+for b, c in [(64, 2048), (64, 16_384), (256, 16_384)]:
+    print(f'decode, batch {b:3d}, context {c:6d}: {decode_tokens_per_s(b, c):7.0f} tokens/s per GPU')
+print(f'training (6N FLOPs per token, MFU {MFU}): {MFU * PEAK / (6 * N):7.0f} tokens/s per GPU')
+```
+
+Output:
+
+```text
+Qwen3-8B KV cache: 147 KB per token of context
+decode, batch  64, context   2048:    8598 tokens/s per GPU
+decode, batch  64, context  16384:    1796 tokens/s per GPU
+decode, batch 256, context  16384:    1935 tokens/s per GPU
+training (6N FLOPs per token, MFU 0.4):    8041 tokens/s per GPU
+```
+
+对 Qwen3-8B 来说，每个上下文 token 需要 147 KB 的 KV cache（36 层，8 个维度为 128 的 KV 头，键和值均为 bf16）。在 2k 上下文下，64 条序列的批次每 GPU 每秒解码约 8,600 个 token，与约 8,000 的训练速率大致相当。在 16k 上下文下（这对编程智能体来说已经算短），KV 读取压倒了权重读取，解码降到每秒约 1,800 个 token。更大的批次几乎没有帮助（256 条时每秒 1,935 个 token），因为每增加一条序列就要多读一份它自己的缓存。在假设的 40% MFU 下，训练每 GPU 每秒处理的 token 数约为长上下文解码的 4.5 倍。这种不对称正是 RL 系统把大部分加速器分给推理引擎的原因，也是每个 rollout token 远比每个训练 token 昂贵的原因。
+
+把两半合在一起就得到一次运行的 GPU 小时数。下面的代码块估算一次假想的 Qwen3-8B 智能体 RL 运行中一步的成本，风格与[附录 B 问题 19](B-design-review.md#问题-19估算一次强化学习运行的-gpu-小时数)相同，后者为一个 32B 模型做了同样的估算。每个输入都是假设，并在代码中标明。
+
+```python
+episodes, total_tok, policy_tok, context = 512, 24_000, 6_000, 16_384     # per step; assumed episode shape
+steps, busy = 300, 0.5                                                      # assumed run length; engine busy fraction
+train_h = 6 * N * episodes * total_tok / (MFU * PEAK) / 3600                # forward + backward on every token
+logp_h = 2 * N * episodes * total_tok / (MFU * PEAK) / 3600                 # one extra forward: old log-probs
+prefill_h = 2 * N * episodes * (total_tok - policy_tok) / (MFU * PEAK) / 3600   # prompt and tool tokens, prefilled once
+decode_h = episodes * policy_tok / decode_tokens_per_s(64, context) / 3600 / busy
+parts = dict(train=train_h, old_logp=logp_h, prefill=prefill_h, decode=decode_h)
+print(' | '.join(f'{k} {v:5.2f}' for k, v in parts.items()), f'| GPU-hours per step {sum(parts.values()):.2f}')
+print(f'{steps} steps: {steps * sum(parts.values()):,.0f} GPU-hours; decode share {decode_h / sum(parts.values()):.0%}')
+```
+
+Output:
+
+```text
+train  0.42 | old_logp  0.14 | prefill  0.11 | decode  0.95 | GPU-hours per step 1.62
+300 steps: 487 GPU-hours; decode share 59%
+```
+
+在这些假设下，一步约耗费 1.6 GPU 小时，300 步约 490 GPU 小时。其中 59% 是解码，尽管策略 token 只占全部 token 的四分之一；训练前向反向本身约占四分之一。两个最大的不确定因素是解码速率（如上一个代码块所示，它取决于上下文长度和批大小）和忙碌比例（它吸收了工具延迟和[第 13 章](13-rollout-systems.md)的拖尾等待）：把它从 0.5 改为 0.25，每步约增加 1 GPU 小时。附录 B 对具有相同回合形状的 32B 模型的估算约为每步 7.7 GPU 小时，比例上是一致的。
+
+> **证据。**H200 的带宽和吞吐量数字是 NVIDIA 公布的规格（查阅于 2026-10-13）；KV 大小由 Qwen3-8B 的配置文件计算得出。本节其余内容（回合形状、批大小、MFU、忙碌比例）都是为说明而选的假设，结果是一个一阶估计，忽略了注意力 FLOPs、通信、评估和失败的运行。在规划预算之前，请用试点运行的测量值替换每一项假设。
+
+## 14.7 实践中的设计问题
+
+> **问题：梯度累积下的损失归一化。** *症状：*改变微批次大小、数据并行 rank 数或批次调度器会改变学习曲线，尽管全局批次相同；切换到按长度排序的微批次之后，短回合似乎学得更快。*原因：*逐微批次的 `token_mean` 给每个微批次相等的权重，于是一个 token 的权重是全局损失所分配权重的 $N / (K n_k)$ 倍（第 14.4 节）。按长度排序的微批次让 $n_k$ 变化最大。*可选方案：*(a) 按全局 token 数归一化（在数据并行中，于反向传播之前对计数做一次 all-reduce）。(b) 使用常数归一化因子（Dr. GRPO 的 `constant` 模式），它不需要全局计数，且与批次组成无关。(c) 等 token 数的微批次，这只能让误差变小。*默认做法：*(a) 或 (b)，并配一个单元测试，像第 14.4 节那样把累积梯度与单次传播的梯度相比较。下面的代码块打印按长度排序拆分下逐 token 的权重失真。
+
+```python
+tokens = torch.tensor([batch['action_mask'][c].sum().item() for c in by_length.chunk(4)])
+distortion = tokens.sum() / (len(tokens) * tokens)                       # weight under local / weight under global
+print('policy tokens per microbatch:', tokens.int().tolist(), '| per-token weight vs correct:',
+      [round(x, 2) for x in distortion.tolist()])
+```
+
+Output:
+
+```text
+policy tokens per microbatch: [96, 112, 180, 355] | per-token weight vs correct: [1.93, 1.66, 1.03, 0.52]
+```
+
+短回合微批次中的 token 得到了正确权重的 1.93 倍，长回合微批次中的 token 得到 0.52 倍：两者相差 3.7 倍，这个倍数由调度器而不是目标函数决定。
+
+> **问题：打包的注意力泄漏。** *症状：*打包训练运行无报错，但在第 0 步，训练器对数概率与采样器对数概率之间的比率就远离 1，裁剪比例（clip fraction）从第一个小批次（minibatch）起就很高，策略学得很慢或发散。*原因：*打包行上的因果掩码让每条序列都能关注排在它之前的序列，而贯穿整行的位置 id 让后面的每条序列都发生偏移；于是训练器在采样器从未见过的上下文下为 token 打分（第 14.1 节）。*可选方案：*(a) 块对角掩码或变长注意力 kernel，并重置位置 id。(b) 不打包，承担填充的代价。*默认做法：*(a)，并配一个在真实轨迹上比较打包与未打包对数概率的测试。采样器自身的对数概率不需要任何参照运行就能让这个 bug 显形。
+
+```python
+mask = packed['action_mask']
+for name, (pos, seg) in [('leaky packing', variants['causal mask, restarted positions']),
+                         ('correct packing', variants['block mask, restarted positions'])]:
+    with torch.no_grad():
+        logp = arl.selected_log_probs(packed_logits(rl_base, packed['ids'], pos, seg)[:, :-1], packed['ids'][:, 1:])
+    ratio = ((logp - packed['sample_logp']).exp() - 1).abs() * mask
+    print(f'{name:<16} share of policy tokens with |pi_trainer / mu - 1| > 0.2: {(ratio > 0.2).sum() / mask.sum():.1%}')
+```
+
+Output:
+
+```text
+leaky packing    share of policy tokens with |pi_trainer / mu - 1| > 0.2: 5.8%
+correct packing  share of policy tokens with |pi_trainer / mu - 1| > 0.2: 0.0%
+```
+
+使用有泄漏的打包时，在任何更新之前，就有 5.8% 的策略 token 的训练器/采样器比率偏离 1 超过 20%；使用正确的打包时则一个都没有。在监控面板上，这看起来像训推不一致（[第 13.6 节](13-rollout-systems.md#136-训推不一致)），而不一致校正会把它掩盖掉。第 0 步的比率分布是对两者都适用的低成本测试。
+
+> **问题：浪费在零方差提示上的 rollout。** *症状：*随着训练取得进展，零优势组的比例上升；每个有用梯度所需的 rollout 增加；学习曲线在留出通过率停止提升之前很久就变平了。*原因：*奖励全部相等的组在任何基线（baseline）下优势都为零，因此其中每个回合都是一次没有梯度的完整 rollout（第 9 章）。*可选方案：*(a) 采样前的通过率过滤（第 14.5 节），它需要逐任务的估计，并可能让估计过时的任务得不到采样。(b) 动态采样，通过多采样来保持批次满额。(c) 对难任务使用更大的组，使罕见的成功能被采样到。*默认做法：*(a)，偶尔重访被排除的任务，并记录零优势比例。下面的代码块统计第 14.5 节的运行中落入零优势组的回合数。
+
+```python
+for arm in ['all tasks', 'filter (0, 1)']:
+    wasted = sum(h['zero_adv_frac'] * h['n_episodes'] for s in [0, 1] for h in curriculum[arm, s])
+    total = sum(h['n_episodes'] for s in [0, 1] for h in curriculum[arm, s])
+    print(f'{arm:<14} episodes in zero-advantage groups: {wasted:.0f} of {total} ({wasted / total:.0%})')
+```
+
+Output:
+
+```text
+all tasks      episodes in zero-advantage groups: 3304 of 7680 (43%)
+filter (0, 1)  episodes in zero-advantage groups: 1136 of 4272 (27%)
+```
+
+在两个种子上，不过滤组 7,680 个回合中有 43% 落入零优势组，即 3,304 次没有产生梯度的 rollout。过滤组总共采样了 4,272 个回合，浪费了其中 1,136 个（27%）。剩余的浪费大部分来自前 20 步（此时估计还没有信息量），以及对被排除任务的重访，后者是有意花在被认为已解决的任务上的。
+
+> **问题：一条长尾序列主导内存。** *症状：*在运行开始很久之后的随机步骤出现内存溢出错误，总是发生在收到最长轨迹的那个 rank 上；降低批大小会让它更少发生，但不会杜绝。*原因：*每个微批次固定序列条数时，填充后的内存是条数乘以最长成员的长度，而在长尾长度分布下，最长成员终将达到上下文上限。这时一个 8 条序列的打包或填充微批次的代价是上下文长度的 8 倍。*可选方案：*(a) token 预算（第 14.2 节），把最长的轨迹单独放进微批次。(b) 分块并重新计算的对数概率（第 14.3 节），它降低了每 token 的成本，但没有改变其增长方式。(c) 带截断的硬长度上限，这会改变任务。*默认做法：*(a) 与 (b) 结合，并根据在最大上下文长度下测得的峰值来设定预算。下面的代码块找出固定 8 条时最差的微批次，以及 token 预算为同一条轨迹分配的微批次。
+
+```python
+longest = int(agent_lengths.argmax())
+fixed = next(b for b in [random_order[i:i + 8] for i in range(0, 512, 8)] if longest in b.tolist())
+budget = next(b for b in token_budget_batches(agent_lengths, 131_072) if longest in b)
+print(f'longest trajectory: {agent_lengths[longest]:,} tokens; median {int(agent_lengths.median()):,}')
+print(f'fixed 8 per microbatch: its microbatch pads to {len(fixed) * int(agent_lengths[fixed].max()):,} tokens')
+print(f'token budget: its microbatch holds {len(budget)} sequence(s), {len(budget) * int(agent_lengths[budget].max()):,} tokens')
+```
+
+Output:
+
+```text
+longest trajectory: 65,536 tokens; median 8,414
+fixed 8 per microbatch: its microbatch pads to 524,288 tokens
+token budget: its microbatch holds 2 sequence(s), 131,072 tokens
+```
+
+最长的轨迹达到了 64k 上限，是中位数的八倍。在固定 8 条的微批次中，它迫使微批次有 524,288 个填充位置，相当于 8 条最大长度轨迹的内存。token 预算给它分配的微批次里只有另一条同样长度的轨迹，共 131,072 个 token，正好是预算。那个“在第 2,000 步突然内存溢出”的运行，就是这条轨迹第一次出现的运行。
+
+## 小结
+
+- 把 TinyAgent 的 64 个回合填充到最长回合，浪费了 74% 的计算位置。打包把各行填到 97%，但只有在使用块对角因果掩码、且位置 id 按序列重新开始时才正确：缺少它们，策略对数概率偏移最多 6.4 nats；有了它们，结果一致到 $10^{-6}$。
+- 每个微批次固定序列条数会让内存与最长序列成正比；对于长尾长度分布，带长度排序的 token 预算把最大微批次从 524k token 降到 131k token，填充率为 3%。
+- 在生产规模的词表下，logits 是长上下文 RL 中最大的内存项。在 Qwen3-0.6B 的输出层上测得：16k token 时完整计算为 29.9 GB，分块为 11.2 GB，分块加重新计算为 2.2 GB，且与长度无关。
+- 使用逐微批次 `token_mean` 的梯度累积会改变梯度：在 TinyAgent 上，随机拆分的相对误差为 8%，按长度排序的拆分为 52%。用全局 token 数归一化每个微批次（`mode='constant'`）以 $10^{-7}$ 的精度复现了整批梯度。
+- 按上一组的通过率过滤任务，在 60 步内把采样回合数减少了 43% 到 46%，留出通过率的差异在种子噪声范围内。对一次 8B 智能体运行的吞吐量算术表明，解码约占 GPU 小时的 60%，因为长上下文解码受内存带宽限制，token 速率大约只有训练的四分之一。
+
+## 练习
+
+1. 为 `pack_sequences` 和 `packed_logits` 编写一个单元测试，使其分别对第 14.1 节的两个 bug 各自失败。能暴露位置 bug 但不暴露掩码 bug 的最小序列对是什么？
+2. 把 `token_budget_batches` 扩展到打包微批次，此时成本是长度之和，而不是条数乘以最长长度。在 128k 预算下，那个 512 条轨迹的例子需要多少个微批次？
+3. 对 $K$ 个数据并行 rank、每个 rank 有各自的微批次的情况，推导逐微批次 `token_mean` 下每个 token 的权重。证明按全局 token 数归一化只需要在反向传播之前对一个标量做一次 all-reduce，并用 `aggregate_loss` 实现它。
+4. 改变一个假设：重跑第 14.5 节，让过滤依据每个任务最近三组的平均值，而不是上一组。留出通过率的差距会消失吗？会多花多少个回合？
+5. 实现按与 $\hat p (1 - \hat p)$ 成正比的概率采样，代替硬过滤，并与硬过滤比较所花的回合数和留出通过率。
+6. 针对 64k token 的上下文重做第 14.6 节的 GPU 小时估算。哪一项增长了，增长了多少？一个小 4 倍的 KV cache（例如来自更激进的分组查询注意力或 8 位 KV cache）能带来什么？
+7. 设计评审（design review）：一位同事提议把微批次大小从 4 条序列提高到 16 条，以提高训练 MFU。这次运行使用带长尾的 32k token 智能体轨迹，并采用逐微批次的损失归一化。列出除 MFU 之外会改变的三件事，以及你会针对每件事要求的测量。

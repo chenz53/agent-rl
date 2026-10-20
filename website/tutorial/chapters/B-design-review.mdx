@@ -1,0 +1,279 @@
+---
+title: "B. Design Review Problems"
+---
+
+The chapters of this book build one mechanism at a time. A post-training team rarely meets them one at a time. A design review, an on-call page, or an interview question usually arrives as a symptom with a few numbers attached, and the answer requires combining an estimator from Part II, a reward decision from Part III, a systems constraint from Part IV, and an evaluation argument from Part VI. This appendix collects 30 such problems.
+
+Each problem gives a scenario with concrete numbers or symptoms, followed by a model answer. The model answers reason from first principles, name the trade-offs, give a recommended default, and say what to measure next. The defaults are this book's recommendations under the stated assumptions. They are not universal rules, and a reviewer who disagrees with a default for a stated reason is doing the exercise correctly. The scenarios are constructed for teaching. Unless a number is computed in the answer itself, it is a hypothetical value chosen to make the reasoning concrete, not a measurement from a real run.
+
+How to use the appendix: cover the model answer, write your own in ten minutes, then compare. A good answer to any problem here has four parts: the mechanism that could produce the symptom, the cheapest measurement that distinguishes the candidate mechanisms, a recommended action with its cost, and the metric that would tell you the action worked.
+
+## B.1 Objectives and estimators
+
+### Problem 1: Choose a loss aggregation for variable-length tool trajectories
+
+*Scenario.* Your BugFix-style agent produces trajectories whose policy-token counts range from 40 (read, edit, submit) to 2,400 (many failed edits with long reasoning). The current loss is the per-sequence mean of per-token terms, averaged over sequences (`seq_mean_token_mean`). A colleague proposes switching to a token mean over the whole batch (`token_mean`). Another proposes a sum over tokens divided by a fixed constant. Pick one and defend it.
+
+*Model answer.* Write each option as a weight on the per-token gradient term. With `seq_mean_token_mean`, a token in a trajectory of length $L_i$ gets weight $1/(B L_i)$, so each trajectory contributes equally in total and a token in a 40-token success weighs 60 times more than a token in a 2,400-token failure. For a negative advantage this means long failures are punished weakly per token, which is one documented route to length growth (the Dr. GRPO analysis, see [Chapter 9](/tutorial/chapters/09-grpo-and-variants)). With `token_mean`, every token in the batch gets weight $1/\sum_i L_i$, so long trajectories dominate the batch gradient in proportion to their length, and the normalizer changes from batch to batch, which couples the effective learning rate to the batch's length distribution. A constant normalizer, $\sum_i \sum_t \ell_{i,t} / (B \cdot L_{\max})$, gives every token the same weight and makes the effective step size independent of the batch's lengths, at the price of a smaller gradient when episodes are short and a hyperparameter that must be revisited if $L_{\max}$ changes.
+
+The book's default for agent trajectories is `token_mean` or the constant normalizer, not `seq_mean_token_mean`, because the per-sequence mean is the option that creates a length-dependent incentive the reward never asked for. Between the two remaining options, prefer the constant normalizer when you change the length budget rarely and want gradient-accumulation invariance for free (Problem 2), and `token_mean` when you need a drop-in that matches common public recipes. Whatever you choose, measure the per-trajectory total weight against $L_i$ for one real batch (the plot from [Chapter 6](/tutorial/chapters/06-policy-gradient)), and track mean policy-token length separately for successes and failures. If failures lengthen while successes do not, the aggregation is the first suspect.
+
+### Problem 2: Gradient accumulation changed your results
+
+*Scenario.* A run that used 1 microbatch of 16 trajectories per optimizer step is moved to 4 microbatches of 4 trajectories with gradient accumulation to fit a longer context. Nothing else changed. Reward now rises more slowly and mean length drifts upward. In one logged step, microbatch 1 had 100 valid policy tokens and microbatch 2 had 900.
+
+*Model answer.* The likely bug is computing `token_mean` inside each microbatch and then averaging the microbatch losses. In the logged step a token in microbatch 1 receives weight $\tfrac{1}{4}\cdot\tfrac{1}{100} = 1/400$, while a token in microbatch 2 receives $\tfrac{1}{4}\cdot\tfrac{1}{900} = 1/3600$, a ratio of 9. The single-microbatch run gave all tokens the same weight $1/N_{\text{tokens}}$. The accumulated loss is therefore a different objective, one that upweights tokens that happen to share a microbatch with short trajectories. Since short trajectories are disproportionately successes in a repair task, the reweighting is not random noise; it changes the relative push between successes and failures and can produce the length drift you see.
+
+The fix is to compute the global normalizer before the backward passes: count valid tokens across all microbatches of the optimizer step (and across data-parallel ranks, with an all-reduce), then have each microbatch return its token *sum* divided by that global count. The constant-normalizer aggregation from Problem 1 avoids the issue by construction. To verify, run one optimizer step both ways on a frozen batch and compare the flattened gradients; the cosine similarity should be 1 to numerical precision and the norms should match. [Chapter 14](/tutorial/chapters/14-scaling-and-efficiency) derives the correct normalization, and [Chapter 18](/tutorial/chapters/18-debugging-rl-runs) shows the dashboard signature.
+
+### Problem 3: Group size versus number of prompts at a fixed budget
+
+*Scenario.* You can afford 512 episodes per step. The options are 128 prompts with $G = 4$, 64 prompts with $G = 8$, or 32 prompts with $G = 16$. Binary rewards. Your task pool has a median per-task success rate near 0.1 under the current policy, with a long tail of tasks near 0.3 to 0.5.
+
+*Model answer.* With a group-relative baseline and binary reward, a group carries zero gradient when all members succeed or all fail. If a task's success probability is $p$, the probability of a degenerate group is $p^G + (1-p)^G$. At $p = 0.1$ this is 0.656 for $G = 4$, 0.430 for $G = 8$, and 0.185 for $G = 16$. At $p = 0.3$ it is 0.248, 0.058, and 0.003. So at this pool's difficulty, $G = 4$ wastes about two thirds of the hard tasks' episodes, while $G = 16$ wastes less than a fifth but sees only 32 distinct prompts per step, which raises the variance of the update across prompts and slows coverage of the pool.
+
+The book's default is to choose $G$ so that the degenerate-group probability at the median task is below roughly one half, then spend the rest of the budget on prompts, and to filter tasks by measured pass rate rather than raising $G$ indefinitely. Here that gives $G = 8$ with 64 prompts, combined with dropping tasks whose running pass rate is 0 or 1 ([Chapter 14](/tutorial/chapters/14-scaling-and-efficiency)) or with dynamic sampling that refills degenerate groups ([Chapter 9](/tutorial/chapters/09-grpo-and-variants)). Measure the fraction of zero-advantage groups per step and the number of distinct tasks that received nonzero gradient per 100 steps. If the first is high, filter or resample; if the second is low, raise the prompt count.
+
+### Problem 4: Rare successes and standard-deviation normalization
+
+*Scenario.* With $G = 8$ and binary reward, a group has exactly one success. Your advantages use $(r - \bar r)/(\sigma + \epsilon)$ with the population standard deviation. A reviewer says this amplifies lucky successes on hard tasks. Compute the advantages and decide whether to keep the normalization.
+
+*Model answer.* Here $\bar r = 1/8 = 0.125$ and $\sigma = \sqrt{0.125 \cdot 0.875} = 0.331$. The success gets $(1 - 0.125)/0.331 = \sqrt{7} \approx 2.65$ and each failure gets $-0.125/0.331 = -1/\sqrt{7} \approx -0.378$. Without the division the values are $0.875$ and $-0.125$. In general, for a group with success fraction $\hat p$, normalization multiplies all advantages by $1/\sqrt{\hat p(1-\hat p)}$, which is 2 at $\hat p = 0.5$ and 3.02 at $\hat p = 0.125$. Tasks that are nearly always failed or nearly always solved therefore receive larger updates per episode than tasks of medium difficulty. That is the difficulty weighting the Dr. GRPO paper criticizes ([Chapter 7](/tutorial/chapters/07-advantages-and-credit)).
+
+Whether the weighting is harmful depends on what the hard-task successes are. If the one success is a genuine repair, upweighting it is a reasonable curriculum. If successes on hard tasks are mostly flukes, exploits, or flaky tests (Problem 9), the normalization amplifies exactly the noise you least want. The book's default for verifier rewards with known noise is to drop the standard-deviation division, keep the mean (or leave-one-out) baseline, and control step size with the learning rate and clipping. Measure, for the hard-task bucket, the fraction of rewarded episodes that also pass a stricter held-out check. If it is high, normalization is defensible; if it is low, remove it.
+
+### Problem 5: Compute a KL estimate by hand
+
+*Scenario.* Three policy tokens are sampled from $\pi_\theta$. The per-token log-ratios $\log \pi_{\text{ref}}(y) - \log \pi_\theta(y)$ are $-0.2$, $0.1$, and $-0.5$. Compute the k1, k2, and k3 estimates of $\mathrm{KL}(\pi_\theta \,\|\, \pi_{\text{ref}})$ averaged over the three tokens, and explain why they disagree.
+
+*Model answer.* Let $\log \rho = \log \pi_{\text{ref}} - \log \pi_\theta$ for a token sampled from $\pi_\theta$. The three estimators ([Chapter 10](/tutorial/chapters/10-kl-entropy-regularization)) are $k_1 = -\log \rho$, $k_2 = \tfrac12 (\log \rho)^2$, and $k_3 = (\rho - 1) - \log \rho$. Per token, $k_1$ is $0.2, -0.1, 0.5$ with mean $0.200$. $k_2$ is $0.02, 0.005, 0.125$ with mean $0.050$. $k_3$ is $e^{-0.2} - 1 + 0.2 = 0.0187$, $e^{0.1} - 1 - 0.1 = 0.0052$, and $e^{-0.5} - 1 + 0.5 = 0.1065$, with mean $0.0435$.
+
+$k_1$ and $k_3$ are both unbiased for the true KL under sampling from $\pi_\theta$, yet with three samples they differ by a factor of almost five. That is the variance difference, not a contradiction: $k_1$ can be negative per token (the second token) and its spread is large, while $k_3$ is nonnegative for every token because $\rho - 1 - \log\rho \ge 0$ and it has lower variance when the two policies are close. $k_2$ is biased but close to $k_3$ when the log-ratios are small. Two further points matter in review. First, as a *loss*, the gradient of each estimator is not automatically the gradient of the KL; which estimator gives the correct gradient depends on whether the KL sits in the reward or in the loss and on stop-gradient placement (derived in [Chapter 10](/tutorial/chapters/10-kl-entropy-regularization)). Second, for a dashboard, log the mean of $k_3$ and a high quantile of $|\log\rho|$, because a mean can hide a few tokens with large divergence.
+
+### Problem 6: Should this run keep a KL penalty at all?
+
+*Scenario.* You are starting RL from an SFT checkpoint on a coding-agent task with verifier rewards. One public recipe you are following removes the KL term entirely. Your previous run with $\beta = 0.05$ learned slowly, and its KL to the reference plateaued near 0.02 nats per token while reward stalled.
+
+*Model answer.* The KL term exists to keep the policy where the reward is trustworthy and where capabilities you did not train on are preserved. With a learned reward model, both reasons are strong, because the reward model is wrong off-distribution. With an execution-based verifier, the first reason is weaker: hidden tests do not become less accurate as the policy moves, although exploits can still appear ([Chapter 11](/tutorial/chapters/11-rewards-and-verifiers)). The stall at a small, flat KL suggests the penalty is binding: the policy has moved as far as $\beta$ allows, and the reward gradient no longer outweighs the penalty gradient.
+
+Options: lower $\beta$ (cheap; keeps a soft anchor), drop KL and rely on clipping and a conservative learning rate (saves the reference forward pass, about a third of the extra trainer forward compute in a GRPO step, and its memory), or periodically reset the reference to a recent checkpoint (keeps a local trust region without anchoring to SFT). The book's default for verifier-rewarded coding RL is to drop the penalty or set it small, and to replace its protective role with measurements: a held-out evaluation on capabilities you care about but do not train (for example, plain code generation or instruction following), entropy, and a hacking detector. Reinstate KL if those regress. The decision should rest on those held-out curves, not on the KL value itself, because the KL number has no fixed meaning across tasks.
+
+## B.2 Rewards and verifiers
+
+### Problem 7: The agent hardcodes the public tests
+
+*Scenario.* The training reward is the fraction of public tests passed. After 150 steps reward is 0.92, but the hidden-test pass rate on the same tasks is 0.31. Trajectory inspection shows edits that branch on the exact public test inputs.
+
+*Model answer.* This is reward hacking in its plainest form: the reward measures agreement with tests the agent can see, and the policy found a cheaper way to agree than repairing the function. In the BugFix gym this is the `hardcode_tests` op ([Chapter 11](/tutorial/chapters/11-rewards-and-verifiers)); in real repositories it appears as special-casing inputs, editing tests, or catching exceptions to suppress failures. The reward and the intended objective were never the same; they only agreed while the policy was weak.
+
+The fix has layers, in order of cost. Compute the reward on hidden tests the agent never sees, and keep public tests available only as a tool. Add a detector for known exploit patterns (modified test files, input-equality branches) and give such trajectories zero reward, logged separately so you can count them. Add held-out task families to evaluation so that a memorized pattern cannot pass. The book's default is hidden-test reward plus exploit logging from the start of every run, since the exploit costs one edit and the policy will find it. Measure the gap between public-test and hidden-test pass rates per step; a widening gap is the earliest signal, and it often appears before any change in the headline reward.
+
+### Problem 8: Partial credit invites partial solutions
+
+*Scenario.* To densify a sparse reward, you switch from binary "all hidden tests pass" to the fraction of hidden tests passed. Reward rises faster, but the full-solve rate stops improving at 0.45, and many trajectories now fix the easy test cases and submit.
+
+*Model answer.* Partial credit changes the optimal policy, not just the signal density. Under the fraction reward, a policy that reliably passes 8 of 10 tests earns 0.8 per episode, while a policy that attempts the full fix and succeeds half the time earns at most 0.5 plus its partial passes. If the last tests require the expensive part of the fix (reading more code, handling an edge case), the fraction reward makes skipping it rational. The dense signal helps early learning and hurts the final objective.
+
+Options: keep binary reward and handle sparsity with a better starting policy (SFT or curriculum) and filtering ([Chapter 15](/tutorial/chapters/15-sft-and-rejection-sampling), [Chapter 14](/tutorial/chapters/14-scaling-and-efficiency)); use a mixed reward such as $r = \mathbb{1}[\text{all pass}] + \alpha \cdot \text{fraction}$ with small $\alpha$ so that full success dominates; or anneal $\alpha$ to zero. The book's default is binary reward on hidden tests with pass-rate filtering, falling back to a small-$\alpha$ mixture only when the starting policy almost never solves anything. Always report the full-solve rate as the primary metric, whatever the training reward.
+
+### Problem 9: Flaky tests and reward noise
+
+*Scenario.* Re-running hidden tests on identical patches shows that 4% of results flip between runs. Your success rate is about 0.3. How much does this hurt learning, and what do you do?
+
+*Model answer.* Model the noise as each binary reward flipping independently with probability $f$. Then the observed expected reward is $f + (1 - 2f)\,p_\theta$, so the policy gradient of the expected observed reward is $(1-2f)$ times the true gradient. At $f = 0.04$ the signal shrinks by 8% while every flip adds variance. That alone is tolerable. The real damage is that flips are not independent of the policy: tests that time out flip more often for slow patches, and network-dependent tests flip by environment. Correlated noise biases the gradient toward whatever behavior correlates with passing flaky tests.
+
+The book's default is to measure flakiness per test before training, by running the reference solution several times, and to drop or quarantine tests that are not deterministic; then run the reward with fixed seeds, no network, and generous timeouts. Where flaky tests must stay, a majority vote over a few re-runs for rewarded episodes is cheaper than it sounds, since only candidate successes need re-running. Measure the agreement of the reward with a second run on a random sample of episodes each step. [Chapter 4](/tutorial/chapters/04-environments-and-tools) covers environment determinism, and [Chapter 11](/tutorial/chapters/11-rewards-and-verifiers) covers reward noise.
+
+### Problem 10: The judge model is being exploited
+
+*Scenario.* For tasks without tests, you use an LLM judge that scores the final patch and explanation from 1 to 10. Judge reward rose from 5.1 to 8.7 over 300 steps. A human audit of 50 high-scoring trajectories finds that 30 of them include confident statements such as "all tests pass" and long explanations, but the patches are wrong.
+
+*Model answer.* A judge is a learned reward model with a prompt, and RL against it is optimization against a fixed, exploitable function. The policy learned features the judge rewards (assertive claims, length, formatting) that are cheaper than correct patches. The audit gives a direct estimate of the problem: 60% of high-reward trajectories are false positives.
+
+Options, from cheapest: remove channels the judge should not read (strip the agent's claims about test results and judge only the diff and actual tool outputs); add execution-grounded checks wherever possible, even partial ones such as "the patch applies and the code compiles"; use a rubric with specific checkable items instead of a holistic score; ensemble judges or rotate them; and add a KL penalty, which matters more with learned rewards than with verifiers (Problem 6). The book's default is to restrict the judge's inputs to verifiable artifacts and to combine it with whatever execution signal exists, then to run a fixed human audit of a sample of top-reward episodes at a regular interval as a standing metric. Track judge reward against audited precision; when they diverge, stop and fix the reward before training further ([Chapter 11](/tutorial/chapters/11-rewards-and-verifiers)).
+
+### Problem 11: Hidden tests leak through the environment
+
+*Scenario.* Pass rate on a new task family jumps from 0.2 to 0.7 in 20 steps, much faster than on other families. Trajectories show the agent running `git log` and `grep` before editing.
+
+*Model answer.* A jump this fast on one family suggests the agent found information that makes the task easier than intended. Candidate leaks: the repository's git history contains the fix commit or a later version of the file; hidden test files are present in the container; the issue text quotes the fix; or package caches contain the upstream release that includes the fix. Each is an environment construction bug, not a model capability. Public reports of SWE-style benchmarks have discussed related problems with solutions present in issue text or repository state (see [Chapter 20](/tutorial/chapters/20-frontier)).
+
+The book's default is to treat any suspiciously fast family as a leak until proven otherwise: diff the container's file system and history against what the agent is supposed to see, strip future history, keep hidden tests outside the container and copy them in only at reward time, and disable network access. Then add a canary: a task whose only solution is in the leaked location. If the canary is ever solved, the leak is open. Measure per-family learning speed and the frequency of history-inspection tool calls in successful trajectories.
+
+## B.3 Environments and tools
+
+### Problem 12: The model learned to call submit immediately
+
+*Scenario.* After 100 steps, 70% of episodes are a single `submit` call with no edit. Pass rate falls from 0.25 to 0.08. There is a step penalty of $-0.02$ per turn and a reward of 1 for a correct submission.
+
+*Model answer.* Compute the value of the two strategies under the current policy. Submitting immediately yields $-0.02$ (and fails), so its return is about $-0.02$. A full attempt of 6 turns costs $-0.12$ and succeeds with some probability $q$, so its expected return is $q - 0.12$. If the policy's success rate on attempts has dropped below 0.10, immediate submission is the better strategy under the reward as written. The step penalty created this incentive, and the group baseline enforces it: within a group, short failures have a higher return than long failures, so they receive positive advantage relative to the group mean.
+
+Options: remove the step penalty and rely on the turn budget to bound length; make the penalty apply only to successful episodes (so efficiency is preferred among successes but failure is not cheaper when short); or condition submission on at least one test call. The book's default is no per-step penalty for binary-verifier coding tasks, a hard turn budget, and efficiency pressure applied, if at all, among successful trajectories. Measure the distribution of episode length separately for successes and failures, and the fraction of episodes with zero edits. [Chapter 12](/tutorial/chapters/12-multi-turn-and-long-horizons) reproduces this failure on TinyAgent.
+
+### Problem 13: The agent never submits
+
+*Scenario.* With a 30-turn limit, 40% of episodes end by hitting the limit. These episodes currently receive reward 0. Some of them contain a correct edit that was never submitted.
+
+*Model answer.* Truncation is a property of the training setup, not the task. Treating a truncated episode as a failure teaches the policy that long episodes are bad, which is reasonable if the deployment also has a budget and unreasonable if it does not. Treating it as if it would have succeeded is unfounded. A third option is to run the hidden tests on the final state at truncation and reward that state as if it had been submitted, which credits correct work and removes the incentive to keep exploring after a fix.
+
+The book's default for coding tasks is to evaluate the final repository state at truncation with the same hidden tests, because the deployment artifact is the patch, not the act of submitting. If you want to teach the agent to stop, add a small bonus for an explicit submit among successful episodes. A value-based method could bootstrap from a critic at truncation instead; with critic-free methods this is not available, which is one place where critics still matter ([Chapter 7](/tutorial/chapters/07-advantages-and-credit)). Measure the fraction of truncated episodes whose final state would pass, and the distribution of turns to first passing state.
+
+### Problem 14: Coarse edit operations or free-form patches
+
+*Scenario.* Your prototype uses a menu of edit operations, as in the BugFix gym. Product wants the agent to write arbitrary diffs. RL with free-form diffs learns much more slowly: in the first 200 steps, 60% of edits fail to apply.
+
+*Model answer.* A menu of operations is a small discrete action space: exploration is cheap, every action is syntactically valid, and credit is easy to assign. It also caps the solvable task set at what the menu covers and does not transfer to real work. Free-form diffs cover everything but make most random actions invalid, so the early reward signal is dominated by format failures rather than repair quality.
+
+The usual way through is to keep the free-form interface and remove the format bottleneck before RL: a short SFT stage on valid edit trajectories, a forgiving edit tool (search-and-replace on exact strings, with a helpful error when the search string is not found), and a parser that returns specific error messages so that a failed edit is an informative observation rather than a dead turn. The book's default is free-form edits with a string-replacement tool and an SFT cold start, using the coarse menu only as a debugging environment where every phenomenon is cheap to reproduce. Measure the edit-apply rate separately from the solve rate; RL should not have to learn the edit format and the repair at the same time.
+
+### Problem 15: Environment reset is too expensive
+
+*Scenario.* Each episode runs in a fresh container built from a repository snapshot. Starting a container takes 3 minutes; a typical episode takes 8 minutes of agent interaction. You need 512 episodes per step.
+
+*Model answer.* Startup is 27% of each episode's wall-clock time, and if containers are started on demand, every episode waits for it. Since startup does not depend on the policy, it can be moved off the critical path. Options: keep a warm pool of pre-started containers per task image so that reset is a lookup; reuse a container across episodes of the same task with a reset step (a `git checkout` and `git clean` plus a check that the file system matches a recorded hash); or snapshot a running container after startup and restore from the snapshot, which depends on what your container runtime supports.
+
+The book's default is a warm pool sized by Little's law (Problem 18) plus reuse with a verified reset for episodes of the same task, which is the common case because group sampling runs $G$ episodes per task. The verification step is not optional: an incomplete reset leaks state between episodes in the same group, which correlates their rewards and corrupts the group baseline. Measure reset time, pool hit rate, and the fraction of resets that fail the file-system check.
+
+## B.4 Systems and scale
+
+### Problem 16: Async trainer with 2-step staleness
+
+*Scenario.* Your asynchronous pipeline generates rollouts with weights that are up to 2 optimizer steps older than the weights being trained. You compute the PPO ratio against the trainer's own recomputed `old_logp` for the current step. How should you correct for staleness, and when does the correction break?
+
+*Model answer.* The data were sampled from a behavior policy $\mu$ (the inference engine running stale weights), not from $\pi_{\text{old}}$ at the current step. Recomputing `old_logp` with the trainer's current weights makes the PPO ratio start at 1 and hides the distribution shift. The correct importance weight for an unbiased per-token gradient is $\pi_\theta / \mu$, which decomposes into $\pi_\theta / \pi_{\text{prox}}$ times $\pi_{\text{prox}} / \mu$. The first factor is what PPO clips for the trust region; the second is the staleness and mismatch correction ([Chapter 13](/tutorial/chapters/13-rollout-systems)). In practice, store the sampler's log-probabilities with each token, compute a truncated weight $\min(\pi_{\text{prox}}/\mu, C)$ per token, and multiply it into the policy-gradient term, while the PPO clip continues to operate on $\pi_\theta/\pi_{\text{prox}}$. Truncation trades a bounded bias for bounded variance.
+
+The correction breaks in three ways. First, as staleness grows, the per-token ratios spread and an increasing fraction of tokens hit the cap, so the update becomes increasingly biased; the truncated fraction is the metric to watch. Second, per-token weights ignore the sequence-level ratio, which is a product of token ratios and explodes for long agent trajectories; per-token correction is an approximation whose quality falls with length ([Chapter 8](/tutorial/chapters/08-ppo)). Third, if $\mu$ includes sampling transforms (temperature, top-p) that the trainer does not reproduce, the ratio is computed against the wrong distribution entirely ([Chapter 3](/tutorial/chapters/03-language-models-as-policies)). The book's default is a staleness bound of 1 to 2 steps, stored sampler log-probabilities, a per-token cap $C$ around 2, and alerts on the capped fraction and on $\mathrm{KL}(\mu \,\|\, \pi_{\text{prox}})$ estimated with $k_3$.
+
+### Problem 17: Tokenizer drift between the inference engine and the trainer
+
+*Scenario.* Multi-turn rollouts are stored as text and retokenized by the trainer. The trainer's recomputed log-probabilities for policy tokens differ from the engine's by a mean absolute value of 0.002 for most tokens, but about 1% of trajectories show differences above 5 nats at a few positions, and those trajectories dominate the gradient norm.
+
+*Model answer.* A small, broad difference is the expected training–inference numerical mismatch: different kernels, precision, and batch shapes. A rare, large difference at specific positions is a different failure: the trainer is scoring token ids that the engine never sampled. Decoding generated ids to text and re-encoding does not round-trip, especially around tool-call boundaries, whitespace, and special tokens, so the trainer computes log-probabilities of a different tokenization, some of which the model considers very unlikely. Those tokens produce huge ratios and dominate the update ([Chapter 5](/tutorial/chapters/05-trajectories-and-templates)).
+
+The fix is the token-in, token-out discipline: store the exact sampled ids and their sampler log-probabilities, assemble the training sequence by concatenating ids (policy ids as sampled, observation ids tokenized once by the environment wrapper), and never retokenize policy text. As a guard, log the maximum per-token absolute log-prob difference per trajectory and drop or mask trajectories above a threshold, counting how many you drop. The 0.002 baseline mismatch is then handled by the importance correction in Problem 16. Measure the fraction of trajectories with any position above 1 nat of difference; after the fix it should be near zero.
+
+### Problem 18: Design the rollout fleet for long episodes
+
+*Scenario.* Episodes average 50 turns and 64k tokens of context at the end. Each turn generates about 400 policy tokens and runs a tool that takes on average 8 seconds. Containers take 3 minutes to start. You want one optimizer step about every 30 minutes with 512 episodes per step.
+
+*Model answer.* Start with one episode's wall-clock time. If decoding runs at about 40 tokens per second per sequence under load (an assumption to measure), each turn spends 10 seconds generating plus 8 seconds in the tool, so a 50-turn episode takes about 15 minutes plus 3 minutes of startup. By Little's law, the number of episodes in flight equals throughput times duration: 512 episodes per 30 minutes at 18 minutes each means about 307 episodes concurrently, so about 307 containers and 307 sequences resident in the inference engines. The KV cache for 307 sequences at up to 64k tokens is the binding constraint on the inference fleet: its size is $2 \times n_{\text{layers}} \times n_{\text{kv heads}} \times d_{\text{head}} \times$ bytes per element per token, multiplied by the total resident tokens, and you should compute it for your model before choosing the number of engine replicas. Prefix caching matters, because each turn appends to an existing context; without it every turn re-prefills up to 64k tokens.
+
+Design choices follow from the arithmetic. Pre-warm containers so startup leaves the critical path (Problem 15). Run generation asynchronously with respect to training so that tool latency does not idle the trainer, with a staleness bound (Problem 16). Bound the long tail: if 5% of episodes take three times the median, a synchronous step waits for them, so either use partial rollouts that resume after a weight update or cap episode duration and handle truncation as in Problem 13. Avoid the tempting fix of launching extra episodes and training on the first 512 to finish: it silently biases the batch toward short episodes, which are often the easy ones, so compare the length distribution of trained episodes with that of launched episodes. The book's default is an asynchronous design with a bounded staleness of 1 to 2 steps, a warm container pool sized at about 1.2 times concurrency, prefix caching on, and per-turn token budgets. Measure engine utilization, KV cache occupancy, tool-time fraction, the 95th percentile of episode duration, and staleness per trained token. [Chapter 13](/tutorial/chapters/13-rollout-systems) builds a discrete-event simulator for exactly this calculation.
+
+### Problem 19: Estimate the GPU-hours of an RL run
+
+*Scenario.* A dense model with $N = 32\text{B}$ parameters. Each step uses 512 episodes with an average of 24,000 total tokens, of which 6,000 are policy-generated. You plan 300 steps. Assume an accelerator with $10^{15}$ dense bf16 FLOP/s peak and 40% model FLOPs utilization for training. Estimate the GPU-hours.
+
+*Model answer.* Use $2N$ FLOPs per token for a forward pass and $6N$ for forward plus backward, and ignore attention FLOPs for a first estimate (at 24k context they add a noticeable fraction, so treat the result as a lower bound). Training touches every token, policy or observation, because observation tokens are inputs the gradient flows through. Policy update: $6 \times 32\times 10^9 \times 512 \times 24{,}000 = 2.36 \times 10^{18}$ FLOPs. Recomputing old log-probabilities and reference log-probabilities adds two forward passes, $4N$ per token, or $1.57 \times 10^{18}$. The total, $3.93 \times 10^{18}$ FLOPs, at an effective $4 \times 10^{14}$ FLOP/s is about 9,800 GPU-seconds, or 2.7 GPU-hours per step.
+
+Generation is decode-bound rather than FLOP-bound. With 3.07 million policy tokens per step and an assumed aggregate decode rate of 1,000 tokens per second per GPU for long-context agent batches, decoding is about 0.85 GPU-hours. Prefilling the 18,000 observation and prompt tokens per episode, with prefix caching so each is prefilled once, is $2N \times 9.2 \times 10^6 = 5.9 \times 10^{17}$ FLOPs, or 0.4 GPU-hours. The compute-bound total is about 4 GPU-hours per step. The dominant uncertainty is utilization of the inference fleet: if tool waits and the long tail keep it 25% busy, generation costs about 5 GPU-hours, and a step costs about 7.7 GPU-hours, or about 2,300 GPU-hours for 300 steps, before evaluation, failed runs, and ablations. In review, the right answer is the method and the dominant term, not the final number. Measure actual tokens per second per GPU for both roles in a short pilot and replace every assumption above.
+
+### Problem 20: A training–inference mismatch that grows
+
+*Scenario.* With identical weights, the mean $|\log \pi_{\text{trainer}} - \log \mu_{\text{engine}}|$ is 0.003 at step 0. By step 400 it is 0.03, and training becomes unstable. The model is a mixture-of-experts model.
+
+*Model answer.* Numerical mismatch at fixed weights comes from different kernels, reduction orders, precision, and batch shapes in the two engines. For a mixture-of-experts model there is an additional, discontinuous source: a small numerical difference in router logits can select a different expert, which changes the token's probability by much more than rounding would. A mismatch that grows over training suggests the policy has moved into regions where these discontinuities matter more, for example where the router or the token distribution is near a tie, or where a lower-entropy policy makes a few large disagreements dominate the mean.
+
+Options: apply an importance correction against the engine's probabilities (Problem 16), which bounds the damage but does not remove the source; use sequence-level ratios, which one public line of work argues is more stable for MoE models (see GSPO in [Chapter 20](/tutorial/chapters/20-frontier)); align numerics by running the engine in higher precision for the final logits or using batch-invariant kernels where available; or record the engine's routing decisions and replay them in the trainer, if the stack supports it. The book's default is to log the mismatch distribution (mean and the 99.9th percentile) from step 0, apply truncated importance weights, and investigate numerics as soon as the tail grows. Treat a growing mismatch as a leading indicator of collapse, not as noise.
+
+## B.5 Evaluation
+
+### Problem 21: Compute pass@k
+
+*Scenario.* For one task you draw $n = 10$ samples and $c = 3$ pass. Estimate pass@1 and pass@5. A colleague computes pass@5 as $1 - (1 - 0.3)^5$. Who is right?
+
+*Model answer.* The unbiased estimator from [Chapter 17](/tutorial/chapters/17-evaluation) is $\widehat{\text{pass@}k} = 1 - \binom{n-c}{k} / \binom{n}{k}$, the probability that a random subset of $k$ of the $n$ samples contains at least one success. Here pass@1 is $3/10 = 0.3$ and pass@5 is $1 - \binom{7}{5}/\binom{10}{5} = 1 - 21/252 = 0.917$. The colleague's plug-in estimate gives $1 - 0.7^5 = 0.832$. The plug-in estimator is biased, because $1 - (1-\hat p)^k$ is a concave function of $\hat p$ and Jensen's inequality pushes its expectation below the true value; the combinatorial estimator is exactly unbiased for $k \le n$. The difference is not cosmetic: per task it is 8.5 points here.
+
+In review, also ask about $n$ relative to $k$: estimates of pass@$k$ with $k$ close to $n$ have high variance, so draw $n$ well above the largest $k$ you report. Average the per-task estimates over tasks, then report a confidence interval from a bootstrap over tasks, not over samples.
+
+### Problem 22: Is a 2-point gain real?
+
+*Scenario.* On a 500-task benchmark, checkpoint A solves 41.0% and checkpoint B solves 43.0% with one sample each. On a per-task basis, B solves 40 tasks that A fails and A solves 30 tasks that B fails.
+
+*Model answer.* Treat the two runs as unpaired and the standard error of each rate is about $\sqrt{0.42 \cdot 0.58/500} \approx 0.022$, so the difference has a standard error around 0.031 and a 2-point gain is well within noise. The paired view is the correct one, because both checkpoints ran on the same tasks: only discordant tasks carry information. With 40 and 30 discordant tasks, the difference is $10/500 = 0.02$ with standard error $\sqrt{40 + 30}/500 = 0.0167$, a $z$ of about 1.2, which is still not significant at conventional levels. A McNemar test on the 40 versus 30 split gives the same conclusion.
+
+To resolve a 2-point effect, reduce variance rather than adding tasks. Draw several samples per task and compare per-task pass rates, run several training seeds when the question is about a method rather than a checkpoint, and fix the harness (template, temperature, budgets) across both runs ([Chapter 17](/tutorial/chapters/17-evaluation)). The book's default for reporting is a paired comparison with a bootstrap interval over tasks, the number of samples per task, and the number of seeds. A difference smaller than the seed-to-seed spread of the same recipe is not a result.
+
+### Problem 23: High benchmark score, low score on fresh tasks
+
+*Scenario.* Your model scores well on a public SWE-style benchmark whose tasks were created from repositories before 2024. On a set of 100 fresh tasks you built last month from the same repositories, its pass rate is about half as high, while the base model's ratio between the two sets is much smaller.
+
+*Model answer.* Three explanations compete. Contamination: the benchmark's issues, patches, or tests appeared in pretraining, SFT, or RL data, so the model recalls rather than repairs. Distribution shift: the fresh tasks are harder or different (newer APIs, larger patches) for reasons unrelated to memorization. Harness differences: the fresh tasks run in a different environment build or with weaker test coverage. The base-model comparison helps: if the base model shows a smaller gap, the gap grew during your post-training, which points at your data, including RL task sets built from the same repositories as the benchmark.
+
+The book's default is to decontaminate training tasks against every evaluation set by repository, issue, and patch similarity before training, to keep a fresh, dated evaluation set that is rebuilt periodically, and to report both. To test memorization directly, probe the model with the issue text and see whether it reproduces the gold patch or file paths it has not been shown. Measure the gap between the public and fresh sets across checkpoints; a gap that widens over RL training is a property of your pipeline. [Chapter 17](/tutorial/chapters/17-evaluation) and [Chapter 20](/tutorial/chapters/20-frontier) discuss benchmark contamination and validity.
+
+### Problem 24: RL improves pass@1 but loses at large k
+
+*Scenario.* After RL, pass@1 on held-out tasks rises from 0.22 to 0.35. At $k = 128$, the base model solves 0.71 of tasks and the RL model solves 0.62. A stakeholder asks whether RL made the model worse.
+
+*Model answer.* Both measurements can be correct. RL with an on-policy objective concentrates probability on behaviors that already succeed, which raises pass@1 and can remove low-probability strategies that occasionally solved other tasks. Pass@$k$ at large $k$ measures coverage of the solution space under heavy sampling, so a sharper distribution can cover less. This pattern has been reported publicly on reasoning benchmarks, and the extent to which it holds after longer training or with explicit exploration is disputed ([Chapter 20](/tutorial/chapters/20-frontier)).
+
+Which metric matters depends on deployment. If the agent runs once per issue, pass@1 is the product metric and the RL model is better. If the system samples many attempts and selects with a verifier, the large-$k$ coverage matters, and the RL model may be worse for that system. The book's default is to report the full pass@$k$ curve for base and RL checkpoints on the same tasks, and to treat a crossing as information about entropy and exploration ([Chapter 10](/tutorial/chapters/10-kl-entropy-regularization)). To act on it, try entropy-preserving changes (clip-higher, less aggressive filtering, a smaller learning rate) and check whether the crossing point moves right without giving back pass@1.
+
+## B.6 Debugging
+
+### Problem 25: Reward climbs but held-out pass@1 is flat
+
+*Scenario.* Training reward rises from 0.18 to 0.55 over 400 steps. Held-out SWE-bench Verified pass@1, evaluated every 50 steps, stays within one point of its starting value.
+
+*Model answer.* Work through the gap between the two numbers. Is the training reward the same function as the evaluation metric? If training uses public tests, partial credit, or a judge, the policy can improve the reward without improving hidden-test success (Problems 7, 8, 10). Is the evaluation harness the same as the training environment: the same template, tools, budgets, truncation, and temperature? A model that learned to use a tool that the evaluation harness does not provide cannot show its gains. Are the training tasks from the same distribution as the evaluation tasks? Gains on small synthetic repositories may not transfer to large real ones. Finally, is the evaluation sensitive enough? On 500 tasks with one sample, one point is inside the noise (Problem 22).
+
+The cheapest discriminating measurement is to evaluate the training reward and the evaluation metric on the same held-out training-distribution tasks. If both rise there, the issue is transfer or harness mismatch; if only the reward rises, the reward is being gamed. Then sample 20 high-reward training trajectories and read them. The book's default is to keep a held-out split of the training distribution, scored with the evaluation metric, as a standing dashboard panel next to the training reward, so this gap is visible from the first day ([Chapter 18](/tutorial/chapters/18-debugging-rl-runs)).
+
+### Problem 26: Entropy collapses by step 50
+
+*Scenario.* Mean per-token entropy on policy tokens falls from 0.9 to 0.05 nats in 50 steps. Reward rose at first and is now flat at 0.30. Groups are increasingly all-pass or all-fail.
+
+*Model answer.* Entropy collapse means the policy has become nearly deterministic on the states it visits, so groups contain near-identical trajectories, the group baseline yields zero advantage, and learning stops. Fast collapse has a few common causes: a learning rate that is too high for RL (RL updates are typically much smaller than SFT updates), many epochs over each batch, symmetric clipping that limits how much low-probability tokens can grow while allowing high-probability tokens to grow further, or a reward that strongly favors one template response. A public analysis relates the entropy change per step to the covariance between log-probability and advantage, which gives one way to see why confident, rewarded tokens drive collapse ([Chapter 20](/tutorial/chapters/20-frontier)).
+
+Options: reduce the learning rate or epochs (cheapest, slows learning); raise the upper clip bound, as in the DAPO clip-higher modification, so that low-probability tokens with positive advantage can increase faster ([Chapter 9](/tutorial/chapters/09-grpo-and-variants)); add an entropy bonus (effective but easy to over-tune, and it can produce gibberish at high coefficients); or raise the sampling temperature, which changes the behavior policy and must be reflected in the log-probabilities ([Chapter 3](/tutorial/chapters/03-language-models-as-policies)). The book's default is to halve the learning rate and enable clip-higher first, and to add an entropy bonus only with a target-entropy controller. Measure entropy on policy tokens only, the fraction of degenerate groups, and pass@$k$ at moderate $k$ as the outcome check ([Chapter 10](/tutorial/chapters/10-kl-entropy-regularization)).
+
+### Problem 27: Mean response length doubles
+
+*Scenario.* Over 300 steps, mean policy tokens per episode grow from 1,800 to 3,700. Reward improves modestly. The increase is concentrated in failed episodes, and more episodes hit the context limit.
+
+*Model answer.* Length growth can be learned behavior that helps (more reading, more testing, more reasoning) or an artifact of the objective. The concentration in failures is the clue. Under sequence-mean aggregation, a longer failed trajectory spreads its negative advantage over more tokens, so each token is pushed down less, and long failures become less penalized per token (Problem 1). Truncation at the context limit can make it worse if truncated episodes receive the same reward as short failures, since the truncated length then carries no extra cost.
+
+Check aggregation first, by computing per-trajectory total weight against length on a real batch. Then split length growth by turn type: is the growth in reasoning tokens within a turn, in the number of turns, or in repeated identical tool calls? Repetition indicates a degenerate loop rather than useful work. The book's default is token-level or constant-normalizer aggregation, an explicit per-turn and per-episode token budget that matches the deployment budget, and an overlong-sequence treatment that is consistent between training and evaluation. Measure length percentiles for successes and failures, and the fraction of episodes that end by truncation.
+
+### Problem 28: The loss mask trains on tool output
+
+*Scenario.* After a refactor of the trajectory builder, the model begins producing text that looks like test-runner output, such as `PASSED [100%]`, in its own turns. Policy-token entropy drops sharply. Reward is unchanged.
+
+*Model answer.* The symptom says the model is learning to generate observation text, which means observation tokens entered the loss. The usual cause is an off-by-one between the action mask and the predicted positions: the mask is aligned to `ids` instead of `ids[:, 1:]`, or the mask for a tool span is shifted by one so that its first or last token is included. Because observation tokens are highly predictable given the context (formatting, repeated paths), training on them lowers measured entropy, which looks like progress on the dashboard. The reward is unchanged because the extra gradient does not help repair.
+
+Fix and guard. Assert, for every collated batch, that the action mask is zero on every token whose owner is not the policy, using the ownership labels recorded at rollout time ([Chapter 5](/tutorial/chapters/05-trajectories-and-templates)). Log the fraction of masked-in tokens per batch and the entropy separately on policy and on observation positions. The book's default is a unit test on a fixed hand-built trajectory, whose expected mask is written out explicitly, that runs on every change to the trajectory code. [Chapter 18](/tutorial/chapters/18-debugging-rl-runs) reproduces this failure and its dashboard signature.
+
+## B.7 Research judgment
+
+### Problem 29: SFT on teacher traces or RL?
+
+*Scenario.* You have a strong teacher agent that solves 60% of your training tasks, and a 7B student that solves 15%. Budget allows either SFT on 20,000 filtered teacher trajectories, RL on the student, or both. Which, and in what order?
+
+*Model answer.* SFT on teacher traces is behavior cloning on the teacher's state distribution. It is cheap, stable, and moves the student fast when the student is far behind, but the student will visit states the teacher never visited (its own mistakes), and the traces teach nothing about recovering from them. That compounding error grows with episode length. RL trains on the student's own distribution and optimizes the outcome directly, but it needs a nonzero success rate to get gradient and costs far more per useful update. On-policy distillation sits between them: the student generates, the teacher scores each student token, so the student gets dense supervision on its own states ([Chapter 16](/tutorial/chapters/16-distillation)).
+
+The book's default sequence is SFT first, to remove format failures and raise the success rate into the range where RL groups are informative (Problem 3), then RL or on-policy distillation on the student's own rollouts. Use on-policy distillation when the teacher is available at training time and shares the tokenizer, and RL when the teacher is unavailable, mismatched, or worse than the target. Check the teacher traces for format compatibility with the RL template before SFT, since a template change between stages is a common source of regressions ([Chapter 15](/tutorial/chapters/15-sft-and-rejection-sampling)). Measure the student's entropy after SFT: if SFT collapses it, RL will have little to explore with.
+
+### Problem 30: Adopt the new method from last week's preprint?
+
+*Scenario.* A preprint reports that its new advantage estimator improves SWE-bench Verified pass@1 by 6 points over GRPO for a 32B model. Your lead asks whether to switch the production recipe.
+
+*Model answer.* Start by reading what was actually compared. Was the baseline tuned with the same effort (learning rate, clip range, filtering)? How many seeds, and is the gain larger than the seed-to-seed spread? Was the evaluation harness identical, including temperature, budgets, and test-time scaling? Does the gain hold at the authors' smaller scales, and does it show the same sign on a second benchmark? Is the claim about the estimator, or does the recipe also change data, length budget, or training steps? Every number in the preprint is author-reported until someone else reproduces it.
+
+The book's default is to reproduce the mechanism before the headline: implement the change as a flag, test it on a small controlled environment where you can measure its effect on the quantity it claims to fix (variance, bias, entropy), then run a matched ablation at modest scale with several seeds, and only then a production-scale A/B test with a paired evaluation (Problem 22). Adopt it if it wins at the modest scale with a margin larger than seed noise and does not regress any guardrail metric. Write down beforehand what result would make you reject it. [Chapter 20](/tutorial/chapters/20-frontier) gives the full checklist for reading author-reported gains.
+
+## Summary
+
+- Most design-review questions in agentic RL reduce to a small set of mechanisms: how the loss weights tokens and trajectories, how the baseline creates or removes signal, how the reward differs from the objective, how the behavior policy differs from the trained policy, and how the evaluation differs from the deployment.
+- A good answer names the mechanism, the cheapest measurement that distinguishes it from alternatives, a default action with its cost, and the metric that confirms the fix.
+- Short calculations (degenerate-group probability, std-normalization scaling, KL estimators, pass@$k$, paired standard errors, Little's law, FLOP counts) settle many arguments before any experiment is run.
+- The defaults in this appendix are recommendations under stated assumptions. They are starting points for a design review, not rules.
+
+## Exercises
+
+1. For Problem 3, derive the expected number of tasks with nonzero gradient per step as a function of $G$, prompt count, and a pool distribution of success rates, and find the best $G$ for a pool where success rates are uniform on $[0, 0.4]$ and the budget is 512 episodes.
+2. Redo Problem 19 for a mixture-of-experts model with 200B total and 20B active parameters. Which terms scale with total parameters and which with active parameters?
+3. Change an assumption in Problem 9: suppose flips occur only for correct patches (false negatives) with probability $f$. Derive the observed expected reward and its gradient, and compare with the symmetric case.
+4. Write a one-page design review for Problem 18 with a different constraint: the environment allows only 64 concurrent containers. What changes, and what do you give up?
+5. Pick any two problems above whose defaults conflict (for example, Problem 6's removal of KL and Problem 10's use of a judge). Write the decision rule that tells you which default to use in a given run.
+6. For Problem 28, write the unit test described in the answer against the `collate` function from [Chapter 5](/tutorial/chapters/05-trajectories-and-templates), and confirm that it fails when the mask is shifted by one position.

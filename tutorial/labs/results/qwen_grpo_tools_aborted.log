@@ -1,0 +1,84 @@
+Loading weights:   0%|          | 0/311 [00:00<?, ?it/s]Loading weights:  78%|███████▊  | 244/311 [00:00<00:00, 2439.16it/s]Loading weights: 100%|██████████| 311/311 [00:00<00:00, 2560.75it/s]
+config: {'group_size': 8, 'prompts_per_step': 8, 'temperature': 1.0, 'max_turns': 8, 'rename': True, 'max_edits': 1, 'reward': 'hidden', 'adv_mode': 'grpo', 'overlong_buffer': 0, 'dynamic_sampling': False, 'max_sample_rounds': 4, 'ratio_level': 'token', 'clip_low': 0.2, 'clip_high': 0.2, 'loss_mode': 'token_mean', 'norm_const': None, 'kl_coef': 0.0, 'kl_kind': 'k3', 'lr': 1e-06, 'epochs': 1, 'minibatches': 2, 'max_grad_norm': 1.0, 'seed': 0} | {'steps': 20, 'group_size': 8, 'prompts': 8, 'lr': 1e-06, 'max_turns': 8, 'max_new_tokens': 256, 'gen_batch': 32, 'micro': 4, 'eval_n': 8, 'seed': 0, 'smoke': False, 'out': 'tutorial/labs/results/qwen_grpo_tools.json'} | prompt tokens 755
+held-out, before   pass@1 0.050 [0.000, 0.150] | Read 1.26 | Edit 0.88 | Write 0.47 | Bash 0.06 | malformed 0.11 | failed 0.81 | answered 1.00 | turns 2.45
+step  0 | reward 0.000 | Read 1.08 | Edit 0.84 | Write 0.52 | Bash 0.09 | malformed 0.06 | failed 0.73 | answered 1.00 | turns 2.33 | tokens 132 | zero-adv 1.00 | entropy 0.000 | kl 0.0e+00 | gap 2.3e-06 | 62s + 7s
+step  1 | reward 0.031 | Read 1.06 | Edit 0.86 | Write 0.55 | Bash 0.08 | malformed 0.06 | failed 0.77 | answered 0.98 | turns 2.45 | tokens 137 | zero-adv 0.75 | entropy 0.420 | kl 4.6e-02 | gap 2.1e-06 | 73s + 23s
+Traceback (most recent call last):
+  File "/home/user/nanoAstra/.bookcheck/lab-tools/tutorial/labs/qwen_grpo_tools.py", line 663, in <module>
+    main()
+  File "/home/user/nanoAstra/.bookcheck/lab-tools/tutorial/labs/qwen_grpo_tools.py", line 634, in main
+    trajs = rollout(model, qtok, [t for t in picked for _ in range(cfg.group_size)], cfg, args, step, pool)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.bookcheck/lab-tools/tutorial/labs/qwen_grpo_tools.py", line 460, in rollout
+    outs += generate(model, qtok, [e['ids'] for e in chunk], args.max_new_tokens, seed * 1000 + turn * 10 + c)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.bookcheck/lab-tools/tutorial/labs/qwen_grpo_tools.py", line 429, in generate
+    seq = model.generate(input_ids=ids, attention_mask=attn, do_sample=True, temperature=1.0, top_p=1.0, top_k=0,
+          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/torch/utils/_contextlib.py", line 120, in decorate_context
+    return func(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/transformers/generation/utils.py", line 2543, in generate
+    result = decoding_method(
+             ^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/transformers/generation/utils.py", line 2750, in _sample
+    outputs = model_forward(**model_inputs, return_dict=True)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/transformers/utils/generic.py", line 876, in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/transformers/models/qwen3/modeling_qwen3.py", line 492, in forward
+    outputs: BaseModelOutputWithPast = self.model(
+                                       ^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/transformers/utils/generic.py", line 952, in wrapper
+    output = func(self, *args, **kwargs)
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/transformers/utils/output_capturing.py", line 248, in wrapper
+    outputs = func(self, *args, **kwargs)
+              ^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/transformers/models/qwen3/modeling_qwen3.py", line 424, in forward
+    hidden_states = decoder_layer(
+                    ^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/transformers/modeling_layers.py", line 93, in __call__
+    return super().__call__(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/transformers/models/qwen3/modeling_qwen3.py", line 318, in forward
+    hidden_states, _ = self.self_attn(
+                       ^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1775, in _wrapped_call_impl
+    return self._call_impl(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/torch/nn/modules/module.py", line 1786, in _call_impl
+    return forward_call(*args, **kwargs)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/transformers/models/qwen3/modeling_qwen3.py", line 277, in forward
+    attn_output, attn_weights = attention_interface(
+                                ^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/transformers/integrations/sdpa_attention.py", line 60, in sdpa_attention_forward
+    value = repeat_kv(value, module.num_key_value_groups)
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/home/user/nanoAstra/.venv/lib/python3.12/site-packages/transformers/integrations/sdpa_attention.py", line 25, in repeat_kv
+    return hidden_states.reshape(batch, num_key_value_heads * n_rep, slen, head_dim)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+torch.OutOfMemoryError: CUDA out of memory. Tried to allocate 324.00 MiB. GPU 0 has a total capacity of 139.83 GiB of which 308.00 MiB is free. Process 2731378 has 114.96 GiB memory in use. Including non-PyTorch memory, this process has 24.55 GiB memory in use. Of the allocated memory 18.13 GiB is allocated by PyTorch, and 5.70 GiB is reserved by PyTorch but unallocated. If reserved but unallocated memory is large try setting PYTORCH_CUDA_ALLOC_CONF=expandable_segments:True to avoid fragmentation.  See documentation for Memory Management  (https://pytorch.org/docs/stable/notes/cuda.html#environment-variables)

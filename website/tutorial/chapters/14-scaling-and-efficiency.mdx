@@ -1,0 +1,552 @@
+---
+title: "14. Scaling and Efficiency"
+---
+
+[Chapter 13](/tutorial/chapters/13-rollout-systems) arranged the components of an RL system so that the hardware is busy. This chapter is about what the busy hardware spends its time and memory on. The answers are less glamorous than objectives and more often the reason a run fails: padding tokens that are computed and thrown away, a single 60k-token trajectory that runs a microbatch out of memory, a logits tensor larger than the model, a gradient that silently changes when the microbatch size does, and rollouts spent on tasks the policy always solves. Each of them is a correctness question as well as a cost question, because each fix (packing, token budgets, chunking, accumulation, filtering) can change the gradient if it is done wrong.
+
+We build and save four tools: sequence packing with a correct block-diagonal attention mask, token-budget microbatches, checkpointed chunked log-probabilities, and pass-rate filtering for the task distribution. Each is checked against the straightforward computation it replaces, and the chapter ends with the arithmetic that turns token counts into GPU-hours.
+
+```python
+#@save
+import torch
+from torch.utils.checkpoint import checkpoint
+import agentrl as arl
+```
+
+```python
+import copy
+torch.set_num_threads(4)                       # the shared check host is heavily loaded
+tok = arl.build_tokenizer(arl.make_tasks('all'))
+train_tasks, heldout_tasks = arl.make_tasks('train'), arl.make_tasks('heldout')
+rl_base = arl.make_rl_base(tok)
+cfg = arl.RLConfig()
+trajs = arl.sample_groups(rl_base, lambda: arl.make_env(cfg), train_tasks[:8], tok, cfg,
+                          torch.Generator().manual_seed(0))                     # 64 real episodes
+```
+
+## 14.1 Padding and its waste
+
+`collate` pads every episode of a batch to the longest one. The cost is visible from the lengths alone: a padded batch computes $B \cdot T_{\max}$ positions, of which $\sum_i T_i$ are real.
+
+```python
+lengths = torch.tensor([len(t.ids) for t in trajs])                            # [64] tokens per episode
+real, padded = lengths.sum().item(), len(lengths) * lengths.max().item()
+q = lengths.float().quantile(torch.tensor([0.5, 0.9]))
+print(f'episode tokens: min {lengths.min()} | median {q[0]:.0f} | p90 {q[1]:.0f} | max {lengths.max()}')
+print(f'padded batch: {padded} positions for {real} real tokens -> {1 - real / padded:.0%} of compute is padding')
+```
+
+Output:
+
+```text
+episode tokens: min 10 | median 18 | p90 79 | max 149
+padded batch: 9536 positions for 2472 real tokens -> 74% of compute is padding
+```
+
+TinyAgent's episodes range from 10 tokens (an immediate submit) to 149 (a long episode with several observations), and the median is 18. Padding them all to 149 computes 9,536 positions for 2,472 real tokens, so 74% of the forward and backward pass is spent on padding. Agent trajectories have this shape at every scale: most episodes are short, a few are long, and the long ones set the width of the batch.
+
+**Sequence packing** concatenates several sequences into one row of a fixed length and fills the rows nearly full. It removes the waste, and it introduces two ways to compute the wrong thing. In a packed row, a token of the second sequence sits after the tokens of the first. A plain causal mask lets it attend to them, so its log-probability is conditioned on an unrelated episode: an **attention leak**. And with absolute or rotary positions, its position index continues from the first sequence instead of starting at 0. Correct packing needs a **block-diagonal causal mask** (a token attends to earlier tokens of its own sequence only) and **position ids that restart** at each sequence boundary. Packed training kernels such as FlashAttention's variable-length interface receive the boundaries as cumulative sequence lengths instead of a mask; the computation is the same.
+
+`pack_sequences` places trajectories into rows of `max_tokens` with first-fit decreasing: longest first, each into the first row with room. It returns the packed ids, per-token position ids and segment ids (the index of the sequence within its row, $-1$ for padding), and the action masks and sampler log-probabilities in the same `[R, L-1]` layout as `collate`. A sequence's last position predicts nothing of its own, so the mask entry that would predict the next sequence's first token stays 0.
+
+```python
+#@save
+def pack_sequences(trajs, max_tokens, pad_id=0):
+    """First-fit-decreasing packing of Trajectory objects into rows of max_tokens -> dict of [R, L] / [R, L-1]."""
+    rows, used = [], []
+    for i in sorted(range(len(trajs)), key=lambda i: -len(trajs[i].ids)):
+        n = len(trajs[i].ids)
+        if n > max_tokens:
+            raise ValueError(f'trajectory of {n} tokens does not fit in a row of {max_tokens}')
+        r = next((r for r, u in enumerate(used) if u + n <= max_tokens), None)
+        if r is None:
+            rows.append([]), used.append(0)
+            r = len(rows) - 1
+        rows[r].append(i)
+        used[r] += n
+    R = len(rows)
+    out = dict(ids=torch.full((R, max_tokens), pad_id), position_ids=torch.zeros(R, max_tokens, dtype=torch.long),
+               segment_ids=torch.full((R, max_tokens), -1), action_mask=torch.zeros(R, max_tokens - 1),
+               sample_logp=torch.zeros(R, max_tokens - 1), rows=rows)
+    for r, members in enumerate(rows):
+        offset = 0
+        for k, i in enumerate(members):
+            t, n = trajs[i], len(trajs[i].ids)
+            out['ids'][r, offset:offset + n] = t.ids
+            out['position_ids'][r, offset:offset + n] = torch.arange(n)       # positions restart per sequence
+            out['segment_ids'][r, offset:offset + n] = k
+            out['action_mask'][r, offset:offset + n - 1] = t.action_mask     # last position predicts nothing
+            out['sample_logp'][r, offset:offset + n - 1] = t.sample_logp
+            offset += n
+    return out
+```
+
+TinyAgent's `forward` builds its own causal mask from the sequence length, so a packed forward pass has to be assembled from its parts: token embeddings plus position embeddings at the given position ids, the transformer blocks with an explicit mask, the final norm and head. `packed_logits` builds the mask from the segment ids: position $j$ may attend to position $i$ if $i \le j$ and both belong to the same segment. PyTorch's attention takes a per-row mask as a float tensor of shape `[R * n_heads, L, L]`, with $-\infty$ where attention is forbidden. Padding positions attend to themselves only, so no row of the softmax is empty.
+
+```python
+#@save
+def packed_logits(model, ids, position_ids, segment_ids):
+    """TinyAgent forward on packed rows with a block-diagonal causal mask: ids [R, L] -> logits [R, L, V]."""
+    L = ids.shape[1]
+    h = model.tok_emb(ids) + model.pos_emb(position_ids)                             # [R, L, D]
+    causal = torch.ones(L, L, dtype=torch.bool).tril()                               # [L, L]
+    allowed = causal & (segment_ids[:, :, None] == segment_ids[:, None, :])          # [R, L, L] same segment
+    allowed |= torch.eye(L, dtype=torch.bool)                                        # padding sees itself
+    mask = torch.zeros(allowed.shape).masked_fill(~allowed, float('-inf'))
+    mask = mask.repeat_interleave(model.blocks.layers[0].self_attn.num_heads, dim=0) # [R * heads, L, L]
+    return model.head(model.norm(model.blocks(h, mask=mask)))
+```
+
+We pack the 64 episodes into rows of 256 tokens, TinyAgent's maximum length, and compare the packed log-probabilities of every policy token with those of each episode run alone. Three variants show the two bugs and the fix.
+
+```python
+packed = pack_sequences(trajs, 256, tok.pad_id)
+print(f'{len(trajs)} episodes -> {len(packed["rows"])} rows of 256 | fill {(packed["segment_ids"] >= 0).float().mean():.1%}')
+mask = packed['action_mask']                                                         # [R, L-1]
+with torch.no_grad():
+    alone = arl.pad_rows([arl.sequence_log_probs(rl_base, t.ids[None])[0] for t in trajs], 255, 0.0)
+    reference = torch.zeros_like(mask)                                               # alone, in packed layout
+    for r, members in enumerate(packed['rows']):
+        offset = 0
+        for i in members:
+            n = len(trajs[i].ids)
+            reference[r, offset:offset + n - 1] = alone[i, :n - 1]
+            offset += n
+    variants = {'causal mask, running positions': (torch.arange(256).expand_as(packed['ids']), 0 * packed['segment_ids']),
+                'causal mask, restarted positions': (packed['position_ids'], 0 * packed['segment_ids']),
+                'block mask, restarted positions': (packed['position_ids'], packed['segment_ids'])}
+    for name, (pos, seg) in variants.items():
+        logp = arl.selected_log_probs(packed_logits(rl_base, packed['ids'], pos, seg)[:, :-1], packed['ids'][:, 1:])
+        err = ((logp - reference).abs() * mask).max().item()
+        print(f'{name:<34} max |packed - alone| on policy tokens: {err:.1e} nats')
+```
+
+Output:
+
+```text
+64 episodes -> 10 rows of 256 | fill 96.6%
+causal mask, running positions     max |packed - alone| on policy tokens: 6.4e+00 nats
+causal mask, restarted positions   max |packed - alone| on policy tokens: 1.7e+00 nats
+block mask, restarted positions    max |packed - alone| on policy tokens: 1.4e-06 nats
+```
+
+Packing puts the 64 episodes into 10 rows that are 96.6% full, against 26% real tokens in the padded batch. With a plain causal mask and positions running across the row, policy-token log-probabilities differ from the unpacked ones by up to 6.4 nats, a factor of about 600 in probability. Restarting the positions fixes part of it; the leak through attention alone still moves some log-probabilities by 1.7 nats. With the block mask and restarted positions, the packed computation matches the unpacked one to $1.4 \times 10^{-6}$, float32 rounding. Nothing about the leaky versions fails loudly: the shapes are right, the loss is finite, and training proceeds on the wrong conditional distributions.
+
+![Figure 14.1: The same 64 TinyAgent episodes laid out as a padded batch (left, one row per episode, padded to the longest) and packed into rows of 256 tokens (right). Blue: policy tokens; aqua: prompt, template and tool tokens; grey: padding.](/tutorial/figures/ch14-packing.svg)
+
+Figure 14.1 draws both layouts at the same scale, so area is compute. The padded batch is mostly grey; the packed rows are nearly solid. The dark ticks in the packed rows are the sequence boundaries that the block mask must respect.
+
+## 14.2 Token budgets and length-balanced microbatches
+
+Packing fixes waste within a row; the next question is how many sequences go into a microbatch. A fixed **number** of sequences per microbatch makes memory proportional to the longest sequence that happens to land in it. Agent trajectories have long tails, so a fixed count either wastes memory on most microbatches or runs out on the unlucky one. A **token budget** fixes the quantity memory depends on instead: each microbatch holds as many sequences as fit in `max_tokens` padded positions. Sorting by length first (**length-balanced** microbatches) keeps sequences of similar length together, which cuts padding further.
+
+```python
+#@save
+def token_budget_batches(lengths, max_tokens):
+    """Group sequence indices into microbatches whose padded size (count * longest) <= max_tokens -> list of lists."""
+    order = sorted(range(len(lengths)), key=lambda i: -int(lengths[i]))
+    batches, current = [], []
+    for i in order:                                   # longest first: the first member sets the padded width
+        if current and (len(current) + 1) * int(lengths[current[0]]) > max_tokens:
+            batches.append(current)
+            current = []
+        current.append(i)
+    return batches + ([current] if current else [])
+```
+
+TinyAgent's episodes are too uniform to show the effect, so we use a long-tailed length distribution typical of agent trajectories: a log-normal with a median of 8k tokens, capped at a 64k context. The three schemes see the same 512 trajectories. For each we report the number of microbatches (a proxy for steps of the backward pass), the share of padded positions, and the largest microbatch in padded tokens, which sets peak activation memory.
+
+```python
+gen = torch.Generator().manual_seed(0)
+agent_lengths = (8192 * torch.exp(0.8 * torch.randn(512, generator=gen))).clamp(256, 65_536).long()   # [512]
+def describe(name, batches):
+    sizes = [len(b) * int(agent_lengths[b].max()) for b in batches]                 # padded positions
+    waste = 1 - agent_lengths.sum().item() / sum(sizes)
+    print(f'{name:<30} | {len(batches):4d} microbatches | padding {waste:5.1%} | largest {max(sizes) / 1e3:6.0f}k tokens')
+
+random_order = torch.randperm(512, generator=gen)
+describe('8 per microbatch, random', [random_order[i:i + 8] for i in range(0, 512, 8)])
+describe('8 per microbatch, sorted', [agent_lengths.argsort()[i:i + 8] for i in range(0, 512, 8)])
+describe('token budget 128k, sorted', [torch.tensor(b) for b in token_budget_batches(agent_lengths, 131_072)])
+```
+
+Output:
+
+```text
+8 per microbatch, random       |   64 microbatches | padding 59.3% | largest    524k tokens
+8 per microbatch, sorted       |   64 microbatches | padding  3.6% | largest    524k tokens
+token budget 128k, sorted      |   51 microbatches | padding  3.0% | largest    131k tokens
+```
+
+With 8 trajectories per microbatch in random order, 59% of the computed positions are padding, and the largest microbatch is 524k padded tokens: it contains a trajectory at the 64k cap, and 8 times 64k is what it costs. Sorting by length before grouping removes most of the padding (3.6%), because neighbors have similar lengths, but leaves the largest microbatch at 524k, since the 8 longest trajectories still share one. The token budget keeps the padding low (3.0%) and caps every microbatch at 131k tokens, putting the longest trajectories into microbatches of one or two. It also needs fewer microbatches, 51 instead of 64, because short trajectories are grouped many to a microbatch. Peak memory is now set by the budget, a number the engineer chooses, rather than by the longest trajectory the policy happens to produce.
+
+## 14.3 The memory of logits
+
+[Section 3.6](/tutorial/chapters/03-language-models-as-policies#3-6-real-vocabularies:-qwen3-0-6b) introduced `chunked_log_probs` and noted that chunking alone saves forward memory but not backward memory. Here is the arithmetic for a training microbatch. For $N_{\text{tok}}$ tokens and vocabulary $V$, the full logits tensor holds $N_{\text{tok}} V$ numbers. Qwen3's $V$ is 151,936, so one token's logits are 0.6 MB in fp32, and a 32k-token microbatch has 20 GB of logits *before* the log-softmax output and the gradient, each of the same size. The model's own per-token activations at hidden width $D$ are a few times $D$ per layer, and $V$ is 37 to 148 times larger than $D$ for Qwen3's sizes.
+
+```python
+V = 151_936
+print(f'{"model":<11} {"D":>5} {"V / D":>6} | fp32 logits per token | logits of a 32k-token microbatch')
+for name, D in [('Qwen3-0.6B', 1024), ('Qwen3-8B', 4096), ('Qwen3-32B', 5120)]:
+    print(f'{name:<11} {D:5d} {V / D:6.0f} | {4 * V / 1e6:17.2f} MB | {4 * V * 32_768 / 1e9:13.1f} GB')
+```
+
+Output:
+
+```text
+model           D  V / D | fp32 logits per token | logits of a 32k-token microbatch
+Qwen3-0.6B   1024    148 |              0.61 MB |          19.9 GB
+Qwen3-8B     4096     37 |              0.61 MB |          19.9 GB
+Qwen3-32B    5120     30 |              0.61 MB |          19.9 GB
+```
+
+The fix has two parts. Chunk the time axis so that only one chunk's logits exist at a time in the forward pass, and **recompute** each chunk's logits in the backward pass instead of storing them. `torch.utils.checkpoint` does the second part: it runs the chunk without saving intermediates and replays it during backward. `checkpointed_log_probs` is Chapter 3's `chunked_log_probs` with that one change.
+
+```python
+#@save
+def checkpointed_log_probs(hidden, weight, ids, chunk_size=1024):
+    """Chunked selected-token log-probs, recomputed in backward: hidden [B, T, D], weight [V, D], ids [B, T] -> [B, T]."""
+    def chunk_logp(h, w, i):
+        return arl.selected_log_probs(h @ w.T, i)                                 # [B, C]; logits live only here
+    pieces = [checkpoint(chunk_logp, hidden[:, s:s + chunk_size], weight, ids[:, s:s + chunk_size],
+                         use_reentrant=False) for s in range(0, hidden.shape[1], chunk_size)]
+    return torch.cat(pieces, dim=1)
+```
+
+We measure the peak memory of a forward and backward pass through Qwen3-0.6B's output layer on the GPU, with random bf16 hidden states standing in for the final layer's output. Only the logits computation is measured: the transformer's own activations are not included.
+
+```python
+from transformers import AutoConfig, AutoModelForCausalLM
+device = 'cuda'                                                   # peak-memory counters need the check host's GPU
+weight = AutoModelForCausalLM.from_pretrained('Qwen/Qwen3-0.6B', dtype=torch.bfloat16).lm_head.weight
+weight = weight.detach().to(device).requires_grad_(True)                          # [V, D] = [151936, 1024]
+
+def peak_memory(logp_fn, T):
+    """Peak GPU memory (GB) of logp_fn's forward + backward for T tokens, and the log-probs it returned."""
+    gen = torch.Generator(device=device).manual_seed(0)
+    hidden = torch.randn(1, T, weight.shape[1], device=device, dtype=torch.bfloat16, generator=gen).requires_grad_()
+    ids = torch.randint(weight.shape[0], (1, T), device=device, generator=gen)
+    torch.cuda.synchronize()
+    torch.cuda.reset_peak_memory_stats()
+    start = torch.cuda.memory_allocated()
+    logp = logp_fn(hidden, weight, ids)                                            # [1, T]
+    logp.sum().backward()
+    torch.cuda.synchronize()
+    weight.grad = None
+    return (torch.cuda.max_memory_allocated() - start) / 1e9, logp.detach()
+
+methods = {'full logits': lambda h, w, i: arl.selected_log_probs(h @ w.T, i),
+           'chunked (Ch. 3)': lambda h, w, i: arl.chunked_log_probs(h, w, i, chunk_size=1024),
+           'chunked + recompute': lambda h, w, i: checkpointed_log_probs(h, w, i, chunk_size=1024)}
+for T in [4096, 16_384]:
+    results = {name: peak_memory(fn, T) for name, fn in methods.items()}
+    agree = max((r[1] - results['full logits'][1]).abs().max().item() for r in results.values())
+    print(f'T = {T:6d} | ' + ' | '.join(f'{n} {r[0]:4.1f} GB' for n, r in results.items()) + f' | max diff {agree:.0e}')
+```
+
+Output:
+
+```text
+T =   4096 | full logits  7.5 GB | chunked (Ch. 3)  3.7 GB | chunked + recompute  2.2 GB | max diff 0e+00
+T =  16384 | full logits 29.9 GB | chunked (Ch. 3) 11.2 GB | chunked + recompute  2.2 GB | max diff 0e+00
+```
+
+Peak allocator memory varies by a few hundredths of a GB with whatever ran on the GPU earlier, so it is printed to one decimal. All three methods return identical log-probabilities. At 4,096 tokens, the full computation peaks at 7.5 GB for an output layer alone, about 12 bytes per logit: the bf16 matmul output, its fp32 copy, and the fp32 log-softmax, some of them alive at once during backward. Chunking halves that, and it grows with $T$ just the same (11.2 GB at 16k tokens), because autograd keeps each chunk's log-softmax for the backward pass: chunking only removed the transient full tensor. Recomputation makes the peak independent of sequence length: 2.2 GB at both lengths, one chunk's worth plus the weight gradient. The cost is a second forward pass through the output layer, a few percent of the step's FLOPs.
+
+![Figure 14.2: Per-GPU memory of one RL training microbatch for an 8B model with full sharding over 8 GPUs, by component (arithmetic under stated assumptions). Logits are shown for the full tensor, chunked, and chunked with recomputation.](/tutorial/figures/ch14-memory.svg)
+
+Figure 14.2 puts the logits next to everything else on the GPU for an 8B model with fully sharded parameters, gradients, and Adam states on 8 GPUs, at 32k tokens per microbatch. With the full logits tensor, the logits are the largest item, larger than the sharded model and optimizer together. Chunking reduces them to second place; recomputation to a small one. This is why logit handling is the first memory decision for long-context RL, before activation checkpointing or sharding strategy.
+
+## 14.4 Gradient accumulation and loss normalization
+
+A batch that does not fit in memory is split into microbatches whose gradients are summed before the optimizer step. The sum must equal the gradient of the full batch's loss, and with `token_mean` it usually does not. `token_mean` divides by the number of policy tokens in the batch. A microbatch loop that computes `token_mean` *per microbatch* and divides by the number of microbatches gives each microbatch equal total weight, so a token's weight becomes $1 / (K n_k)$ instead of $1/N$, where $n_k$ is its microbatch's token count, $K$ the number of microbatches, and $N = \sum_k n_k$. Tokens in short microbatches are up-weighted. The fix is to divide every microbatch's token sum by the *global* $N$, which `aggregate_loss` already supports as `mode='constant'` with `norm_const=N`. The same bug appears across data-parallel ranks when each rank normalizes by its own token count before the gradient all-reduce.
+
+```python
+batch = arl.collate(trajs, tok.pad_id)
+advantages = arl.compute_advantages(batch, cfg)                                     # [64]
+def accumulated_grad(model, chunks, normalize):
+    """Sum of microbatch gradients of the REINFORCE loss; 'local' = token_mean per microbatch / K, 'global' = sum / N."""
+    model.zero_grad()
+    n_global = batch['action_mask'].sum()
+    for rows in chunks:
+        logp, m = arl.sequence_log_probs(model, batch['ids'][rows]), batch['action_mask'][rows]
+        if normalize == 'local':
+            loss = arl.reinforce_loss(logp, advantages[rows], m) / len(chunks)
+        else:
+            loss = arl.reinforce_loss(logp, advantages[rows], m, mode='constant', norm_const=n_global)
+        loss.backward()
+    return torch.cat([p.grad.flatten() for p in model.parameters()])
+```
+
+The reference is one backward pass over all 64 episodes. We split into 4 microbatches in random order, and in length-sorted order, as a token-budget scheduler would.
+
+```python
+model = copy.deepcopy(rl_base)
+full = accumulated_grad(model, [torch.arange(64)], 'local')
+by_length = batch['action_mask'].sum(-1).argsort()
+for split, chunks in [('random', torch.randperm(64, generator=torch.Generator().manual_seed(0)).chunk(4)),
+                      ('length-sorted', by_length.chunk(4))]:
+    tokens = [int(batch['action_mask'][c].sum()) for c in chunks]
+    for normalize in ['local', 'global']:
+        g = accumulated_grad(model, chunks, normalize)
+        print(f'{split:<13} {normalize:<6} | policy tokens per microbatch {tokens} | relative error'
+              f' {(g - full).norm() / full.norm():.1e} | cosine {torch.cosine_similarity(g, full, 0):.4f}')
+```
+
+Output:
+
+```text
+random        local  | policy tokens per microbatch [159, 208, 185, 191] | relative error 8.2e-02 | cosine 0.9967
+random        global | policy tokens per microbatch [159, 208, 185, 191] | relative error 1.3e-07 | cosine 1.0000
+length-sorted local  | policy tokens per microbatch [96, 112, 180, 355] | relative error 5.2e-01 | cosine 0.8782
+length-sorted global | policy tokens per microbatch [96, 112, 180, 355] | relative error 1.3e-07 | cosine 1.0000
+```
+
+With the global normalizer, both splits reproduce the full-batch gradient to $1.3 \times 10^{-7}$, rounding error. With per-microbatch `token_mean`, a random split already has a relative error of 8% (cosine 0.997), because the microbatches hold 159 to 208 policy tokens. A length-sorted split, which is what a token-budget scheduler produces, holds 96 to 355 tokens per microbatch, and the error rises to 52% (cosine 0.88): the gradient points in a measurably different direction. Since the short microbatch consists of short episodes, which in this gym are mostly immediate submits, the bug systematically over-weights one kind of behavior. The loss value printed during training gives no hint of this.
+
+## 14.5 Filtering tasks by pass rate
+
+The default run of [Chapter 9](/tutorial/chapters/09-grpo-and-variants#9-7-design-problems-in-practice) spent most of its late rollouts on groups with zero advantage: by steps 60 to 80, about 80% of sampled groups passed in every attempt or failed in every attempt. Those episodes cost a full rollout each and contribute no gradient. The cheapest fix is upstream of the loss: do not sample tasks whose outcome is already certain. With a running estimate $\hat p_j$ of each task's pass rate, a **pass-rate filter** keeps task $j$ for sampling only if $\text{low} < \hat p_j < \text{high}$. With $\text{low} = 0$ and $\text{high} = 1$, it drops exactly the tasks whose last group was all-fail or all-pass. A softer variant samples tasks with probability proportional to $\hat p_j (1 - \hat p_j)$, the variance of a Bernoulli reward, which is the expected size of a group's advantage signal.
+
+```python
+#@save
+def filter_by_pass_rate(tasks, pass_rates, low=0.0, high=1.0):
+    """Tasks whose estimated pass rate lies strictly inside (low, high)."""
+    return [task for task, p in zip(tasks, pass_rates) if low < p < high]
+```
+
+`train_curriculum` is `train_rl` with a task pool that changes. Each task's estimate is its last group's mean reward, initialized at 0.5 so that every task is sampled at first; the estimates cost no extra rollouts. Each step samples `prompts_per_step` tasks from those inside the filter, plus `revisit` tasks drawn at random from those outside it, so that an excluded task's estimate is refreshed now and then and a task the policy forgets can come back. When few tasks pass the filter, the step samples fewer episodes: that is the point. A large task set would keep the batch full with informative tasks; our 20 training tasks show the saving directly as rollouts not spent.
+
+```python
+#@save
+def train_curriculum(model, tasks, tok, cfg, steps, low=0.0, high=1.0, revisit=1):
+    """train_rl sampling only tasks inside filter_by_pass_rate (plus `revisit` others) -> history of dicts."""
+    torch.manual_seed(cfg.seed)
+    gen = torch.Generator().manual_seed(cfg.seed)
+    optimizer = torch.optim.Adam(model.parameters(), lr=cfg.lr)
+    estimate, history, G = {t.name: 0.5 for t in tasks}, [], cfg.group_size
+    for step in range(steps):
+        pool = filter_by_pass_rate(tasks, [estimate[t.name] for t in tasks], low, high)
+        excluded = [t for t in tasks if t not in pool]
+        again = [excluded[i] for i in torch.randperm(len(excluded), generator=gen)[:revisit].tolist()]
+        kept, sampled = arl.sample_step(model, lambda: arl.make_env(cfg), pool + again, tok, cfg, gen)
+        flat = 0
+        for g in range(0, len(sampled), G):
+            rewards = [t.reward for t in sampled[g:g + G]]
+            estimate[sampled[g].info['task']] = sum(rewards) / G               # last group's pass rate
+            flat += len(set(rewards)) == 1
+        batch = arl.collate(kept, tok.pad_id)
+        stats = arl.rl_update(model, optimizer, batch, arl.compute_advantages(batch, cfg), cfg, None, gen)
+        history.append(dict(step=step, pool=len(pool), n_episodes=len(sampled),
+                            zero_adv_frac=flat / (len(sampled) // G), **arl.behavior_stats(sampled), **stats))
+    return history
+```
+
+With `low=-1` and `high=2`, every task passes the filter, the pool is the whole training set, and the loop samples 8 tasks per step exactly as `train_rl` does, so the unfiltered arm runs through the same code. We train 60 steps per run, two seeds per arm, and evaluate on held-out tasks with 16 episodes per task.
+
+```python
+curriculum = {}
+for arm, (low, high) in {'all tasks': (-1.0, 2.0), 'filter (0, 1)': (0.0, 1.0)}.items():
+    for seed in [0, 1]:
+        model = copy.deepcopy(rl_base)
+        hist = curriculum[arm, seed] = train_curriculum(model, train_tasks, tok, arl.RLConfig(seed=seed), 60, low, high)
+        held = arl.evaluate(model, heldout_tasks, tok, 16, generator=torch.Generator().manual_seed(seed), cfg=cfg)
+        sampled = [sum(h['n_episodes'] for h in hist[:k]) for k in (20, 40, 60)]
+        zero = ' '.join(f'{sum(h["zero_adv_frac"] for h in hist[i:i + 20]) / 20:.2f}' for i in range(0, 60, 20))
+        print(f'{arm:<14} seed {seed} | episodes after 20/40/60 steps {sampled} | zero-adv share {zero}'
+              f' | held-out {held["pass_rate"]:.3f}')
+```
+
+Output:
+
+```text
+all tasks      seed 0 | episodes after 20/40/60 steps [1280, 2560, 3840] | zero-adv share 0.20 0.56 0.68 | held-out 0.756
+all tasks      seed 1 | episodes after 20/40/60 steps [1280, 2560, 3840] | zero-adv share 0.14 0.39 0.61 | held-out 0.819
+filter (0, 1)  seed 0 | episodes after 20/40/60 steps [1272, 1728, 2088] | zero-adv share 0.18 0.40 0.47 | held-out 0.731
+filter (0, 1)  seed 1 | episodes after 20/40/60 steps [1280, 1808, 2184] | zero-adv share 0.17 0.43 0.38 | held-out 0.769
+```
+
+For the first 20 steps the two arms are the same: every estimate starts at 0.5, the policy is weak, and almost every task produces mixed groups. After that, tasks start passing in all 8 attempts and leave the filtered pool, and by step 60 only one to three tasks remain inside it. The filtered arm sampled 2,088 and 2,184 episodes in 60 steps, against 3,840 for the unfiltered one, 43% to 46% fewer, and its zero-advantage share in the last 20 steps was 0.38 to 0.47 against 0.61 to 0.68. Its held-out pass rate is 0.73 and 0.77 against 0.76 and 0.82: lower by about 0.04 in both seeds, a difference of about one standard error of an 160-episode evaluation. The honest reading is: about the same held-out pass rate for a bit more than half the rollouts, with a possible small cost that two seeds cannot resolve. The cost has a plausible mechanism: late in training, the filtered arm's steps contain only a handful of tasks, so each gradient is about fewer tasks, the same trade-off as group size against prompts in [Section 9.7](/tutorial/chapters/09-grpo-and-variants#9-7-design-problems-in-practice).
+
+Filtering on the last group alone is the crudest estimator. A task that passed 8 of 8 once may pass 6 of 8 next time; with $G = 8$ and a true pass rate of 0.9, a group is all-pass 43% of the time. Production curricula use running averages over several visits, keep a small probability of resampling excluded tasks, and filter offline before an epoch when the dataset is large.
+
+> **Evidence.** Measured here, two seeds per arm, 60 steps on 20 training tasks. The rollout saving is a direct consequence of the filter and is robust; the comparison of held-out pass rates is inside seed noise. Figure 14.3 adds two more seeds.
+
+![Figure 14.3: Pass-rate filtering on the BugFix gym, four seeds per arm. Left: held-out pass rate (8 episodes per task) against the cumulative number of episodes sampled. Right: episodes sampled per step.](/tutorial/figures/ch14-filtering.svg)
+
+Figure 14.3 shows the same comparison with four seeds per arm. On the left, the cumulative number of episodes: the arms separate after about step 20, when tasks begin to saturate, and the filtered arm's curve flattens as its pool empties. On the right, each run is a point: the filtered runs sit at about 2,100 to 2,600 episodes and the unfiltered ones at 3,840. Their held-out pass rates overlap (0.72 to 0.81 against 0.76 to 0.85), with the filtered arm slightly lower on average, as in the two seeds above.
+
+## 14.6 Throughput accounting
+
+Every design decision in this chapter and the last trades one resource for another, and the trade can only be judged with a budget. The budget has two halves that behave differently: generation and training.
+
+**Generation** is a sequence of decode steps. Each step produces one token per sequence and must read every weight and every sequence's KV cache from memory, so its speed is set by memory bandwidth, not FLOPs. TinyAgent shows the other half of the story first. `rollout_batch` has no KV cache: every decode step reruns the model over the whole prefix. We count the positions it processes for the 64 episodes of Section 14.1 and compare with a KV-cached decoder, which processes each position once.
+
+```python
+kv_free = kv_cached = 0
+for t in trajs:
+    policy_positions = t.action_mask.nonzero().flatten() + 1                    # index of each sampled token in ids
+    kv_free += int(policy_positions.sum())                                      # a decode step reruns its whole prefix
+    kv_cached += len(t.ids)                                                     # each position computed once
+print(f'positions processed while sampling 64 episodes: no KV cache {kv_free:,} | KV cache {kv_cached:,}'
+      f' | ratio {kv_free / kv_cached:.1f}x')
+```
+
+Output:
+
+```text
+positions processed while sampling 64 episodes: no KV cache 22,661 | KV cache 2,472 | ratio 9.2x
+```
+
+Without a KV cache, sampling these 64 episodes processed 22,661 positions instead of 2,472, 9.2 times more, and the ratio grows linearly with episode length. TinyAgent can afford it; nothing larger can. A KV cache turns generation's cost from quadratic in length to linear in compute, and moves the bottleneck to memory: every decode step must read the cache.
+
+For a real model, a first-order **roofline** estimate per GPU is enough to see where the time goes. A decode step for a batch of $b$ sequences with context $c$ reads the weights once ($2N$ bytes in bf16) and each sequence's KV cache ($c$ times the per-token KV size), so it takes at least $(2N + b\, c\, s_{\text{KV}})/\text{bandwidth}$ seconds and yields $b$ tokens. Training processes every token of every trajectory (prompt, policy, and tool tokens alike, since all are inputs to the gradient) at about $6N$ FLOPs per token for forward and backward, at some model-FLOPs utilization (MFU). The block reads the per-token KV size from Qwen3-8B's real configuration in the local cache and uses the H200's published bandwidth (4.8 TB/s) and dense bf16 throughput (989 TFLOP/s, half the 1,979 TFLOP/s NVIDIA lists with sparsity). Utilization and batch sizes are assumptions.
+
+```python
+from pathlib import Path
+snapshot = next((Path.home() / '.cache/huggingface/hub/models--Qwen--Qwen3-8B/snapshots').iterdir())
+qcfg = AutoConfig.from_pretrained(snapshot)                                     # local config.json only
+N = 8.2e9                                                                        # parameters
+kv_bytes = 2 * qcfg.num_hidden_layers * qcfg.num_key_value_heads * qcfg.head_dim * 2   # K and V, bf16, per token
+BANDWIDTH, PEAK, MFU = 4.8e12, 989e12, 0.4                                      # H200; MFU is an assumption
+print(f'Qwen3-8B KV cache: {kv_bytes / 1e3:.0f} KB per token of context')
+def decode_tokens_per_s(b, c):
+    return b / ((2 * N + b * c * kv_bytes) / BANDWIDTH)
+for b, c in [(64, 2048), (64, 16_384), (256, 16_384)]:
+    print(f'decode, batch {b:3d}, context {c:6d}: {decode_tokens_per_s(b, c):7.0f} tokens/s per GPU')
+print(f'training (6N FLOPs per token, MFU {MFU}): {MFU * PEAK / (6 * N):7.0f} tokens/s per GPU')
+```
+
+Output:
+
+```text
+Qwen3-8B KV cache: 147 KB per token of context
+decode, batch  64, context   2048:    8598 tokens/s per GPU
+decode, batch  64, context  16384:    1796 tokens/s per GPU
+decode, batch 256, context  16384:    1935 tokens/s per GPU
+training (6N FLOPs per token, MFU 0.4):    8041 tokens/s per GPU
+```
+
+Each token of context costs Qwen3-8B 147 KB of KV cache (36 layers, 8 KV heads of dimension 128, keys and values in bf16). At a 2k context, a batch of 64 decodes at about 8,600 tokens per second per GPU, roughly the training rate of about 8,000. At a 16k context, which is short for a coding agent, the KV reads dominate the weight reads and decode falls to about 1,800 tokens per second. A larger batch barely helps (1,935 tokens per second at 256), because each added sequence adds its own cache to read. Training, at an assumed 40% MFU, processes about 4.5 times more tokens per second per GPU than long-context decoding. This asymmetry is why RL systems give the inference engine most of the accelerators, and why each rollout token is far more expensive than each training token.
+
+Putting the two halves together gives the GPU-hours of a run. The block below estimates one step of a hypothetical agent RL run on Qwen3-8B, in the style of [Appendix B, Problem 19](/tutorial/chapters/B-design-review#problem-19:-estimate-the-gpu-hours-of-an-rl-run), which works the same estimate for a 32B model. Every input is an assumption, labeled in the code.
+
+```python
+episodes, total_tok, policy_tok, context = 512, 24_000, 6_000, 16_384     # per step; assumed episode shape
+steps, busy = 300, 0.5                                                      # assumed run length; engine busy fraction
+train_h = 6 * N * episodes * total_tok / (MFU * PEAK) / 3600                # forward + backward on every token
+logp_h = 2 * N * episodes * total_tok / (MFU * PEAK) / 3600                 # one extra forward: old log-probs
+prefill_h = 2 * N * episodes * (total_tok - policy_tok) / (MFU * PEAK) / 3600   # prompt and tool tokens, prefilled once
+decode_h = episodes * policy_tok / decode_tokens_per_s(64, context) / 3600 / busy
+parts = dict(train=train_h, old_logp=logp_h, prefill=prefill_h, decode=decode_h)
+print(' | '.join(f'{k} {v:5.2f}' for k, v in parts.items()), f'| GPU-hours per step {sum(parts.values()):.2f}')
+print(f'{steps} steps: {steps * sum(parts.values()):,.0f} GPU-hours; decode share {decode_h / sum(parts.values()):.0%}')
+```
+
+Output:
+
+```text
+train  0.42 | old_logp  0.14 | prefill  0.11 | decode  0.95 | GPU-hours per step 1.62
+300 steps: 487 GPU-hours; decode share 59%
+```
+
+Under these assumptions, a step costs about 1.6 GPU-hours, and 300 steps about 490 GPU-hours. Decoding is 59% of it, although policy tokens are only a quarter of all tokens, and the training pass itself is about a quarter. The two largest uncertainties are the decode rate, which depends on context length and batch size as the previous block showed, and the busy fraction, which absorbs tool latency and the straggler wait of [Chapter 13](/tutorial/chapters/13-rollout-systems): changing it from 0.5 to 0.25 adds about 1 GPU-hour per step. The Appendix B estimate for a 32B model with the same episode shape, about 7.7 GPU-hours per step, is in proportion.
+
+> **Evidence.** The H200 bandwidth and throughput figures are NVIDIA's published specifications (inspected 2026-10-13); the KV size is computed from Qwen3-8B's configuration file. Everything else in this section (episode shapes, batch sizes, MFU, busy fraction) is an assumption chosen for illustration, and the result is a first-order estimate that ignores attention FLOPs, communication, evaluation, and failed runs. Replace each assumption with a measurement from a pilot run before planning a budget.
+
+## 14.7 Design problems in practice
+
+> **Problem: loss normalization under gradient accumulation.** *Symptom:* changing the microbatch size, the number of data-parallel ranks, or the batch scheduler changes the learning curve, although the global batch is the same; short episodes seem to learn faster after a switch to length-sorted microbatches. *Cause:* per-microbatch `token_mean` gives each microbatch equal weight, so a token's weight is $N / (K n_k)$ times what the global loss assigns (Section 14.4). Length-sorted microbatches make $n_k$ vary the most. *Options:* (a) normalize by the global token count (an all-reduce of the count before the backward pass in data parallel). (b) Use a constant normalizer (Dr. GRPO's `constant` mode), which needs no global count and is independent of batch composition. (c) Equal-token microbatches, which only make the error small. *Default:* (a) or (b), with a unit test that compares an accumulated gradient against the single-pass gradient, as Section 14.4 does. The block prints the per-token weight distortion of the length-sorted split.
+
+```python
+tokens = torch.tensor([batch['action_mask'][c].sum().item() for c in by_length.chunk(4)])
+distortion = tokens.sum() / (len(tokens) * tokens)                       # weight under local / weight under global
+print('policy tokens per microbatch:', tokens.int().tolist(), '| per-token weight vs correct:',
+      [round(x, 2) for x in distortion.tolist()])
+```
+
+Output:
+
+```text
+policy tokens per microbatch: [96, 112, 180, 355] | per-token weight vs correct: [1.93, 1.66, 1.03, 0.52]
+```
+
+The tokens in the microbatch of short episodes get 1.93 times their correct weight, and those in the microbatch of long episodes 0.52 times: a factor of 3.7 between them, chosen by the scheduler rather than by the objective.
+
+> **Problem: the packing attention leak.** *Symptom:* packed training runs without errors, but the step-0 ratio between the trainer's log-probabilities and the sampler's is far from 1, the clip fraction is high from the first minibatch, and the policy learns slowly or diverges. *Cause:* a causal mask over a packed row lets each sequence attend to the sequences packed before it, and running position ids shift every later sequence; the trainer then scores tokens under contexts the sampler never saw (Section 14.1). *Options:* (a) a block-diagonal mask or variable-length attention kernel with restarted position ids. (b) No packing, paying the padding. *Default:* (a), with a test that compares packed and unpacked log-probabilities on real trajectories. The sampler's own log-probabilities make the bug visible without any reference run.
+
+```python
+mask = packed['action_mask']
+for name, (pos, seg) in [('leaky packing', variants['causal mask, restarted positions']),
+                         ('correct packing', variants['block mask, restarted positions'])]:
+    with torch.no_grad():
+        logp = arl.selected_log_probs(packed_logits(rl_base, packed['ids'], pos, seg)[:, :-1], packed['ids'][:, 1:])
+    ratio = ((logp - packed['sample_logp']).exp() - 1).abs() * mask
+    print(f'{name:<16} share of policy tokens with |pi_trainer / mu - 1| > 0.2: {(ratio > 0.2).sum() / mask.sum():.1%}')
+```
+
+Output:
+
+```text
+leaky packing    share of policy tokens with |pi_trainer / mu - 1| > 0.2: 5.8%
+correct packing  share of policy tokens with |pi_trainer / mu - 1| > 0.2: 0.0%
+```
+
+With leaky packing, 5.8% of policy tokens have a trainer/sampler ratio more than 20% away from 1 before any update; with correct packing, none do. On a dashboard this looks like a training–inference mismatch ([Section 13.6](/tutorial/chapters/13-rollout-systems#13-6-the-training–inference-mismatch)), and a mismatch correction would hide it. The step-0 ratio distribution is a cheap test for both.
+
+> **Problem: wasted rollouts on zero-variance prompts.** *Symptom:* the zero-advantage share of groups climbs as training succeeds; rollouts per useful gradient rise; the learning curve flattens long before the held-out pass rate stops improving. *Cause:* a group whose rewards are all equal has zero advantage under every baseline, so each of its episodes is a full rollout with no gradient (Chapter 9). *Options:* (a) pass-rate filtering before sampling (Section 14.5), which needs per-task estimates and can starve tasks whose estimate is stale. (b) Dynamic sampling, which keeps the batch full by sampling more. (c) Larger groups for hard tasks, so a rare success is sampled. *Default:* (a) with occasional revisits of excluded tasks, plus logging the zero-advantage share. The block counts the episodes that landed in zero-advantage groups in the runs of Section 14.5.
+
+```python
+for arm in ['all tasks', 'filter (0, 1)']:
+    wasted = sum(h['zero_adv_frac'] * h['n_episodes'] for s in [0, 1] for h in curriculum[arm, s])
+    total = sum(h['n_episodes'] for s in [0, 1] for h in curriculum[arm, s])
+    print(f'{arm:<14} episodes in zero-advantage groups: {wasted:.0f} of {total} ({wasted / total:.0%})')
+```
+
+Output:
+
+```text
+all tasks      episodes in zero-advantage groups: 3304 of 7680 (43%)
+filter (0, 1)  episodes in zero-advantage groups: 1136 of 4272 (27%)
+```
+
+Across both seeds, 43% of the unfiltered arm's 7,680 episodes landed in zero-advantage groups, 3,304 rollouts that produced no gradient. The filtered arm sampled 4,272 episodes in total and wasted 1,136 of them (27%). Most of the remaining waste comes from the first 20 steps, when the estimates are still uninformative, and from the revisits of excluded tasks, which are deliberately spent on tasks believed to be solved.
+
+> **Problem: one long-tail sequence dominates memory.** *Symptom:* out-of-memory errors at random steps, long after the run started, always on the rank that received the longest trajectory; lowering the batch size makes them rarer but not impossible. *Cause:* with a fixed number of sequences per microbatch, padded memory is the count times the longest member, and with a long-tailed length distribution the longest member eventually reaches the context limit. A packed or padded microbatch of 8 sequences then costs 8 times the context length. *Options:* (a) a token budget (Section 14.2), which puts the longest trajectories in microbatches of their own. (b) Chunked and recomputed log-probs (Section 14.3), which shrink the per-token cost but not its growth. (c) A hard length cap with truncation, which changes the task. *Default:* (a) and (b) together, with the budget set from a measured peak at the maximum context length. The block finds the worst microbatch under a fixed count of 8 and the microbatch the token budget gives the same trajectory.
+
+```python
+longest = int(agent_lengths.argmax())
+fixed = next(b for b in [random_order[i:i + 8] for i in range(0, 512, 8)] if longest in b.tolist())
+budget = next(b for b in token_budget_batches(agent_lengths, 131_072) if longest in b)
+print(f'longest trajectory: {agent_lengths[longest]:,} tokens; median {int(agent_lengths.median()):,}')
+print(f'fixed 8 per microbatch: its microbatch pads to {len(fixed) * int(agent_lengths[fixed].max()):,} tokens')
+print(f'token budget: its microbatch holds {len(budget)} sequence(s), {len(budget) * int(agent_lengths[budget].max()):,} tokens')
+```
+
+Output:
+
+```text
+longest trajectory: 65,536 tokens; median 8,414
+fixed 8 per microbatch: its microbatch pads to 524,288 tokens
+token budget: its microbatch holds 2 sequence(s), 131,072 tokens
+```
+
+The longest trajectory reached the 64k cap, eight times the median. In a fixed microbatch of 8, it forces 524,288 padded positions, the memory of 8 maximum-length trajectories. The token budget gives it a microbatch with one other trajectory of the same length, 131,072 tokens, the budget. The run that "suddenly runs out of memory at step 2,000" is the run in which this trajectory first appeared.
+
+## Summary
+
+- Padding TinyAgent's 64 episodes to the longest wasted 74% of the computed positions. Packing filled rows to 97%, and it is correct only with a block-diagonal causal mask and position ids that restart per sequence: without them, policy log-probabilities moved by up to 6.4 nats, with them they matched to $10^{-6}$.
+- A fixed number of sequences per microbatch makes memory proportional to the longest sequence; for a long-tailed length distribution, a token budget with length sorting cut the largest microbatch from 524k to 131k tokens at 3% padding.
+- Logits are the largest memory item of long-context RL at production vocabularies. Measured on Qwen3-0.6B's output layer: 29.9 GB at 16k tokens in full, 11.2 GB chunked, 2.2 GB chunked with recomputation, independent of length.
+- Gradient accumulation with per-microbatch `token_mean` changes the gradient: 8% relative error for a random split and 52% for a length-sorted one on TinyAgent. Normalizing every microbatch by the global token count (`mode='constant'`) reproduced the full-batch gradient to $10^{-7}$.
+- Filtering tasks by their last group's pass rate cut sampled episodes by 43% to 46% over 60 steps at a held-out pass rate within seed noise. Throughput arithmetic for an 8B agent run puts decoding at about 60% of the GPU-hours, because long-context decode is memory-bound at roughly a quarter of the training token rate.
+
+## Exercises
+
+1. Write a unit test for `pack_sequences` and `packed_logits` that fails for each of the two bugs of Section 14.1 separately. What is the smallest pair of sequences that exposes the position bug but not the mask bug?
+2. Extend `token_budget_batches` to packed microbatches, where the cost is the sum of lengths rather than the count times the longest. How many microbatches does the 512-trajectory example need at a 128k budget?
+3. Derive the per-token weight under per-microbatch `token_mean` for $K$ data-parallel ranks, each with its own microbatches. Show that normalizing by the global token count requires one all-reduce of a scalar before the backward pass, and implement it with `aggregate_loss`.
+4. Change an assumption: rerun Section 14.5 with the filter based on the mean of each task's last three groups instead of its last group. Does the held-out gap close? How many more episodes does it cost?
+5. Implement sampling proportional to $\hat p (1 - \hat p)$ instead of a hard filter, and compare the episodes spent and the held-out pass rate with the hard filter.
+6. Redo the GPU-hour estimate of Section 14.6 for a 64k-token context. Which term grows, and by how much? What would a 4x smaller KV cache (for example, from more aggressive grouped-query attention or an 8-bit KV cache) buy?
+7. Design review: a teammate proposes to raise the microbatch size from 4 to 16 sequences to improve training MFU. The run uses 32k-token agent trajectories with a long tail and per-microbatch loss normalization. List the three things that change besides MFU, with the measurement you would ask for on each.

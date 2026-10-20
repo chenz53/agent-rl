@@ -1,0 +1,395 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 400" width="1000" height="400" role="img" aria-label="Exact trajectory importance weights degrade fast">
+<style>
+svg{--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--neutral:#f0efec;--panel:#f4f3ef;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--s6:#008300;--s7:#6250d6;--s8:#e34948;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme: dark){svg{--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--neutral:#383835;--panel:#232322;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--s7:#9085e9;--s8:#e66767}}
+.bg{fill:var(--surface)} .t{fill:var(--ink)} .t2{fill:var(--ink2)} .m{fill:var(--muted)}
+.title{font-size:15px;font-weight:600;fill:var(--ink)} .sub{font-size:12px;fill:var(--ink2)}
+.lab{font-size:12px;fill:var(--ink2)} .tick{font-size:11px;fill:var(--muted);font-variant-numeric:tabular-nums}
+.grid{stroke:var(--grid);stroke-width:1} .axis{stroke:var(--axis);stroke-width:1}
+.box{fill:var(--panel);stroke:var(--axis);stroke-width:1} .edge{stroke:var(--ink2);stroke-width:1.5;fill:none}
+.ring{stroke:var(--surface);stroke-width:2} .note{font-size:11px;fill:var(--ink2)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--ink2)"/></marker></defs>
+<rect class="bg" width="1000" height="400" rx="8"/>
+<text class="title" x="20" y="30">Exact trajectory importance weights degrade fast</text>
+<text class="sub" x="20" y="48">320 base-agent episodes reweighted to a policy after k REINFORCE updates (Eq. 8.1).</text>
+<line class="grid" x1="64" x2="440.0" y1="348.0" y2="348.0"/>
+<text class="tick" x="58" y="352.0" text-anchor="end">0</text>
+<line class="grid" x1="64" x2="440.0" y1="286.1" y2="286.1"/>
+<text class="tick" x="58" y="290.1" text-anchor="end">0.25</text>
+<line class="grid" x1="64" x2="440.0" y1="224.2" y2="224.2"/>
+<text class="tick" x="58" y="228.2" text-anchor="end">0.5</text>
+<line class="grid" x1="64" x2="440.0" y1="162.3" y2="162.3"/>
+<text class="tick" x="58" y="166.3" text-anchor="end">0.75</text>
+<line class="grid" x1="64" x2="440.0" y1="100.4" y2="100.4"/>
+<text class="tick" x="58" y="104.4" text-anchor="end">1</text>
+<line class="axis" x1="64" x2="440.0" y1="348.0" y2="348.0"/>
+<line class="axis" x1="64.0" x2="64.0" y1="348" y2="352"/>
+<text class="tick" x="64.0" y="364" text-anchor="middle">0</text>
+<line class="axis" x1="189.3" x2="189.3" y1="348" y2="352"/>
+<text class="tick" x="189.3" y="364" text-anchor="middle">10</text>
+<line class="axis" x1="314.7" x2="314.7" y1="348" y2="352"/>
+<text class="tick" x="314.7" y="364" text-anchor="middle">20</text>
+<line class="axis" x1="440.0" x2="440.0" y1="348" y2="352"/>
+<text class="tick" x="440.0" y="364" text-anchor="middle">30</text>
+<text class="lab" x="252.0" y="382" text-anchor="middle">REINFORCE updates k</text>
+<text class="lab" x="20" y="218.0" text-anchor="middle" transform="rotate(-90 20 218.0)">effective sample size / N</text>
+<clipPath id="clip137981689253568"><rect x="64" y="86" width="376.0" height="264"/></clipPath>
+<polyline points="64.0,100.4 76.5,155.8 101.6,263.1 189.3,273.3 440.0,322.9" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip137981689253568)"/>
+<circle class="ring" cx="64.0" cy="100.4" r="4" fill="var(--s1)"><title>ESS / N: x=0, y=1</title></circle>
+<circle class="ring" cx="76.5" cy="155.8" r="4" fill="var(--s1)"><title>ESS / N: x=1, y=0.776</title></circle>
+<circle class="ring" cx="101.6" cy="263.1" r="4" fill="var(--s1)"><title>ESS / N: x=3, y=0.343</title></circle>
+<circle class="ring" cx="189.3" cy="273.3" r="4" fill="var(--s1)"><title>ESS / N: x=10, y=0.302</title></circle>
+<circle class="ring" cx="440.0" cy="322.9" r="4" fill="var(--s1)"><title>ESS / N: x=30, y=0.101</title></circle>
+<text class="note" x="70.0" y="92.4" text-anchor="start">1.00</text>
+<text class="note" x="82.5" y="147.8" text-anchor="start">0.78</text>
+<text class="note" x="107.6" y="255.1" text-anchor="start">0.34</text>
+<text class="note" x="195.3" y="265.3" text-anchor="start">0.30</text>
+<text class="note" x="446.0" y="314.9" text-anchor="start">0.10</text>
+<line class="grid" x1="564.0" x2="940.0" y1="332.5" y2="332.5"/>
+<text class="tick" x="558.0" y="336.5" text-anchor="end">-20</text>
+<line class="grid" x1="564.0" x2="940.0" y1="279.5" y2="279.5"/>
+<text class="tick" x="558.0" y="283.5" text-anchor="end">-15</text>
+<line class="grid" x1="564.0" x2="940.0" y1="226.5" y2="226.5"/>
+<text class="tick" x="558.0" y="230.5" text-anchor="end">-10</text>
+<line class="grid" x1="564.0" x2="940.0" y1="173.4" y2="173.4"/>
+<text class="tick" x="558.0" y="177.4" text-anchor="end">-5</text>
+<line class="grid" x1="564.0" x2="940.0" y1="120.4" y2="120.4"/>
+<text class="tick" x="558.0" y="124.4" text-anchor="end">0</text>
+<line class="axis" x1="564.0" x2="940.0" y1="120.4" y2="120.4"/>
+<line class="axis" x1="598.2" x2="598.2" y1="348" y2="352"/>
+<text class="tick" x="598.2" y="364" text-anchor="middle">5</text>
+<line class="axis" x1="683.6" x2="683.6" y1="348" y2="352"/>
+<text class="tick" x="683.6" y="364" text-anchor="middle">10</text>
+<line class="axis" x1="769.1" x2="769.1" y1="348" y2="352"/>
+<text class="tick" x="769.1" y="364" text-anchor="middle">15</text>
+<line class="axis" x1="854.5" x2="854.5" y1="348" y2="352"/>
+<text class="tick" x="854.5" y="364" text-anchor="middle">20</text>
+<line class="axis" x1="940.0" x2="940.0" y1="348" y2="352"/>
+<text class="tick" x="940.0" y="364" text-anchor="middle">25</text>
+<text class="lab" x="752.0" y="382" text-anchor="middle">policy tokens in the episode</text>
+<text class="lab" x="520.0" y="218.0" text-anchor="middle" transform="rotate(-90 520.0 218.0)">log w after 10 updates</text>
+<clipPath id="clip137981690080640"><rect x="564.0" y="86" width="376.0" height="264"/></clipPath>
+<circle class="ring" cx="632.4" cy="113.2" r="3" fill="var(--s1)"><title> (7, 0.682)</title></circle>
+<circle class="ring" cx="905.8" cy="191.5" r="3" fill="var(--s1)"><title> (23, -6.7)</title></circle>
+<circle class="ring" cx="564.0" cy="153.6" r="3" fill="var(--s1)"><title> (3, -3.13)</title></circle>
+<circle class="ring" cx="632.4" cy="121.4" r="3" fill="var(--s1)"><title> (7, -0.0946)</title></circle>
+<circle class="ring" cx="888.7" cy="217.8" r="3" fill="var(--s1)"><title> (22, -9.18)</title></circle>
+<circle class="ring" cx="905.8" cy="207.7" r="3" fill="var(--s1)"><title> (23, -8.23)</title></circle>
+<circle class="ring" cx="922.9" cy="198.3" r="3" fill="var(--s1)"><title> (24, -7.34)</title></circle>
+<circle class="ring" cx="700.7" cy="139.7" r="3" fill="var(--s1)"><title> (11, -1.82)</title></circle>
+<circle class="ring" cx="632.4" cy="113.2" r="3" fill="var(--s1)"><title> (7, 0.682)</title></circle>
+<circle class="ring" cx="564.0" cy="153.6" r="3" fill="var(--s1)"><title> (3, -3.13)</title></circle>
+<circle class="ring" cx="564.0" cy="153.6" r="3" fill="var(--s1)"><title> (3, -3.13)</title></circle>
+<circle class="ring" cx="632.4" cy="113.2" r="3" fill="var(--s1)"><title> (7, 0.682)</title></circle>
+<circle class="ring" cx="632.4" cy="121.4" r="3" fill="var(--s1)"><title> (7, -0.0946)</title></circle>
+<circle class="ring" cx="871.6" cy="166.5" r="3" fill="var(--s1)"><title> (21, -4.34)</title></circle>
+<circle class="ring" cx="632.4" cy="115.6" r="3" fill="var(--s1)"><title> (7, 0.457)</title></circle>
+<circle class="ring" cx="632.4" cy="113.2" r="3" fill="var(--s1)"><title> (7, 0.682)</title></circle>
+<circle class="ring" cx="564.0" cy="152.0" r="3" fill="var(--s1)"><title> (3, -2.98)</title></circle>
+<circle class="ring" cx="564.0" cy="152.0" r="3" fill="var(--s1)"><title> (3, -2.98)</title></circle>
+<circle class="ring" cx="632.4" cy="144.0" r="3" fill="var(--s1)"><title> (7, -2.22)</title></circle>
+<circle class="ring" cx="905.8" cy="142.9" r="3" fill="var(--s1)"><title> (23, -2.11)</title></circle>
+<circle class="ring" cx="888.7" cy="129.1" r="3" fill="var(--s1)"><title> (22, -0.819)</title></circle>
+<circle class="ring" cx="632.4" cy="113.3" r="3" fill="var(--s1)"><title> (7, 0.675)</title></circle>
+<circle class="ring" cx="905.8" cy="186.5" r="3" fill="var(--s1)"><title> (23, -6.23)</title></circle>
+<circle class="ring" cx="632.4" cy="127.0" r="3" fill="var(--s1)"><title> (7, -0.617)</title></circle>
+<circle class="ring" cx="632.4" cy="113.3" r="3" fill="var(--s1)"><title> (7, 0.675)</title></circle>
+<circle class="ring" cx="632.4" cy="104.3" r="3" fill="var(--s1)"><title> (7, 1.52)</title></circle>
+<circle class="ring" cx="905.8" cy="227.5" r="3" fill="var(--s1)"><title> (23, -10.1)</title></circle>
+<circle class="ring" cx="888.7" cy="226.9" r="3" fill="var(--s1)"><title> (22, -10)</title></circle>
+<circle class="ring" cx="632.4" cy="104.3" r="3" fill="var(--s1)"><title> (7, 1.52)</title></circle>
+<circle class="ring" cx="837.5" cy="140.0" r="3" fill="var(--s1)"><title> (19, -1.84)</title></circle>
+<circle class="ring" cx="820.4" cy="229.9" r="3" fill="var(--s1)"><title> (18, -10.3)</title></circle>
+<circle class="ring" cx="632.4" cy="138.6" r="3" fill="var(--s1)"><title> (7, -1.72)</title></circle>
+<circle class="ring" cx="632.4" cy="121.2" r="3" fill="var(--s1)"><title> (7, -0.0738)</title></circle>
+<circle class="ring" cx="888.7" cy="190.8" r="3" fill="var(--s1)"><title> (22, -6.64)</title></circle>
+<circle class="ring" cx="632.4" cy="126.5" r="3" fill="var(--s1)"><title> (7, -0.57)</title></circle>
+<circle class="ring" cx="922.9" cy="171.6" r="3" fill="var(--s1)"><title> (24, -4.82)</title></circle>
+<circle class="ring" cx="632.4" cy="126.5" r="3" fill="var(--s1)"><title> (7, -0.57)</title></circle>
+<circle class="ring" cx="564.0" cy="152.3" r="3" fill="var(--s1)"><title> (3, -3)</title></circle>
+<circle class="ring" cx="922.9" cy="151.7" r="3" fill="var(--s1)"><title> (24, -2.95)</title></circle>
+<circle class="ring" cx="940.0" cy="111.6" r="3" fill="var(--s1)"><title> (25, 0.837)</title></circle>
+<circle class="ring" cx="632.4" cy="112.9" r="3" fill="var(--s1)"><title> (7, 0.706)</title></circle>
+<circle class="ring" cx="632.4" cy="112.9" r="3" fill="var(--s1)"><title> (7, 0.706)</title></circle>
+<circle class="ring" cx="871.6" cy="229.0" r="3" fill="var(--s1)"><title> (21, -10.2)</title></circle>
+<circle class="ring" cx="871.6" cy="175.7" r="3" fill="var(--s1)"><title> (21, -5.21)</title></circle>
+<circle class="ring" cx="871.6" cy="188.7" r="3" fill="var(--s1)"><title> (21, -6.44)</title></circle>
+<circle class="ring" cx="905.8" cy="194.4" r="3" fill="var(--s1)"><title> (23, -6.97)</title></circle>
+<circle class="ring" cx="632.4" cy="120.1" r="3" fill="var(--s1)"><title> (7, 0.0309)</title></circle>
+<circle class="ring" cx="632.4" cy="126.5" r="3" fill="var(--s1)"><title> (7, -0.57)</title></circle>
+<circle class="ring" cx="632.4" cy="138.5" r="3" fill="var(--s1)"><title> (7, -1.71)</title></circle>
+<circle class="ring" cx="615.3" cy="116.7" r="3" fill="var(--s1)"><title> (6, 0.354)</title></circle>
+<circle class="ring" cx="632.4" cy="115.9" r="3" fill="var(--s1)"><title> (7, 0.428)</title></circle>
+<circle class="ring" cx="871.6" cy="177.5" r="3" fill="var(--s1)"><title> (21, -5.38)</title></circle>
+<circle class="ring" cx="769.1" cy="210.9" r="3" fill="var(--s1)"><title> (15, -8.53)</title></circle>
+<circle class="ring" cx="632.4" cy="118.5" r="3" fill="var(--s1)"><title> (7, 0.184)</title></circle>
+<circle class="ring" cx="632.4" cy="138.5" r="3" fill="var(--s1)"><title> (7, -1.71)</title></circle>
+<circle class="ring" cx="820.4" cy="176.8" r="3" fill="var(--s1)"><title> (18, -5.32)</title></circle>
+<circle class="ring" cx="632.4" cy="118.5" r="3" fill="var(--s1)"><title> (7, 0.184)</title></circle>
+<circle class="ring" cx="632.4" cy="138.5" r="3" fill="var(--s1)"><title> (7, -1.71)</title></circle>
+<circle class="ring" cx="700.7" cy="117.4" r="3" fill="var(--s1)"><title> (11, 0.288)</title></circle>
+<circle class="ring" cx="632.4" cy="118.5" r="3" fill="var(--s1)"><title> (7, 0.184)</title></circle>
+<circle class="ring" cx="632.4" cy="115.9" r="3" fill="var(--s1)"><title> (7, 0.428)</title></circle>
+<circle class="ring" cx="632.4" cy="110.8" r="3" fill="var(--s1)"><title> (7, 0.906)</title></circle>
+<circle class="ring" cx="632.4" cy="115.9" r="3" fill="var(--s1)"><title> (7, 0.428)</title></circle>
+<circle class="ring" cx="632.4" cy="138.5" r="3" fill="var(--s1)"><title> (7, -1.71)</title></circle>
+<circle class="ring" cx="564.0" cy="154.5" r="3" fill="var(--s1)"><title> (3, -3.21)</title></circle>
+<circle class="ring" cx="632.4" cy="138.8" r="3" fill="var(--s1)"><title> (7, -1.73)</title></circle>
+<circle class="ring" cx="632.4" cy="112.1" r="3" fill="var(--s1)"><title> (7, 0.787)</title></circle>
+<circle class="ring" cx="632.4" cy="138.8" r="3" fill="var(--s1)"><title> (7, -1.73)</title></circle>
+<circle class="ring" cx="632.4" cy="109.2" r="3" fill="var(--s1)"><title> (7, 1.06)</title></circle>
+<circle class="ring" cx="683.6" cy="113.4" r="3" fill="var(--s1)"><title> (10, 0.668)</title></circle>
+<circle class="ring" cx="632.4" cy="112.1" r="3" fill="var(--s1)"><title> (7, 0.787)</title></circle>
+<circle class="ring" cx="632.4" cy="109.2" r="3" fill="var(--s1)"><title> (7, 1.06)</title></circle>
+<circle class="ring" cx="632.4" cy="109.2" r="3" fill="var(--s1)"><title> (7, 1.06)</title></circle>
+<circle class="ring" cx="632.4" cy="109.2" r="3" fill="var(--s1)"><title> (7, 1.06)</title></circle>
+<circle class="ring" cx="632.4" cy="138.8" r="3" fill="var(--s1)"><title> (7, -1.73)</title></circle>
+<circle class="ring" cx="700.7" cy="153.7" r="3" fill="var(--s1)"><title> (11, -3.14)</title></circle>
+<circle class="ring" cx="700.7" cy="120.9" r="3" fill="var(--s1)"><title> (11, -0.044)</title></circle>
+<circle class="ring" cx="632.4" cy="109.2" r="3" fill="var(--s1)"><title> (7, 1.06)</title></circle>
+<circle class="ring" cx="700.7" cy="153.7" r="3" fill="var(--s1)"><title> (11, -3.14)</title></circle>
+<circle class="ring" cx="564.0" cy="154.5" r="3" fill="var(--s1)"><title> (3, -3.21)</title></circle>
+<circle class="ring" cx="632.4" cy="148.4" r="3" fill="var(--s1)"><title> (7, -2.64)</title></circle>
+<circle class="ring" cx="888.7" cy="192.5" r="3" fill="var(--s1)"><title> (22, -6.8)</title></circle>
+<circle class="ring" cx="632.4" cy="139.9" r="3" fill="var(--s1)"><title> (7, -1.84)</title></circle>
+<circle class="ring" cx="922.9" cy="208.4" r="3" fill="var(--s1)"><title> (24, -8.29)</title></circle>
+<circle class="ring" cx="769.1" cy="191.6" r="3" fill="var(--s1)"><title> (15, -6.72)</title></circle>
+<circle class="ring" cx="564.0" cy="145.0" r="3" fill="var(--s1)"><title> (3, -2.32)</title></circle>
+<circle class="ring" cx="632.4" cy="148.4" r="3" fill="var(--s1)"><title> (7, -2.64)</title></circle>
+<circle class="ring" cx="922.9" cy="185.7" r="3" fill="var(--s1)"><title> (24, -6.15)</title></circle>
+<circle class="ring" cx="632.4" cy="148.4" r="3" fill="var(--s1)"><title> (7, -2.64)</title></circle>
+<circle class="ring" cx="632.4" cy="114.5" r="3" fill="var(--s1)"><title> (7, 0.559)</title></circle>
+<circle class="ring" cx="871.6" cy="224.0" r="3" fill="var(--s1)"><title> (21, -9.77)</title></circle>
+<circle class="ring" cx="700.7" cy="127.9" r="3" fill="var(--s1)"><title> (11, -0.709)</title></circle>
+<circle class="ring" cx="632.4" cy="114.5" r="3" fill="var(--s1)"><title> (7, 0.559)</title></circle>
+<circle class="ring" cx="871.6" cy="169.7" r="3" fill="var(--s1)"><title> (21, -4.64)</title></circle>
+<circle class="ring" cx="632.4" cy="147.2" r="3" fill="var(--s1)"><title> (7, -2.52)</title></circle>
+<circle class="ring" cx="700.7" cy="103.1" r="3" fill="var(--s1)"><title> (11, 1.64)</title></circle>
+<circle class="ring" cx="632.4" cy="101.9" r="3" fill="var(--s1)"><title> (7, 1.75)</title></circle>
+<circle class="ring" cx="564.0" cy="150.7" r="3" fill="var(--s1)"><title> (3, -2.85)</title></circle>
+<circle class="ring" cx="632.4" cy="154.1" r="3" fill="var(--s1)"><title> (7, -3.18)</title></circle>
+<circle class="ring" cx="632.4" cy="154.1" r="3" fill="var(--s1)"><title> (7, -3.18)</title></circle>
+<circle class="ring" cx="700.7" cy="122.0" r="3" fill="var(--s1)"><title> (11, -0.145)</title></circle>
+<circle class="ring" cx="632.4" cy="145.1" r="3" fill="var(--s1)"><title> (7, -2.33)</title></circle>
+<circle class="ring" cx="632.4" cy="101.9" r="3" fill="var(--s1)"><title> (7, 1.75)</title></circle>
+<circle class="ring" cx="871.6" cy="223.4" r="3" fill="var(--s1)"><title> (21, -9.71)</title></circle>
+<circle class="ring" cx="632.4" cy="146.7" r="3" fill="var(--s1)"><title> (7, -2.48)</title></circle>
+<circle class="ring" cx="888.7" cy="260.3" r="3" fill="var(--s1)"><title> (22, -13.2)</title></circle>
+<circle class="ring" cx="752.0" cy="159.5" r="3" fill="var(--s1)"><title> (14, -3.68)</title></circle>
+<circle class="ring" cx="632.4" cy="145.1" r="3" fill="var(--s1)"><title> (7, -2.33)</title></circle>
+<circle class="ring" cx="854.5" cy="156.6" r="3" fill="var(--s1)"><title> (20, -3.41)</title></circle>
+<circle class="ring" cx="564.0" cy="150.7" r="3" fill="var(--s1)"><title> (3, -2.85)</title></circle>
+<circle class="ring" cx="922.9" cy="250.4" r="3" fill="var(--s1)"><title> (24, -12.3)</title></circle>
+<circle class="ring" cx="632.4" cy="101.9" r="3" fill="var(--s1)"><title> (7, 1.75)</title></circle>
+<circle class="ring" cx="734.9" cy="167.1" r="3" fill="var(--s1)"><title> (13, -4.4)</title></circle>
+<circle class="ring" cx="564.0" cy="144.8" r="3" fill="var(--s1)"><title> (3, -2.3)</title></circle>
+<circle class="ring" cx="803.3" cy="159.1" r="3" fill="var(--s1)"><title> (17, -3.64)</title></circle>
+<circle class="ring" cx="632.4" cy="130.0" r="3" fill="var(--s1)"><title> (7, -0.903)</title></circle>
+<circle class="ring" cx="564.0" cy="144.8" r="3" fill="var(--s1)"><title> (3, -2.3)</title></circle>
+<circle class="ring" cx="700.7" cy="135.3" r="3" fill="var(--s1)"><title> (11, -1.41)</title></circle>
+<circle class="ring" cx="632.4" cy="125.1" r="3" fill="var(--s1)"><title> (7, -0.437)</title></circle>
+<circle class="ring" cx="632.4" cy="130.0" r="3" fill="var(--s1)"><title> (7, -0.903)</title></circle>
+<circle class="ring" cx="769.1" cy="141.1" r="3" fill="var(--s1)"><title> (15, -1.94)</title></circle>
+<circle class="ring" cx="683.6" cy="128.5" r="3" fill="var(--s1)"><title> (10, -0.756)</title></circle>
+<circle class="ring" cx="632.4" cy="107.0" r="3" fill="var(--s1)"><title> (7, 1.27)</title></circle>
+<circle class="ring" cx="871.6" cy="185.3" r="3" fill="var(--s1)"><title> (21, -6.12)</title></circle>
+<circle class="ring" cx="752.0" cy="144.4" r="3" fill="var(--s1)"><title> (14, -2.26)</title></circle>
+<circle class="ring" cx="632.4" cy="125.1" r="3" fill="var(--s1)"><title> (7, -0.437)</title></circle>
+<circle class="ring" cx="905.8" cy="261.3" r="3" fill="var(--s1)"><title> (23, -13.3)</title></circle>
+<circle class="ring" cx="632.4" cy="130.0" r="3" fill="var(--s1)"><title> (7, -0.903)</title></circle>
+<circle class="ring" cx="632.4" cy="146.5" r="3" fill="var(--s1)"><title> (7, -2.46)</title></circle>
+<circle class="ring" cx="632.4" cy="146.5" r="3" fill="var(--s1)"><title> (7, -2.46)</title></circle>
+<circle class="ring" cx="905.8" cy="217.2" r="3" fill="var(--s1)"><title> (23, -9.13)</title></circle>
+<circle class="ring" cx="632.4" cy="146.5" r="3" fill="var(--s1)"><title> (7, -2.46)</title></circle>
+<circle class="ring" cx="632.4" cy="129.6" r="3" fill="var(--s1)"><title> (7, -0.863)</title></circle>
+<circle class="ring" cx="871.6" cy="199.7" r="3" fill="var(--s1)"><title> (21, -7.47)</title></circle>
+<circle class="ring" cx="632.4" cy="107.4" r="3" fill="var(--s1)"><title> (7, 1.23)</title></circle>
+<circle class="ring" cx="752.0" cy="169.9" r="3" fill="var(--s1)"><title> (14, -4.67)</title></circle>
+<circle class="ring" cx="632.4" cy="129.5" r="3" fill="var(--s1)"><title> (7, -0.854)</title></circle>
+<circle class="ring" cx="564.0" cy="149.9" r="3" fill="var(--s1)"><title> (3, -2.78)</title></circle>
+<circle class="ring" cx="632.4" cy="107.4" r="3" fill="var(--s1)"><title> (7, 1.23)</title></circle>
+<circle class="ring" cx="632.4" cy="146.5" r="3" fill="var(--s1)"><title> (7, -2.46)</title></circle>
+<circle class="ring" cx="683.6" cy="163.2" r="3" fill="var(--s1)"><title> (10, -4.03)</title></circle>
+<circle class="ring" cx="632.4" cy="129.6" r="3" fill="var(--s1)"><title> (7, -0.863)</title></circle>
+<circle class="ring" cx="632.4" cy="146.5" r="3" fill="var(--s1)"><title> (7, -2.46)</title></circle>
+<circle class="ring" cx="683.6" cy="143.7" r="3" fill="var(--s1)"><title> (10, -2.19)</title></circle>
+<circle class="ring" cx="632.4" cy="123.5" r="3" fill="var(--s1)"><title> (7, -0.291)</title></circle>
+<circle class="ring" cx="632.4" cy="112.5" r="3" fill="var(--s1)"><title> (7, 0.752)</title></circle>
+<circle class="ring" cx="632.4" cy="118.6" r="3" fill="var(--s1)"><title> (7, 0.177)</title></circle>
+<circle class="ring" cx="564.0" cy="154.7" r="3" fill="var(--s1)"><title> (3, -3.23)</title></circle>
+<circle class="ring" cx="632.4" cy="112.5" r="3" fill="var(--s1)"><title> (7, 0.752)</title></circle>
+<circle class="ring" cx="922.9" cy="149.9" r="3" fill="var(--s1)"><title> (24, -2.78)</title></circle>
+<circle class="ring" cx="632.4" cy="123.5" r="3" fill="var(--s1)"><title> (7, -0.291)</title></circle>
+<circle class="ring" cx="871.6" cy="203.1" r="3" fill="var(--s1)"><title> (21, -7.8)</title></circle>
+<circle class="ring" cx="632.4" cy="123.5" r="3" fill="var(--s1)"><title> (7, -0.291)</title></circle>
+<circle class="ring" cx="905.8" cy="153.7" r="3" fill="var(--s1)"><title> (23, -3.14)</title></circle>
+<circle class="ring" cx="888.7" cy="201.2" r="3" fill="var(--s1)"><title> (22, -7.62)</title></circle>
+<circle class="ring" cx="888.7" cy="193.1" r="3" fill="var(--s1)"><title> (22, -6.86)</title></circle>
+<circle class="ring" cx="564.0" cy="154.7" r="3" fill="var(--s1)"><title> (3, -3.23)</title></circle>
+<circle class="ring" cx="632.4" cy="115.1" r="3" fill="var(--s1)"><title> (7, 0.505)</title></circle>
+<circle class="ring" cx="632.4" cy="115.5" r="3" fill="var(--s1)"><title> (7, 0.466)</title></circle>
+<circle class="ring" cx="564.0" cy="154.7" r="3" fill="var(--s1)"><title> (3, -3.23)</title></circle>
+<circle class="ring" cx="632.4" cy="117.1" r="3" fill="var(--s1)"><title> (7, 0.316)</title></circle>
+<circle class="ring" cx="632.4" cy="129.5" r="3" fill="var(--s1)"><title> (7, -0.856)</title></circle>
+<circle class="ring" cx="888.7" cy="160.2" r="3" fill="var(--s1)"><title> (22, -3.75)</title></circle>
+<circle class="ring" cx="871.6" cy="209.5" r="3" fill="var(--s1)"><title> (21, -8.4)</title></circle>
+<circle class="ring" cx="632.4" cy="117.1" r="3" fill="var(--s1)"><title> (7, 0.316)</title></circle>
+<circle class="ring" cx="632.4" cy="115.8" r="3" fill="var(--s1)"><title> (7, 0.436)</title></circle>
+<circle class="ring" cx="632.4" cy="110.3" r="3" fill="var(--s1)"><title> (7, 0.952)</title></circle>
+<circle class="ring" cx="632.4" cy="123.9" r="3" fill="var(--s1)"><title> (7, -0.327)</title></circle>
+<circle class="ring" cx="564.0" cy="153.4" r="3" fill="var(--s1)"><title> (3, -3.11)</title></circle>
+<circle class="ring" cx="632.4" cy="110.3" r="3" fill="var(--s1)"><title> (7, 0.952)</title></circle>
+<circle class="ring" cx="632.4" cy="123.9" r="3" fill="var(--s1)"><title> (7, -0.327)</title></circle>
+<circle class="ring" cx="632.4" cy="115.8" r="3" fill="var(--s1)"><title> (7, 0.436)</title></circle>
+<circle class="ring" cx="888.7" cy="222.9" r="3" fill="var(--s1)"><title> (22, -9.66)</title></circle>
+<circle class="ring" cx="632.4" cy="129.5" r="3" fill="var(--s1)"><title> (7, -0.856)</title></circle>
+<circle class="ring" cx="632.4" cy="117.1" r="3" fill="var(--s1)"><title> (7, 0.316)</title></circle>
+<circle class="ring" cx="632.4" cy="129.5" r="3" fill="var(--s1)"><title> (7, -0.856)</title></circle>
+<circle class="ring" cx="769.1" cy="106.3" r="3" fill="var(--s1)"><title> (15, 1.33)</title></circle>
+<circle class="ring" cx="803.3" cy="158.6" r="3" fill="var(--s1)"><title> (17, -3.6)</title></circle>
+<circle class="ring" cx="564.0" cy="153.6" r="3" fill="var(--s1)"><title> (3, -3.13)</title></circle>
+<circle class="ring" cx="752.0" cy="136.4" r="3" fill="var(--s1)"><title> (14, -1.51)</title></circle>
+<circle class="ring" cx="905.8" cy="145.5" r="3" fill="var(--s1)"><title> (23, -2.36)</title></circle>
+<circle class="ring" cx="632.4" cy="117.1" r="3" fill="var(--s1)"><title> (7, 0.311)</title></circle>
+<circle class="ring" cx="922.9" cy="169.9" r="3" fill="var(--s1)"><title> (24, -4.67)</title></circle>
+<circle class="ring" cx="922.9" cy="159.4" r="3" fill="var(--s1)"><title> (24, -3.67)</title></circle>
+<circle class="ring" cx="632.4" cy="117.1" r="3" fill="var(--s1)"><title> (7, 0.311)</title></circle>
+<circle class="ring" cx="632.4" cy="117.1" r="3" fill="var(--s1)"><title> (7, 0.311)</title></circle>
+<circle class="ring" cx="905.8" cy="135.2" r="3" fill="var(--s1)"><title> (23, -1.4)</title></circle>
+<circle class="ring" cx="632.4" cy="117.1" r="3" fill="var(--s1)"><title> (7, 0.311)</title></circle>
+<circle class="ring" cx="922.9" cy="115.3" r="3" fill="var(--s1)"><title> (24, 0.487)</title></circle>
+<circle class="ring" cx="803.3" cy="181.5" r="3" fill="var(--s1)"><title> (17, -5.76)</title></circle>
+<circle class="ring" cx="820.4" cy="178.4" r="3" fill="var(--s1)"><title> (18, -5.46)</title></circle>
+<circle class="ring" cx="888.7" cy="147.9" r="3" fill="var(--s1)"><title> (22, -2.59)</title></circle>
+<circle class="ring" cx="632.4" cy="146.3" r="3" fill="var(--s1)"><title> (7, -2.44)</title></circle>
+<circle class="ring" cx="632.4" cy="117.5" r="3" fill="var(--s1)"><title> (7, 0.278)</title></circle>
+<circle class="ring" cx="632.4" cy="117.5" r="3" fill="var(--s1)"><title> (7, 0.278)</title></circle>
+<circle class="ring" cx="632.4" cy="135.4" r="3" fill="var(--s1)"><title> (7, -1.41)</title></circle>
+<circle class="ring" cx="632.4" cy="106.4" r="3" fill="var(--s1)"><title> (7, 1.32)</title></circle>
+<circle class="ring" cx="564.0" cy="150.2" r="3" fill="var(--s1)"><title> (3, -2.81)</title></circle>
+<circle class="ring" cx="564.0" cy="150.2" r="3" fill="var(--s1)"><title> (3, -2.81)</title></circle>
+<circle class="ring" cx="922.9" cy="201.0" r="3" fill="var(--s1)"><title> (24, -7.6)</title></circle>
+<circle class="ring" cx="632.4" cy="146.3" r="3" fill="var(--s1)"><title> (7, -2.44)</title></circle>
+<circle class="ring" cx="632.4" cy="117.5" r="3" fill="var(--s1)"><title> (7, 0.278)</title></circle>
+<circle class="ring" cx="632.4" cy="135.4" r="3" fill="var(--s1)"><title> (7, -1.41)</title></circle>
+<circle class="ring" cx="632.4" cy="117.5" r="3" fill="var(--s1)"><title> (7, 0.278)</title></circle>
+<circle class="ring" cx="632.4" cy="117.5" r="3" fill="var(--s1)"><title> (7, 0.278)</title></circle>
+<circle class="ring" cx="632.4" cy="117.5" r="3" fill="var(--s1)"><title> (7, 0.278)</title></circle>
+<circle class="ring" cx="871.6" cy="164.2" r="3" fill="var(--s1)"><title> (21, -4.13)</title></circle>
+<circle class="ring" cx="888.7" cy="193.4" r="3" fill="var(--s1)"><title> (22, -6.88)</title></circle>
+<circle class="ring" cx="905.8" cy="228.2" r="3" fill="var(--s1)"><title> (23, -10.2)</title></circle>
+<circle class="ring" cx="632.4" cy="128.5" r="3" fill="var(--s1)"><title> (7, -0.762)</title></circle>
+<circle class="ring" cx="632.4" cy="151.9" r="3" fill="var(--s1)"><title> (7, -2.97)</title></circle>
+<circle class="ring" cx="905.8" cy="236.7" r="3" fill="var(--s1)"><title> (23, -11)</title></circle>
+<circle class="ring" cx="888.7" cy="255.4" r="3" fill="var(--s1)"><title> (22, -12.7)</title></circle>
+<circle class="ring" cx="564.0" cy="150.7" r="3" fill="var(--s1)"><title> (3, -2.85)</title></circle>
+<circle class="ring" cx="632.4" cy="126.3" r="3" fill="var(--s1)"><title> (7, -0.548)</title></circle>
+<circle class="ring" cx="905.8" cy="221.8" r="3" fill="var(--s1)"><title> (23, -9.56)</title></circle>
+<circle class="ring" cx="632.4" cy="151.9" r="3" fill="var(--s1)"><title> (7, -2.97)</title></circle>
+<circle class="ring" cx="922.9" cy="217.3" r="3" fill="var(--s1)"><title> (24, -9.14)</title></circle>
+<circle class="ring" cx="683.6" cy="127.3" r="3" fill="var(--s1)"><title> (10, -0.65)</title></circle>
+<circle class="ring" cx="683.6" cy="187.7" r="3" fill="var(--s1)"><title> (10, -6.35)</title></circle>
+<circle class="ring" cx="871.6" cy="223.1" r="3" fill="var(--s1)"><title> (21, -9.68)</title></circle>
+<circle class="ring" cx="888.7" cy="227.3" r="3" fill="var(--s1)"><title> (22, -10.1)</title></circle>
+<circle class="ring" cx="734.9" cy="163.0" r="3" fill="var(--s1)"><title> (13, -4.02)</title></circle>
+<circle class="ring" cx="905.8" cy="255.7" r="3" fill="var(--s1)"><title> (23, -12.8)</title></circle>
+<circle class="ring" cx="632.4" cy="130.8" r="3" fill="var(--s1)"><title> (7, -0.979)</title></circle>
+<circle class="ring" cx="632.4" cy="146.5" r="3" fill="var(--s1)"><title> (7, -2.46)</title></circle>
+<circle class="ring" cx="632.4" cy="137.2" r="3" fill="var(--s1)"><title> (7, -1.58)</title></circle>
+<circle class="ring" cx="769.1" cy="116.3" r="3" fill="var(--s1)"><title> (15, 0.387)</title></circle>
+<circle class="ring" cx="922.9" cy="194.8" r="3" fill="var(--s1)"><title> (24, -7.01)</title></circle>
+<circle class="ring" cx="905.8" cy="160.5" r="3" fill="var(--s1)"><title> (23, -3.78)</title></circle>
+<circle class="ring" cx="922.9" cy="334.1" r="3" fill="var(--s1)"><title> (24, -20.2)</title></circle>
+<circle class="ring" cx="632.4" cy="133.2" r="3" fill="var(--s1)"><title> (7, -1.2)</title></circle>
+<circle class="ring" cx="632.4" cy="130.8" r="3" fill="var(--s1)"><title> (7, -0.979)</title></circle>
+<circle class="ring" cx="632.4" cy="104.6" r="3" fill="var(--s1)"><title> (7, 1.5)</title></circle>
+<circle class="ring" cx="564.0" cy="150.3" r="3" fill="var(--s1)"><title> (3, -2.81)</title></circle>
+<circle class="ring" cx="632.4" cy="137.2" r="3" fill="var(--s1)"><title> (7, -1.58)</title></circle>
+<circle class="ring" cx="615.3" cy="144.6" r="3" fill="var(--s1)"><title> (6, -2.28)</title></circle>
+<circle class="ring" cx="632.4" cy="133.2" r="3" fill="var(--s1)"><title> (7, -1.2)</title></circle>
+<circle class="ring" cx="632.4" cy="137.2" r="3" fill="var(--s1)"><title> (7, -1.58)</title></circle>
+<circle class="ring" cx="632.4" cy="133.2" r="3" fill="var(--s1)"><title> (7, -1.2)</title></circle>
+<circle class="ring" cx="632.4" cy="119.1" r="3" fill="var(--s1)"><title> (7, 0.125)</title></circle>
+<circle class="ring" cx="632.4" cy="123.5" r="3" fill="var(--s1)"><title> (7, -0.285)</title></circle>
+<circle class="ring" cx="632.4" cy="112.1" r="3" fill="var(--s1)"><title> (7, 0.784)</title></circle>
+<circle class="ring" cx="905.8" cy="196.9" r="3" fill="var(--s1)"><title> (23, -7.21)</title></circle>
+<circle class="ring" cx="632.4" cy="123.5" r="3" fill="var(--s1)"><title> (7, -0.285)</title></circle>
+<circle class="ring" cx="632.4" cy="112.1" r="3" fill="var(--s1)"><title> (7, 0.784)</title></circle>
+<circle class="ring" cx="683.6" cy="188.2" r="3" fill="var(--s1)"><title> (10, -6.39)</title></circle>
+<circle class="ring" cx="632.4" cy="126.9" r="3" fill="var(--s1)"><title> (7, -0.614)</title></circle>
+<circle class="ring" cx="632.4" cy="123.5" r="3" fill="var(--s1)"><title> (7, -0.285)</title></circle>
+<circle class="ring" cx="632.4" cy="126.9" r="3" fill="var(--s1)"><title> (7, -0.614)</title></circle>
+<circle class="ring" cx="888.7" cy="200.5" r="3" fill="var(--s1)"><title> (22, -7.55)</title></circle>
+<circle class="ring" cx="564.0" cy="148.6" r="3" fill="var(--s1)"><title> (3, -2.66)</title></circle>
+<circle class="ring" cx="769.1" cy="110.8" r="3" fill="var(--s1)"><title> (15, 0.906)</title></circle>
+<circle class="ring" cx="632.4" cy="123.5" r="3" fill="var(--s1)"><title> (7, -0.285)</title></circle>
+<circle class="ring" cx="632.4" cy="117.9" r="3" fill="var(--s1)"><title> (7, 0.236)</title></circle>
+<circle class="ring" cx="632.4" cy="145.0" r="3" fill="var(--s1)"><title> (7, -2.31)</title></circle>
+<circle class="ring" cx="632.4" cy="123.4" r="3" fill="var(--s1)"><title> (7, -0.284)</title></circle>
+<circle class="ring" cx="632.4" cy="123.4" r="3" fill="var(--s1)"><title> (7, -0.284)</title></circle>
+<circle class="ring" cx="752.0" cy="168.9" r="3" fill="var(--s1)"><title> (14, -4.58)</title></circle>
+<circle class="ring" cx="632.4" cy="114.3" r="3" fill="var(--s1)"><title> (7, 0.582)</title></circle>
+<circle class="ring" cx="905.8" cy="139.4" r="3" fill="var(--s1)"><title> (23, -1.79)</title></circle>
+<circle class="ring" cx="888.7" cy="226.9" r="3" fill="var(--s1)"><title> (22, -10)</title></circle>
+<circle class="ring" cx="922.9" cy="157.8" r="3" fill="var(--s1)"><title> (24, -3.52)</title></circle>
+<circle class="ring" cx="632.4" cy="123.4" r="3" fill="var(--s1)"><title> (7, -0.284)</title></circle>
+<circle class="ring" cx="905.8" cy="203.4" r="3" fill="var(--s1)"><title> (23, -7.82)</title></circle>
+<circle class="ring" cx="632.4" cy="123.4" r="3" fill="var(--s1)"><title> (7, -0.284)</title></circle>
+<circle class="ring" cx="632.4" cy="123.4" r="3" fill="var(--s1)"><title> (7, -0.284)</title></circle>
+<circle class="ring" cx="632.4" cy="123.4" r="3" fill="var(--s1)"><title> (7, -0.284)</title></circle>
+<circle class="ring" cx="632.4" cy="123.4" r="3" fill="var(--s1)"><title> (7, -0.284)</title></circle>
+<circle class="ring" cx="683.6" cy="148.0" r="3" fill="var(--s1)"><title> (10, -2.6)</title></circle>
+<circle class="ring" cx="752.0" cy="124.6" r="3" fill="var(--s1)"><title> (14, -0.389)</title></circle>
+<circle class="ring" cx="632.4" cy="123.4" r="3" fill="var(--s1)"><title> (7, -0.284)</title></circle>
+<circle class="ring" cx="871.6" cy="204.6" r="3" fill="var(--s1)"><title> (21, -7.94)</title></circle>
+<circle class="ring" cx="632.4" cy="127.7" r="3" fill="var(--s1)"><title> (7, -0.682)</title></circle>
+<circle class="ring" cx="632.4" cy="121.3" r="3" fill="var(--s1)"><title> (7, -0.079)</title></circle>
+<circle class="ring" cx="632.4" cy="127.7" r="3" fill="var(--s1)"><title> (7, -0.682)</title></circle>
+<circle class="ring" cx="632.4" cy="127.7" r="3" fill="var(--s1)"><title> (7, -0.682)</title></circle>
+<circle class="ring" cx="888.7" cy="175.9" r="3" fill="var(--s1)"><title> (22, -5.23)</title></circle>
+<circle class="ring" cx="632.4" cy="127.7" r="3" fill="var(--s1)"><title> (7, -0.682)</title></circle>
+<circle class="ring" cx="632.4" cy="127.7" r="3" fill="var(--s1)"><title> (7, -0.682)</title></circle>
+<circle class="ring" cx="564.0" cy="154.2" r="3" fill="var(--s1)"><title> (3, -3.18)</title></circle>
+<circle class="ring" cx="632.4" cy="121.3" r="3" fill="var(--s1)"><title> (7, -0.079)</title></circle>
+<circle class="ring" cx="632.4" cy="143.2" r="3" fill="var(--s1)"><title> (7, -2.14)</title></circle>
+<circle class="ring" cx="905.8" cy="216.7" r="3" fill="var(--s1)"><title> (23, -9.08)</title></circle>
+<circle class="ring" cx="905.8" cy="147.4" r="3" fill="var(--s1)"><title> (23, -2.54)</title></circle>
+<circle class="ring" cx="632.4" cy="121.3" r="3" fill="var(--s1)"><title> (7, -0.079)</title></circle>
+<circle class="ring" cx="905.8" cy="183.0" r="3" fill="var(--s1)"><title> (23, -5.9)</title></circle>
+<circle class="ring" cx="632.4" cy="104.7" r="3" fill="var(--s1)"><title> (7, 1.48)</title></circle>
+<circle class="ring" cx="632.4" cy="124.4" r="3" fill="var(--s1)"><title> (7, -0.374)</title></circle>
+<circle class="ring" cx="905.8" cy="188.3" r="3" fill="var(--s1)"><title> (23, -6.4)</title></circle>
+<circle class="ring" cx="734.9" cy="161.7" r="3" fill="var(--s1)"><title> (13, -3.89)</title></circle>
+<circle class="ring" cx="632.4" cy="104.0" r="3" fill="var(--s1)"><title> (7, 1.55)</title></circle>
+<circle class="ring" cx="632.4" cy="124.4" r="3" fill="var(--s1)"><title> (7, -0.374)</title></circle>
+<circle class="ring" cx="632.4" cy="124.4" r="3" fill="var(--s1)"><title> (7, -0.374)</title></circle>
+<circle class="ring" cx="564.0" cy="155.2" r="3" fill="var(--s1)"><title> (3, -3.27)</title></circle>
+<circle class="ring" cx="632.4" cy="124.4" r="3" fill="var(--s1)"><title> (7, -0.374)</title></circle>
+<circle class="ring" cx="632.4" cy="114.4" r="3" fill="var(--s1)"><title> (7, 0.571)</title></circle>
+<circle class="ring" cx="871.6" cy="181.9" r="3" fill="var(--s1)"><title> (21, -5.79)</title></circle>
+<circle class="ring" cx="700.7" cy="116.3" r="3" fill="var(--s1)"><title> (11, 0.386)</title></circle>
+<circle class="ring" cx="632.4" cy="124.0" r="3" fill="var(--s1)"><title> (7, -0.335)</title></circle>
+<circle class="ring" cx="888.7" cy="241.5" r="3" fill="var(--s1)"><title> (22, -11.4)</title></circle>
+<circle class="ring" cx="632.4" cy="124.0" r="3" fill="var(--s1)"><title> (7, -0.335)</title></circle>
+<circle class="ring" cx="632.4" cy="124.0" r="3" fill="var(--s1)"><title> (7, -0.335)</title></circle>
+<circle class="ring" cx="632.4" cy="125.6" r="3" fill="var(--s1)"><title> (7, -0.489)</title></circle>
+<circle class="ring" cx="700.7" cy="152.5" r="3" fill="var(--s1)"><title> (11, -3.03)</title></circle>
+<circle class="ring" cx="564.0" cy="153.1" r="3" fill="var(--s1)"><title> (3, -3.08)</title></circle>
+<circle class="ring" cx="564.0" cy="153.1" r="3" fill="var(--s1)"><title> (3, -3.08)</title></circle>
+<circle class="ring" cx="888.7" cy="175.2" r="3" fill="var(--s1)"><title> (22, -5.17)</title></circle>
+<circle class="ring" cx="871.6" cy="166.9" r="3" fill="var(--s1)"><title> (21, -4.39)</title></circle>
+<circle class="ring" cx="632.4" cy="122.9" r="3" fill="var(--s1)"><title> (7, -0.237)</title></circle>
+<circle class="ring" cx="632.4" cy="122.9" r="3" fill="var(--s1)"><title> (7, -0.237)</title></circle>
+<circle class="ring" cx="632.4" cy="122.9" r="3" fill="var(--s1)"><title> (7, -0.237)</title></circle>
+<circle class="ring" cx="905.8" cy="198.8" r="3" fill="var(--s1)"><title> (23, -7.39)</title></circle>
+<circle class="ring" cx="888.7" cy="194.8" r="3" fill="var(--s1)"><title> (22, -7.01)</title></circle>
+<circle class="ring" cx="700.7" cy="134.1" r="3" fill="var(--s1)"><title> (11, -1.29)</title></circle>
+<circle class="ring" cx="632.4" cy="119.0" r="3" fill="var(--s1)"><title> (7, 0.138)</title></circle>
+<circle class="ring" cx="888.7" cy="210.0" r="3" fill="var(--s1)"><title> (22, -8.45)</title></circle>
+<circle class="ring" cx="905.8" cy="169.0" r="3" fill="var(--s1)"><title> (23, -4.58)</title></circle>
+<circle class="ring" cx="632.4" cy="138.8" r="3" fill="var(--s1)"><title> (7, -1.73)</title></circle>
+<circle class="ring" cx="632.4" cy="103.6" r="3" fill="var(--s1)"><title> (7, 1.59)</title></circle>
+<line class="axis" x1="564.0" x2="940.0" y1="120.4" y2="120.4" stroke-dasharray="4 3"/>
+</svg>

@@ -1,0 +1,545 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1250 1010" width="1250" height="1010" role="img" aria-label="Ten failures and their dashboard signatures (TinyAgent, 64 episodes per step)">
+<style>
+svg{--surface:#fcfcfb;--ink:#0b0b0b;--ink2:#52514e;--muted:#898781;--grid:#e1e0d9;--axis:#c3c2b7;--neutral:#f0efec;--panel:#f4f3ef;--s1:#2a78d6;--s2:#eb6834;--s3:#1baf7a;--s4:#eda100;--s5:#e87ba4;--s6:#008300;--s7:#6250d6;--s8:#e34948;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+@media (prefers-color-scheme: dark){svg{--surface:#1a1a19;--ink:#f0efec;--ink2:#c3c2b7;--muted:#898781;--grid:#2c2c2a;--axis:#383835;--neutral:#383835;--panel:#232322;--s1:#3987e5;--s2:#d95926;--s3:#199e70;--s4:#c98500;--s5:#d55181;--s6:#008300;--s7:#9085e9;--s8:#e66767}}
+.bg{fill:var(--surface)} .t{fill:var(--ink)} .t2{fill:var(--ink2)} .m{fill:var(--muted)}
+.title{font-size:15px;font-weight:600;fill:var(--ink)} .sub{font-size:12px;fill:var(--ink2)}
+.lab{font-size:12px;fill:var(--ink2)} .tick{font-size:11px;fill:var(--muted);font-variant-numeric:tabular-nums}
+.grid{stroke:var(--grid);stroke-width:1} .axis{stroke:var(--axis);stroke-width:1}
+.box{fill:var(--panel);stroke:var(--axis);stroke-width:1} .edge{stroke:var(--ink2);stroke-width:1.5;fill:none}
+.ring{stroke:var(--surface);stroke-width:2} .note{font-size:11px;fill:var(--ink2)}
+.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px}
+</style>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0 L10,5 L0,10 z" style="fill:var(--ink2)"/></marker></defs>
+<rect class="bg" width="1250" height="1010" rx="8"/>
+<text class="title" x="20" y="30">Ten failures and their dashboard signatures (TinyAgent, 64 episodes per step)</text>
+<text class="sub" x="20" y="48">Top of each pair: training batch reward. Bottom: the metric that exposes the fault. Blue: matched healthy run; red: the run with the fault.</text>
+<text class="lab" x="56.0" y="122.5" font-weight="600">(1) mask off by one</text>
+<line class="grid" x1="56.0" x2="236.0" y1="252.5" y2="252.5"/>
+<text class="tick" x="50.0" y="256.5" text-anchor="end">0</text>
+<line class="grid" x1="56.0" x2="236.0" y1="228.5" y2="228.5"/>
+<text class="tick" x="50.0" y="232.5" text-anchor="end">0.2</text>
+<line class="grid" x1="56.0" x2="236.0" y1="204.5" y2="204.5"/>
+<text class="tick" x="50.0" y="208.5" text-anchor="end">0.4</text>
+<line class="grid" x1="56.0" x2="236.0" y1="180.5" y2="180.5"/>
+<text class="tick" x="50.0" y="184.5" text-anchor="end">0.6</text>
+<line class="grid" x1="56.0" x2="236.0" y1="156.5" y2="156.5"/>
+<text class="tick" x="50.0" y="160.5" text-anchor="end">0.8</text>
+<line class="grid" x1="56.0" x2="236.0" y1="132.5" y2="132.5"/>
+<text class="tick" x="50.0" y="136.5" text-anchor="end">1</text>
+<line class="axis" x1="56.0" x2="236.0" y1="252.5" y2="252.5"/>
+<line class="axis" x1="56.0" x2="56.0" y1="252.5" y2="256.5"/>
+<text class="tick" x="56.0" y="268.5" text-anchor="middle">0</text>
+<line class="axis" x1="95.1" x2="95.1" y1="252.5" y2="256.5"/>
+<text class="tick" x="95.1" y="268.5" text-anchor="middle">5</text>
+<line class="axis" x1="134.3" x2="134.3" y1="252.5" y2="256.5"/>
+<text class="tick" x="134.3" y="268.5" text-anchor="middle">10</text>
+<line class="axis" x1="173.4" x2="173.4" y1="252.5" y2="256.5"/>
+<text class="tick" x="173.4" y="268.5" text-anchor="middle">15</text>
+<line class="axis" x1="212.5" x2="212.5" y1="252.5" y2="256.5"/>
+<text class="tick" x="212.5" y="268.5" text-anchor="middle">20</text>
+<text class="lab" x="12.0" y="192.5" text-anchor="middle" transform="rotate(-90 12.0 192.5)">reward</text>
+<clipPath id="clip140700408845504"><rect x="56.0" y="130.5" width="180.0" height="124.0"/></clipPath>
+<polyline points="56.0,231.9 63.8,231.9 71.7,226.2 79.5,228.1 87.3,211.2 95.1,226.2 103.0,226.2 110.8,213.1 118.6,209.4 126.4,216.9 134.3,203.8 142.1,207.5 149.9,200.0 157.7,177.5 165.6,192.5 173.4,186.9 181.2,188.8 189.0,162.5 196.9,149.4 204.7,200.0 212.5,166.2 220.3,171.9 228.2,183.1 236.0,173.8" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700408845504)"/>
+<polyline points="56.0,231.9 63.8,230.0 71.7,231.9 79.5,226.2 87.3,220.6 95.1,224.4 103.0,222.5 110.8,222.5 118.6,205.6 126.4,216.9 134.3,211.2 142.1,203.8 149.9,203.8 157.7,215.0 165.6,211.2 173.4,211.2 181.2,205.6 189.0,211.2 196.9,196.2 204.7,209.4 212.5,192.5 220.3,209.4 228.2,177.5 236.0,181.2" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700408845504)"/>
+<line class="grid" x1="56.0" x2="236.0" y1="468.4" y2="468.4"/>
+<text class="tick" x="50.0" y="472.4" text-anchor="end">-8</text>
+<line class="grid" x1="56.0" x2="236.0" y1="429.8" y2="429.8"/>
+<text class="tick" x="50.0" y="433.8" text-anchor="end">-6</text>
+<line class="grid" x1="56.0" x2="236.0" y1="391.2" y2="391.2"/>
+<text class="tick" x="50.0" y="395.2" text-anchor="end">-4</text>
+<line class="grid" x1="56.0" x2="236.0" y1="352.7" y2="352.7"/>
+<text class="tick" x="50.0" y="356.7" text-anchor="end">-2</text>
+<line class="grid" x1="56.0" x2="236.0" y1="314.1" y2="314.1"/>
+<text class="tick" x="50.0" y="318.1" text-anchor="end">0</text>
+<line class="axis" x1="56.0" x2="236.0" y1="314.1" y2="314.1"/>
+<line class="axis" x1="56.0" x2="56.0" y1="481.5" y2="485.5"/>
+<text class="tick" x="56.0" y="497.5" text-anchor="middle">0</text>
+<line class="axis" x1="95.1" x2="95.1" y1="481.5" y2="485.5"/>
+<text class="tick" x="95.1" y="497.5" text-anchor="middle">5</text>
+<line class="axis" x1="134.3" x2="134.3" y1="481.5" y2="485.5"/>
+<text class="tick" x="134.3" y="497.5" text-anchor="middle">10</text>
+<line class="axis" x1="173.4" x2="173.4" y1="481.5" y2="485.5"/>
+<text class="tick" x="173.4" y="497.5" text-anchor="middle">15</text>
+<line class="axis" x1="212.5" x2="212.5" y1="481.5" y2="485.5"/>
+<text class="tick" x="212.5" y="497.5" text-anchor="middle">20</text>
+<text class="lab" x="146.0" y="515.5" text-anchor="middle">step</text>
+<text class="lab" x="12.0" y="387.0" text-anchor="middle" transform="rotate(-90 12.0 387.0)">log10 logp_gap</text>
+<clipPath id="clip140700399840064"><rect x="56.0" y="290.5" width="180.0" height="193.0"/></clipPath>
+<polyline points="56.0,459.0 63.8,455.5 71.7,457.1 79.5,457.5 87.3,454.9 95.1,457.0 103.0,456.5 110.8,457.7 118.6,455.8 126.4,455.0 134.3,457.3 142.1,457.4 149.9,459.0 157.7,462.5 165.6,461.7 173.4,461.7 181.2,461.5 189.0,461.3 196.9,466.2 204.7,463.1 212.5,469.7 220.3,469.8 228.2,467.2 236.0,471.4" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700399840064)"/>
+<polyline points="56.0,303.6 63.8,303.0 71.7,302.9 79.5,302.7 87.3,302.8 95.1,302.8 103.0,302.6 110.8,302.7 118.6,303.0 126.4,303.1 134.3,303.0 142.1,303.2 149.9,303.3 157.7,303.2 165.6,303.3 173.4,303.4 181.2,303.9 189.0,304.1 196.9,303.5 204.7,303.6 212.5,304.2 220.3,303.8 228.2,305.4 236.0,305.3" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700399840064)"/>
+<text class="lab" x="306.0" y="122.5" font-weight="600">(2) stale old_logp</text>
+<line class="grid" x1="306.0" x2="486.0" y1="252.5" y2="252.5"/>
+<text class="tick" x="300.0" y="256.5" text-anchor="end">0</text>
+<line class="grid" x1="306.0" x2="486.0" y1="228.5" y2="228.5"/>
+<text class="tick" x="300.0" y="232.5" text-anchor="end">0.2</text>
+<line class="grid" x1="306.0" x2="486.0" y1="204.5" y2="204.5"/>
+<text class="tick" x="300.0" y="208.5" text-anchor="end">0.4</text>
+<line class="grid" x1="306.0" x2="486.0" y1="180.5" y2="180.5"/>
+<text class="tick" x="300.0" y="184.5" text-anchor="end">0.6</text>
+<line class="grid" x1="306.0" x2="486.0" y1="156.5" y2="156.5"/>
+<text class="tick" x="300.0" y="160.5" text-anchor="end">0.8</text>
+<line class="grid" x1="306.0" x2="486.0" y1="132.5" y2="132.5"/>
+<text class="tick" x="300.0" y="136.5" text-anchor="end">1</text>
+<line class="axis" x1="306.0" x2="486.0" y1="252.5" y2="252.5"/>
+<line class="axis" x1="306.0" x2="306.0" y1="252.5" y2="256.5"/>
+<text class="tick" x="306.0" y="268.5" text-anchor="middle">0</text>
+<line class="axis" x1="345.1" x2="345.1" y1="252.5" y2="256.5"/>
+<text class="tick" x="345.1" y="268.5" text-anchor="middle">5</text>
+<line class="axis" x1="384.3" x2="384.3" y1="252.5" y2="256.5"/>
+<text class="tick" x="384.3" y="268.5" text-anchor="middle">10</text>
+<line class="axis" x1="423.4" x2="423.4" y1="252.5" y2="256.5"/>
+<text class="tick" x="423.4" y="268.5" text-anchor="middle">15</text>
+<line class="axis" x1="462.5" x2="462.5" y1="252.5" y2="256.5"/>
+<text class="tick" x="462.5" y="268.5" text-anchor="middle">20</text>
+<text class="lab" x="262.0" y="192.5" text-anchor="middle" transform="rotate(-90 262.0 192.5)">reward</text>
+<clipPath id="clip140700400768960"><rect x="306.0" y="130.5" width="180.0" height="124.0"/></clipPath>
+<polyline points="306.0,231.9 313.8,231.9 321.7,226.2 329.5,228.1 337.3,211.2 345.1,226.2 353.0,226.2 360.8,213.1 368.6,209.4 376.4,216.9 384.3,203.8 392.1,207.5 399.9,200.0 407.7,177.5 415.6,192.5 423.4,186.9 431.2,188.8 439.0,162.5 446.9,149.4 454.7,200.0 462.5,166.2 470.3,171.9 478.2,183.1 486.0,173.8" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700400768960)"/>
+<polyline points="306.0,231.9 313.8,231.9 321.7,220.6 329.5,226.2 337.3,224.4 345.1,226.2 353.0,220.6 360.8,216.9 368.6,203.8 376.4,224.4 384.3,203.8 392.1,194.4 399.9,196.2 407.7,194.4 415.6,194.4 423.4,186.9 431.2,179.4 439.0,183.1 446.9,170.0 454.7,171.9 462.5,179.4 470.3,168.1 478.2,166.2 486.0,153.1" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700400768960)"/>
+<line class="grid" x1="306.0" x2="486.0" y1="481.5" y2="481.5"/>
+<text class="tick" x="300.0" y="485.5" text-anchor="end">0</text>
+<line class="grid" x1="306.0" x2="486.0" y1="417.6" y2="417.6"/>
+<text class="tick" x="300.0" y="421.6" text-anchor="end">5e-03</text>
+<line class="grid" x1="306.0" x2="486.0" y1="353.7" y2="353.7"/>
+<text class="tick" x="300.0" y="357.7" text-anchor="end">0.01</text>
+<line class="axis" x1="306.0" x2="486.0" y1="481.5" y2="481.5"/>
+<line class="axis" x1="306.0" x2="306.0" y1="481.5" y2="485.5"/>
+<text class="tick" x="306.0" y="497.5" text-anchor="middle">0</text>
+<line class="axis" x1="345.1" x2="345.1" y1="481.5" y2="485.5"/>
+<text class="tick" x="345.1" y="497.5" text-anchor="middle">5</text>
+<line class="axis" x1="384.3" x2="384.3" y1="481.5" y2="485.5"/>
+<text class="tick" x="384.3" y="497.5" text-anchor="middle">10</text>
+<line class="axis" x1="423.4" x2="423.4" y1="481.5" y2="485.5"/>
+<text class="tick" x="423.4" y="497.5" text-anchor="middle">15</text>
+<line class="axis" x1="462.5" x2="462.5" y1="481.5" y2="485.5"/>
+<text class="tick" x="462.5" y="497.5" text-anchor="middle">20</text>
+<text class="lab" x="396.0" y="515.5" text-anchor="middle">step</text>
+<text class="lab" x="262.0" y="387.0" text-anchor="middle" transform="rotate(-90 262.0 387.0)">clip_frac</text>
+<clipPath id="clip140700396230016"><rect x="306.0" y="290.5" width="180.0" height="193.0"/></clipPath>
+<polyline points="306.0,303.2 313.8,462.9 321.7,481.5 329.5,481.5 337.3,481.5 345.1,466.1 353.0,467.0 360.8,481.5 368.6,463.2 376.4,481.5 384.3,481.5 392.1,413.8 399.9,464.5 407.7,481.5 415.6,481.5 423.4,481.5 431.2,423.5 439.0,423.4 446.9,466.2 454.7,481.5 462.5,481.5 470.3,481.5 478.2,481.5 486.0,481.5" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700396230016)"/>
+<polyline points="306.0,481.5 313.8,481.5 321.7,481.5 329.5,481.5 337.3,481.5 345.1,481.5 353.0,481.5 360.8,481.5 368.6,481.5 376.4,481.5 384.3,481.5 392.1,481.5 399.9,481.5 407.7,481.5 415.6,481.5 423.4,481.5 431.2,481.5 439.0,481.5 446.9,481.5 454.7,481.5 462.5,481.5 470.3,481.5 478.2,481.5 486.0,481.5" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700396230016)"/>
+<text class="lab" x="556.0" y="122.5" font-weight="600">(3) entropy collapse</text>
+<line class="grid" x1="556.0" x2="736.0" y1="252.5" y2="252.5"/>
+<text class="tick" x="550.0" y="256.5" text-anchor="end">0</text>
+<line class="grid" x1="556.0" x2="736.0" y1="228.5" y2="228.5"/>
+<text class="tick" x="550.0" y="232.5" text-anchor="end">0.2</text>
+<line class="grid" x1="556.0" x2="736.0" y1="204.5" y2="204.5"/>
+<text class="tick" x="550.0" y="208.5" text-anchor="end">0.4</text>
+<line class="grid" x1="556.0" x2="736.0" y1="180.5" y2="180.5"/>
+<text class="tick" x="550.0" y="184.5" text-anchor="end">0.6</text>
+<line class="grid" x1="556.0" x2="736.0" y1="156.5" y2="156.5"/>
+<text class="tick" x="550.0" y="160.5" text-anchor="end">0.8</text>
+<line class="grid" x1="556.0" x2="736.0" y1="132.5" y2="132.5"/>
+<text class="tick" x="550.0" y="136.5" text-anchor="end">1</text>
+<line class="axis" x1="556.0" x2="736.0" y1="252.5" y2="252.5"/>
+<line class="axis" x1="556.0" x2="556.0" y1="252.5" y2="256.5"/>
+<text class="tick" x="556.0" y="268.5" text-anchor="middle">0</text>
+<line class="axis" x1="595.1" x2="595.1" y1="252.5" y2="256.5"/>
+<text class="tick" x="595.1" y="268.5" text-anchor="middle">5</text>
+<line class="axis" x1="634.3" x2="634.3" y1="252.5" y2="256.5"/>
+<text class="tick" x="634.3" y="268.5" text-anchor="middle">10</text>
+<line class="axis" x1="673.4" x2="673.4" y1="252.5" y2="256.5"/>
+<text class="tick" x="673.4" y="268.5" text-anchor="middle">15</text>
+<line class="axis" x1="712.5" x2="712.5" y1="252.5" y2="256.5"/>
+<text class="tick" x="712.5" y="268.5" text-anchor="middle">20</text>
+<text class="lab" x="512.0" y="192.5" text-anchor="middle" transform="rotate(-90 512.0 192.5)">reward</text>
+<clipPath id="clip140700400541888"><rect x="556.0" y="130.5" width="180.0" height="124.0"/></clipPath>
+<polyline points="556.0,231.9 563.8,231.9 571.7,226.2 579.5,228.1 587.3,211.2 595.1,226.2 603.0,226.2 610.8,213.1 618.6,209.4 626.4,216.9 634.3,203.8 642.1,207.5 649.9,200.0 657.7,177.5 665.6,192.5 673.4,186.9 681.2,188.8 689.0,162.5 696.9,149.4 704.7,200.0 712.5,166.2 720.3,171.9 728.2,183.1 736.0,173.8" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700400541888)"/>
+<polyline points="556.0,231.9 563.8,231.9 571.7,226.2 579.5,235.6 587.3,216.9 595.1,235.6 603.0,218.8 610.8,231.9 618.6,205.6 626.4,237.5 634.3,216.9 642.1,233.8 649.9,222.5 657.7,237.5 665.6,220.6 673.4,235.6 681.2,220.6 689.0,207.5 696.9,237.5 704.7,220.6 712.5,237.5 720.3,237.5 728.2,224.4 736.0,226.2" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700400541888)"/>
+<line class="grid" x1="556.0" x2="736.0" y1="481.5" y2="481.5"/>
+<text class="tick" x="550.0" y="485.5" text-anchor="end">0</text>
+<line class="grid" x1="556.0" x2="736.0" y1="418.2" y2="418.2"/>
+<text class="tick" x="550.0" y="422.2" text-anchor="end">0.2</text>
+<line class="grid" x1="556.0" x2="736.0" y1="354.9" y2="354.9"/>
+<text class="tick" x="550.0" y="358.9" text-anchor="end">0.4</text>
+<line class="axis" x1="556.0" x2="736.0" y1="481.5" y2="481.5"/>
+<line class="axis" x1="556.0" x2="556.0" y1="481.5" y2="485.5"/>
+<text class="tick" x="556.0" y="497.5" text-anchor="middle">0</text>
+<line class="axis" x1="595.1" x2="595.1" y1="481.5" y2="485.5"/>
+<text class="tick" x="595.1" y="497.5" text-anchor="middle">5</text>
+<line class="axis" x1="634.3" x2="634.3" y1="481.5" y2="485.5"/>
+<text class="tick" x="634.3" y="497.5" text-anchor="middle">10</text>
+<line class="axis" x1="673.4" x2="673.4" y1="481.5" y2="485.5"/>
+<text class="tick" x="673.4" y="497.5" text-anchor="middle">15</text>
+<line class="axis" x1="712.5" x2="712.5" y1="481.5" y2="485.5"/>
+<text class="tick" x="712.5" y="497.5" text-anchor="middle">20</text>
+<text class="lab" x="646.0" y="515.5" text-anchor="middle">step</text>
+<text class="lab" x="512.0" y="387.0" text-anchor="middle" transform="rotate(-90 512.0 387.0)">entropy (nats)</text>
+<clipPath id="clip140700176840608"><rect x="556.0" y="290.5" width="180.0" height="193.0"/></clipPath>
+<polyline points="556.0,302.8 563.8,320.6 571.7,309.8 579.5,320.9 587.3,330.6 595.1,327.6 603.0,335.9 610.8,346.7 618.6,360.2 626.4,356.2 634.3,365.1 642.1,369.0 649.9,373.7 657.7,387.9 665.6,384.8 673.4,397.2 681.2,396.3 689.0,409.6 696.9,427.9 704.7,406.4 712.5,423.8 720.3,424.4 728.2,415.9 736.0,415.2" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700176840608)"/>
+<polyline points="556.0,308.3 563.8,331.8 571.7,354.7 579.5,368.6 587.3,380.2 595.1,398.5 603.0,416.0 610.8,421.7 618.6,439.8 626.4,448.3 634.3,452.5 642.1,460.0 649.9,464.4 657.7,465.9 665.6,462.1 673.4,465.5 681.2,467.6 689.0,470.9 696.9,471.3 704.7,470.6 712.5,471.9 720.3,473.6 728.2,474.0 736.0,472.6" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700176840608)"/>
+<text class="lab" x="806.0" y="122.5" font-weight="600">(4) length bias, 12 turns</text>
+<line class="grid" x1="806.0" x2="986.0" y1="252.5" y2="252.5"/>
+<text class="tick" x="800.0" y="256.5" text-anchor="end">0</text>
+<line class="grid" x1="806.0" x2="986.0" y1="228.5" y2="228.5"/>
+<text class="tick" x="800.0" y="232.5" text-anchor="end">0.2</text>
+<line class="grid" x1="806.0" x2="986.0" y1="204.5" y2="204.5"/>
+<text class="tick" x="800.0" y="208.5" text-anchor="end">0.4</text>
+<line class="grid" x1="806.0" x2="986.0" y1="180.5" y2="180.5"/>
+<text class="tick" x="800.0" y="184.5" text-anchor="end">0.6</text>
+<line class="grid" x1="806.0" x2="986.0" y1="156.5" y2="156.5"/>
+<text class="tick" x="800.0" y="160.5" text-anchor="end">0.8</text>
+<line class="grid" x1="806.0" x2="986.0" y1="132.5" y2="132.5"/>
+<text class="tick" x="800.0" y="136.5" text-anchor="end">1</text>
+<line class="axis" x1="806.0" x2="986.0" y1="252.5" y2="252.5"/>
+<line class="axis" x1="806.0" x2="806.0" y1="252.5" y2="256.5"/>
+<text class="tick" x="806.0" y="268.5" text-anchor="middle">0</text>
+<line class="axis" x1="845.1" x2="845.1" y1="252.5" y2="256.5"/>
+<text class="tick" x="845.1" y="268.5" text-anchor="middle">5</text>
+<line class="axis" x1="884.3" x2="884.3" y1="252.5" y2="256.5"/>
+<text class="tick" x="884.3" y="268.5" text-anchor="middle">10</text>
+<line class="axis" x1="923.4" x2="923.4" y1="252.5" y2="256.5"/>
+<text class="tick" x="923.4" y="268.5" text-anchor="middle">15</text>
+<line class="axis" x1="962.5" x2="962.5" y1="252.5" y2="256.5"/>
+<text class="tick" x="962.5" y="268.5" text-anchor="middle">20</text>
+<text class="lab" x="762.0" y="192.5" text-anchor="middle" transform="rotate(-90 762.0 192.5)">reward</text>
+<clipPath id="clip140700351401904"><rect x="806.0" y="130.5" width="180.0" height="124.0"/></clipPath>
+<polyline points="806.0,228.1 813.8,231.9 821.7,218.8 829.5,220.6 837.3,222.5 845.1,216.9 853.0,209.4 860.8,205.6 868.6,218.8 876.4,207.5 884.3,215.0 892.1,190.6 899.9,207.5 907.7,203.8 915.6,186.9 923.4,177.5" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700351401904)"/>
+<polyline points="806.0,228.1 813.8,228.1 821.7,230.0 829.5,230.0 837.3,215.0 845.1,216.9 853.0,213.1 860.8,230.0 868.6,218.8 876.4,205.6 884.3,218.8 892.1,211.2 899.9,185.0 907.7,200.0 915.6,190.6 923.4,188.8" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700351401904)"/>
+<line class="grid" x1="806.0" x2="986.0" y1="481.5" y2="481.5"/>
+<text class="tick" x="800.0" y="485.5" text-anchor="end">0</text>
+<line class="grid" x1="806.0" x2="986.0" y1="430.4" y2="430.4"/>
+<text class="tick" x="800.0" y="434.4" text-anchor="end">10</text>
+<line class="grid" x1="806.0" x2="986.0" y1="379.4" y2="379.4"/>
+<text class="tick" x="800.0" y="383.4" text-anchor="end">20</text>
+<line class="grid" x1="806.0" x2="986.0" y1="328.3" y2="328.3"/>
+<text class="tick" x="800.0" y="332.3" text-anchor="end">30</text>
+<line class="axis" x1="806.0" x2="986.0" y1="481.5" y2="481.5"/>
+<line class="axis" x1="806.0" x2="806.0" y1="481.5" y2="485.5"/>
+<text class="tick" x="806.0" y="497.5" text-anchor="middle">0</text>
+<line class="axis" x1="845.1" x2="845.1" y1="481.5" y2="485.5"/>
+<text class="tick" x="845.1" y="497.5" text-anchor="middle">5</text>
+<line class="axis" x1="884.3" x2="884.3" y1="481.5" y2="485.5"/>
+<text class="tick" x="884.3" y="497.5" text-anchor="middle">10</text>
+<line class="axis" x1="923.4" x2="923.4" y1="481.5" y2="485.5"/>
+<text class="tick" x="923.4" y="497.5" text-anchor="middle">15</text>
+<line class="axis" x1="962.5" x2="962.5" y1="481.5" y2="485.5"/>
+<text class="tick" x="962.5" y="497.5" text-anchor="middle">20</text>
+<text class="lab" x="896.0" y="515.5" text-anchor="middle">step</text>
+<text class="lab" x="762.0" y="387.0" text-anchor="middle" transform="rotate(-90 762.0 387.0)">tokens per failure</text>
+<clipPath id="clip140700407270528"><rect x="806.0" y="290.5" width="180.0" height="193.0"/></clipPath>
+<polyline points="806.0,389.9 813.8,404.7 821.7,407.6 829.5,394.4 837.3,370.6 845.1,384.4 853.0,385.2 860.8,380.0 868.6,397.8 876.4,412.2 884.3,414.4 892.1,413.3 899.9,391.1 907.7,413.0 915.6,427.8 923.4,431.7" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700407270528)"/>
+<polyline points="806.0,389.9 813.8,370.6 821.7,371.8 829.5,368.7 837.3,361.5 845.1,316.9 853.0,317.7 860.8,362.2 868.6,348.8 876.4,310.9 884.3,312.0 892.1,308.6 899.9,316.4 907.7,313.5 915.6,303.8 923.4,300.4" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700407270528)"/>
+<text class="lab" x="1056.0" y="122.5" font-weight="600">(5) advantage sign error</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="252.5" y2="252.5"/>
+<text class="tick" x="1050.0" y="256.5" text-anchor="end">0</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="228.5" y2="228.5"/>
+<text class="tick" x="1050.0" y="232.5" text-anchor="end">0.2</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="204.5" y2="204.5"/>
+<text class="tick" x="1050.0" y="208.5" text-anchor="end">0.4</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="180.5" y2="180.5"/>
+<text class="tick" x="1050.0" y="184.5" text-anchor="end">0.6</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="156.5" y2="156.5"/>
+<text class="tick" x="1050.0" y="160.5" text-anchor="end">0.8</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="132.5" y2="132.5"/>
+<text class="tick" x="1050.0" y="136.5" text-anchor="end">1</text>
+<line class="axis" x1="1056.0" x2="1236.0" y1="252.5" y2="252.5"/>
+<line class="axis" x1="1056.0" x2="1056.0" y1="252.5" y2="256.5"/>
+<text class="tick" x="1056.0" y="268.5" text-anchor="middle">0</text>
+<line class="axis" x1="1095.1" x2="1095.1" y1="252.5" y2="256.5"/>
+<text class="tick" x="1095.1" y="268.5" text-anchor="middle">5</text>
+<line class="axis" x1="1134.3" x2="1134.3" y1="252.5" y2="256.5"/>
+<text class="tick" x="1134.3" y="268.5" text-anchor="middle">10</text>
+<line class="axis" x1="1173.4" x2="1173.4" y1="252.5" y2="256.5"/>
+<text class="tick" x="1173.4" y="268.5" text-anchor="middle">15</text>
+<line class="axis" x1="1212.5" x2="1212.5" y1="252.5" y2="256.5"/>
+<text class="tick" x="1212.5" y="268.5" text-anchor="middle">20</text>
+<text class="lab" x="1012.0" y="192.5" text-anchor="middle" transform="rotate(-90 1012.0 192.5)">reward</text>
+<clipPath id="clip140700331977008"><rect x="1056.0" y="130.5" width="180.0" height="124.0"/></clipPath>
+<polyline points="1056.0,231.9 1063.8,231.9 1071.7,226.2 1079.5,228.1 1087.3,211.2 1095.1,226.2 1103.0,226.2 1110.8,213.1 1118.6,209.4 1126.4,216.9 1134.3,203.8 1142.1,207.5 1149.9,200.0 1157.7,177.5 1165.6,192.5 1173.4,186.9 1181.2,188.8 1189.0,162.5 1196.9,149.4 1204.7,200.0 1212.5,166.2 1220.3,171.9 1228.2,183.1 1236.0,173.8" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700331977008)"/>
+<polyline points="1056.0,231.9 1063.8,231.9 1071.7,243.1 1079.5,243.1 1087.3,246.9 1095.1,250.6 1103.0,248.8 1110.8,250.6" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700331977008)"/>
+<line class="grid" x1="1056.0" x2="1236.0" y1="481.5" y2="481.5"/>
+<text class="tick" x="1050.0" y="485.5" text-anchor="end">0</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="417.8" y2="417.8"/>
+<text class="tick" x="1050.0" y="421.8" text-anchor="end">2</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="354.2" y2="354.2"/>
+<text class="tick" x="1050.0" y="358.2" text-anchor="end">4</text>
+<line class="axis" x1="1056.0" x2="1236.0" y1="481.5" y2="481.5"/>
+<line class="axis" x1="1056.0" x2="1056.0" y1="481.5" y2="485.5"/>
+<text class="tick" x="1056.0" y="497.5" text-anchor="middle">0</text>
+<line class="axis" x1="1095.1" x2="1095.1" y1="481.5" y2="485.5"/>
+<text class="tick" x="1095.1" y="497.5" text-anchor="middle">5</text>
+<line class="axis" x1="1134.3" x2="1134.3" y1="481.5" y2="485.5"/>
+<text class="tick" x="1134.3" y="497.5" text-anchor="middle">10</text>
+<line class="axis" x1="1173.4" x2="1173.4" y1="481.5" y2="485.5"/>
+<text class="tick" x="1173.4" y="497.5" text-anchor="middle">15</text>
+<line class="axis" x1="1212.5" x2="1212.5" y1="481.5" y2="485.5"/>
+<text class="tick" x="1212.5" y="497.5" text-anchor="middle">20</text>
+<text class="lab" x="1146.0" y="515.5" text-anchor="middle">step</text>
+<text class="lab" x="1012.0" y="387.0" text-anchor="middle" transform="rotate(-90 1012.0 387.0)">turns per episode</text>
+<clipPath id="clip140700179509040"><rect x="1056.0" y="290.5" width="180.0" height="193.0"/></clipPath>
+<polyline points="1056.0,365.6 1063.8,380.0 1071.7,358.1 1079.5,374.1 1087.3,376.5 1095.1,351.2 1103.0,361.1 1110.8,357.6 1118.6,369.1 1126.4,359.6 1134.3,349.2 1142.1,348.2 1149.9,348.7 1157.7,350.2 1165.6,344.7 1173.4,346.7 1181.2,352.7 1189.0,352.7 1196.9,353.7 1204.7,346.2 1212.5,346.7 1220.3,350.2 1228.2,342.7 1236.0,344.2" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700179509040)"/>
+<polyline points="1056.0,365.6 1063.8,363.6 1071.7,336.3 1079.5,324.8 1087.3,312.9 1095.1,308.4 1103.0,309.4 1110.8,297.5" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700179509040)"/>
+<text class="lab" x="56.0" y="583.25" font-weight="600">(6) reward hacking</text>
+<line class="grid" x1="56.0" x2="236.0" y1="713.2" y2="713.2"/>
+<text class="tick" x="50.0" y="717.2" text-anchor="end">0</text>
+<line class="grid" x1="56.0" x2="236.0" y1="689.2" y2="689.2"/>
+<text class="tick" x="50.0" y="693.2" text-anchor="end">0.2</text>
+<line class="grid" x1="56.0" x2="236.0" y1="665.2" y2="665.2"/>
+<text class="tick" x="50.0" y="669.2" text-anchor="end">0.4</text>
+<line class="grid" x1="56.0" x2="236.0" y1="641.2" y2="641.2"/>
+<text class="tick" x="50.0" y="645.2" text-anchor="end">0.6</text>
+<line class="grid" x1="56.0" x2="236.0" y1="617.2" y2="617.2"/>
+<text class="tick" x="50.0" y="621.2" text-anchor="end">0.8</text>
+<line class="grid" x1="56.0" x2="236.0" y1="593.2" y2="593.2"/>
+<text class="tick" x="50.0" y="597.2" text-anchor="end">1</text>
+<line class="axis" x1="56.0" x2="236.0" y1="713.2" y2="713.2"/>
+<line class="axis" x1="56.0" x2="56.0" y1="713.25" y2="717.25"/>
+<text class="tick" x="56.0" y="729.25" text-anchor="middle">0</text>
+<line class="axis" x1="95.1" x2="95.1" y1="713.25" y2="717.25"/>
+<text class="tick" x="95.1" y="729.25" text-anchor="middle">5</text>
+<line class="axis" x1="134.3" x2="134.3" y1="713.25" y2="717.25"/>
+<text class="tick" x="134.3" y="729.25" text-anchor="middle">10</text>
+<line class="axis" x1="173.4" x2="173.4" y1="713.25" y2="717.25"/>
+<text class="tick" x="173.4" y="729.25" text-anchor="middle">15</text>
+<line class="axis" x1="212.5" x2="212.5" y1="713.25" y2="717.25"/>
+<text class="tick" x="212.5" y="729.25" text-anchor="middle">20</text>
+<text class="lab" x="12.0" y="653.25" text-anchor="middle" transform="rotate(-90 12.0 653.25)">reward</text>
+<clipPath id="clip140700179285344"><rect x="56.0" y="591.25" width="180.0" height="124.0"/></clipPath>
+<polyline points="56.0,692.6 63.8,692.6 71.7,687.0 79.5,688.9 87.3,672.0 95.1,687.0 103.0,687.0 110.8,673.9 118.6,670.1 126.4,677.6 134.3,664.5 142.1,668.2 149.9,660.8 157.7,638.2 165.6,653.2 173.4,647.6 181.2,649.5 189.0,623.2 196.9,610.1 204.7,660.8 212.5,627.0 220.3,632.6 228.2,643.9 236.0,634.5" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700179285344)"/>
+<polyline points="56.0,685.1 63.8,688.9 71.7,681.4 79.5,666.4 87.3,658.9 95.1,645.8 103.0,645.8 110.8,638.2 118.6,623.2 126.4,610.1 134.3,606.4 142.1,604.5 149.9,612.0 157.7,597.0 165.6,602.6 173.4,600.8 181.2,597.0 189.0,597.0 196.9,595.1 204.7,600.8 212.5,598.9 220.3,597.0 228.2,595.1 236.0,597.0" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700179285344)"/>
+<line class="grid" x1="56.0" x2="236.0" y1="942.3" y2="942.3"/>
+<text class="tick" x="50.0" y="946.3" text-anchor="end">0</text>
+<line class="grid" x1="56.0" x2="236.0" y1="900.8" y2="900.8"/>
+<text class="tick" x="50.0" y="904.8" text-anchor="end">0.2</text>
+<line class="grid" x1="56.0" x2="236.0" y1="859.3" y2="859.3"/>
+<text class="tick" x="50.0" y="863.3" text-anchor="end">0.4</text>
+<line class="grid" x1="56.0" x2="236.0" y1="817.8" y2="817.8"/>
+<text class="tick" x="50.0" y="821.8" text-anchor="end">0.6</text>
+<line class="grid" x1="56.0" x2="236.0" y1="776.3" y2="776.3"/>
+<text class="tick" x="50.0" y="780.3" text-anchor="end">0.8</text>
+<line class="axis" x1="56.0" x2="236.0" y1="942.3" y2="942.3"/>
+<line class="axis" x1="56.0" x2="56.0" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="56.0" y="958.2500000000001" text-anchor="middle">0</text>
+<line class="axis" x1="95.1" x2="95.1" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="95.1" y="958.2500000000001" text-anchor="middle">5</text>
+<line class="axis" x1="134.3" x2="134.3" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="134.3" y="958.2500000000001" text-anchor="middle">10</text>
+<line class="axis" x1="173.4" x2="173.4" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="173.4" y="958.2500000000001" text-anchor="middle">15</text>
+<line class="axis" x1="212.5" x2="212.5" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="212.5" y="958.2500000000001" text-anchor="middle">20</text>
+<text class="lab" x="146.0" y="976.2500000000001" text-anchor="middle">step</text>
+<text class="lab" x="12.0" y="847.7500000000001" text-anchor="middle" transform="rotate(-90 12.0 847.7500000000001)">hidden-test pass</text>
+<clipPath id="clip140700175168480"><rect x="56.0" y="751.2500000000001" width="180.0" height="193.0"/></clipPath>
+<polyline points="56.0,906.6 63.8,906.6 71.7,896.9 79.5,900.1 87.3,870.9 95.1,896.9 103.0,896.9 110.8,874.2 118.6,867.7 126.4,880.7 134.3,858.0 142.1,864.4 149.9,851.5 157.7,812.6 165.6,838.5 173.4,828.8 181.2,832.0 189.0,786.6 196.9,763.9 204.7,851.5 212.5,793.1 220.3,802.9 228.2,822.3 236.0,806.1" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700175168480)"/>
+<polyline points="56.0,906.6 63.8,906.6 71.7,913.1 79.5,896.9 87.3,909.8 95.1,880.7 103.0,919.6 110.8,916.3 118.6,932.5 126.4,919.6 134.3,916.3 142.1,935.8 149.9,935.8 157.7,935.8 165.6,942.3 173.4,935.8 181.2,942.3 189.0,935.8 196.9,939.0 204.7,942.3 212.5,942.3 220.3,942.3 228.2,935.8 236.0,942.3" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700175168480)"/>
+<text class="lab" x="306.0" y="583.25" font-weight="600">(7) learning rate 1e-2</text>
+<line class="grid" x1="306.0" x2="486.0" y1="713.2" y2="713.2"/>
+<text class="tick" x="300.0" y="717.2" text-anchor="end">0</text>
+<line class="grid" x1="306.0" x2="486.0" y1="689.2" y2="689.2"/>
+<text class="tick" x="300.0" y="693.2" text-anchor="end">0.2</text>
+<line class="grid" x1="306.0" x2="486.0" y1="665.2" y2="665.2"/>
+<text class="tick" x="300.0" y="669.2" text-anchor="end">0.4</text>
+<line class="grid" x1="306.0" x2="486.0" y1="641.2" y2="641.2"/>
+<text class="tick" x="300.0" y="645.2" text-anchor="end">0.6</text>
+<line class="grid" x1="306.0" x2="486.0" y1="617.2" y2="617.2"/>
+<text class="tick" x="300.0" y="621.2" text-anchor="end">0.8</text>
+<line class="grid" x1="306.0" x2="486.0" y1="593.2" y2="593.2"/>
+<text class="tick" x="300.0" y="597.2" text-anchor="end">1</text>
+<line class="axis" x1="306.0" x2="486.0" y1="713.2" y2="713.2"/>
+<line class="axis" x1="306.0" x2="306.0" y1="713.25" y2="717.25"/>
+<text class="tick" x="306.0" y="729.25" text-anchor="middle">0</text>
+<line class="axis" x1="345.1" x2="345.1" y1="713.25" y2="717.25"/>
+<text class="tick" x="345.1" y="729.25" text-anchor="middle">5</text>
+<line class="axis" x1="384.3" x2="384.3" y1="713.25" y2="717.25"/>
+<text class="tick" x="384.3" y="729.25" text-anchor="middle">10</text>
+<line class="axis" x1="423.4" x2="423.4" y1="713.25" y2="717.25"/>
+<text class="tick" x="423.4" y="729.25" text-anchor="middle">15</text>
+<line class="axis" x1="462.5" x2="462.5" y1="713.25" y2="717.25"/>
+<text class="tick" x="462.5" y="729.25" text-anchor="middle">20</text>
+<text class="lab" x="262.0" y="653.25" text-anchor="middle" transform="rotate(-90 262.0 653.25)">reward</text>
+<clipPath id="clip140700337426544"><rect x="306.0" y="591.25" width="180.0" height="124.0"/></clipPath>
+<polyline points="306.0,692.6 313.8,692.6 321.7,687.0 329.5,688.9 337.3,672.0 345.1,687.0 353.0,687.0 360.8,673.9 368.6,670.1 376.4,677.6 384.3,664.5 392.1,668.2 399.9,660.8 407.7,638.2 415.6,653.2 423.4,647.6 431.2,649.5 439.0,623.2 446.9,610.1 454.7,660.8 462.5,627.0 470.3,632.6 478.2,643.9 486.0,634.5" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700337426544)"/>
+<polyline points="306.0,692.6 313.8,713.2 321.7,713.2 329.5,713.2 337.3,713.2 345.1,713.2 353.0,713.2 360.8,713.2" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700337426544)"/>
+<line class="grid" x1="306.0" x2="486.0" y1="942.3" y2="942.3"/>
+<text class="tick" x="300.0" y="946.3" text-anchor="end">0</text>
+<line class="grid" x1="306.0" x2="486.0" y1="892.0" y2="892.0"/>
+<text class="tick" x="300.0" y="896.0" text-anchor="end">1</text>
+<line class="grid" x1="306.0" x2="486.0" y1="841.7" y2="841.7"/>
+<text class="tick" x="300.0" y="845.7" text-anchor="end">2</text>
+<line class="grid" x1="306.0" x2="486.0" y1="791.4" y2="791.4"/>
+<text class="tick" x="300.0" y="795.4" text-anchor="end">3</text>
+<line class="axis" x1="306.0" x2="486.0" y1="942.3" y2="942.3"/>
+<line class="axis" x1="306.0" x2="306.0" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="306.0" y="958.2500000000001" text-anchor="middle">0</text>
+<line class="axis" x1="345.1" x2="345.1" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="345.1" y="958.2500000000001" text-anchor="middle">5</text>
+<line class="axis" x1="384.3" x2="384.3" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="384.3" y="958.2500000000001" text-anchor="middle">10</text>
+<line class="axis" x1="423.4" x2="423.4" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="423.4" y="958.2500000000001" text-anchor="middle">15</text>
+<line class="axis" x1="462.5" x2="462.5" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="462.5" y="958.2500000000001" text-anchor="middle">20</text>
+<text class="lab" x="396.0" y="976.2500000000001" text-anchor="middle">step</text>
+<text class="lab" x="262.0" y="847.7500000000001" text-anchor="middle" transform="rotate(-90 262.0 847.7500000000001)">malformed calls</text>
+<clipPath id="clip140700345266448"><rect x="306.0" y="751.2500000000001" width="180.0" height="193.0"/></clipPath>
+<polyline points="306.0,939.1 313.8,940.7 321.7,936.7 329.5,939.9 337.3,938.3 345.1,937.5 353.0,936.0 360.8,936.7 368.6,936.0 376.4,939.1 384.3,940.7 392.1,936.7 399.9,938.3 407.7,938.3 415.6,938.3 423.4,935.2 431.2,937.5 439.0,932.8 446.9,939.9 454.7,935.2 462.5,938.3 470.3,940.7 478.2,936.7 486.0,939.9" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700345266448)"/>
+<polyline points="306.0,939.1 313.8,917.1 321.7,885.7 329.5,873.9 337.3,829.9 345.1,816.5 353.0,777.2 360.8,763.9" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700345266448)"/>
+<text class="lab" x="556.0" y="583.25" font-weight="600">(8) accumulation normalizer</text>
+<line class="grid" x1="556.0" x2="736.0" y1="713.2" y2="713.2"/>
+<text class="tick" x="550.0" y="717.2" text-anchor="end">0</text>
+<line class="grid" x1="556.0" x2="736.0" y1="689.2" y2="689.2"/>
+<text class="tick" x="550.0" y="693.2" text-anchor="end">0.2</text>
+<line class="grid" x1="556.0" x2="736.0" y1="665.2" y2="665.2"/>
+<text class="tick" x="550.0" y="669.2" text-anchor="end">0.4</text>
+<line class="grid" x1="556.0" x2="736.0" y1="641.2" y2="641.2"/>
+<text class="tick" x="550.0" y="645.2" text-anchor="end">0.6</text>
+<line class="grid" x1="556.0" x2="736.0" y1="617.2" y2="617.2"/>
+<text class="tick" x="550.0" y="621.2" text-anchor="end">0.8</text>
+<line class="grid" x1="556.0" x2="736.0" y1="593.2" y2="593.2"/>
+<text class="tick" x="550.0" y="597.2" text-anchor="end">1</text>
+<line class="axis" x1="556.0" x2="736.0" y1="713.2" y2="713.2"/>
+<line class="axis" x1="556.0" x2="556.0" y1="713.25" y2="717.25"/>
+<text class="tick" x="556.0" y="729.25" text-anchor="middle">0</text>
+<line class="axis" x1="595.1" x2="595.1" y1="713.25" y2="717.25"/>
+<text class="tick" x="595.1" y="729.25" text-anchor="middle">5</text>
+<line class="axis" x1="634.3" x2="634.3" y1="713.25" y2="717.25"/>
+<text class="tick" x="634.3" y="729.25" text-anchor="middle">10</text>
+<line class="axis" x1="673.4" x2="673.4" y1="713.25" y2="717.25"/>
+<text class="tick" x="673.4" y="729.25" text-anchor="middle">15</text>
+<line class="axis" x1="712.5" x2="712.5" y1="713.25" y2="717.25"/>
+<text class="tick" x="712.5" y="729.25" text-anchor="middle">20</text>
+<text class="lab" x="512.0" y="653.25" text-anchor="middle" transform="rotate(-90 512.0 653.25)">reward</text>
+<clipPath id="clip140700400228288"><rect x="556.0" y="591.25" width="180.0" height="124.0"/></clipPath>
+<polyline points="556.0,692.6 563.8,692.6 571.7,687.0 579.5,688.9 587.3,672.0 595.1,687.0 603.0,687.0 610.8,673.9 618.6,670.1 626.4,677.6 634.3,664.5 642.1,668.2 649.9,660.8 657.7,638.2 665.6,653.2 673.4,647.6 681.2,649.5 689.0,623.2 696.9,610.1 704.7,660.8 712.5,627.0 720.3,632.6 728.2,643.9 736.0,634.5" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700400228288)"/>
+<polyline points="556.0,692.6 563.8,688.9 571.7,685.1 579.5,681.4 587.3,690.8 595.1,690.8 603.0,685.1 610.8,672.0 618.6,675.8 626.4,677.6 634.3,668.2 642.1,668.2 649.9,664.5 657.7,662.6 665.6,658.9 673.4,645.8 681.2,636.4 689.0,630.8 696.9,642.0 704.7,643.9 712.5,627.0 720.3,623.2 728.2,640.1 736.0,642.0" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700400228288)"/>
+<line class="grid" x1="556.0" x2="736.0" y1="942.3" y2="942.3"/>
+<text class="tick" x="550.0" y="946.3" text-anchor="end">0</text>
+<line class="grid" x1="556.0" x2="736.0" y1="896.0" y2="896.0"/>
+<text class="tick" x="550.0" y="900.0" text-anchor="end">0.1</text>
+<line class="grid" x1="556.0" x2="736.0" y1="849.7" y2="849.7"/>
+<text class="tick" x="550.0" y="853.7" text-anchor="end">0.2</text>
+<line class="grid" x1="556.0" x2="736.0" y1="803.4" y2="803.4"/>
+<text class="tick" x="550.0" y="807.4" text-anchor="end">0.3</text>
+<line class="grid" x1="556.0" x2="736.0" y1="757.1" y2="757.1"/>
+<text class="tick" x="550.0" y="761.1" text-anchor="end">0.4</text>
+<line class="axis" x1="556.0" x2="736.0" y1="942.3" y2="942.3"/>
+<line class="axis" x1="556.0" x2="556.0" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="556.0" y="958.2500000000001" text-anchor="middle">0</text>
+<line class="axis" x1="595.1" x2="595.1" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="595.1" y="958.2500000000001" text-anchor="middle">5</text>
+<line class="axis" x1="634.3" x2="634.3" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="634.3" y="958.2500000000001" text-anchor="middle">10</text>
+<line class="axis" x1="673.4" x2="673.4" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="673.4" y="958.2500000000001" text-anchor="middle">15</text>
+<line class="axis" x1="712.5" x2="712.5" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="712.5" y="958.2500000000001" text-anchor="middle">20</text>
+<text class="lab" x="646.0" y="976.2500000000001" text-anchor="middle">step</text>
+<text class="lab" x="512.0" y="847.7500000000001" text-anchor="middle" transform="rotate(-90 512.0 847.7500000000001)">grad norm</text>
+<clipPath id="clip140700332554192"><rect x="556.0" y="751.2500000000001" width="180.0" height="193.0"/></clipPath>
+<polyline points="556.0,847.9 563.8,862.8 571.7,835.4 579.5,869.1 587.3,837.7 595.1,869.2 603.0,865.6 610.8,847.4 618.6,859.1 626.4,863.9 634.3,841.6 642.1,868.4 649.9,835.1 657.7,813.6 665.6,810.3 673.4,810.1 681.2,836.8 689.0,809.0 696.9,850.8 704.7,810.4 712.5,809.4 720.3,870.7 728.2,834.5 736.0,829.6" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700332554192)"/>
+<polyline points="556.0,836.1 563.8,825.2 571.7,860.4 579.5,860.2 587.3,867.9 595.1,851.4 603.0,817.4 610.8,819.4 618.6,870.3 626.4,876.0 634.3,855.7 642.1,864.7 649.9,833.1 657.7,760.2 665.6,857.7 673.4,825.7 681.2,824.7 689.0,792.2 696.9,819.5 704.7,844.7 712.5,802.7 720.3,835.8 728.2,835.2 736.0,840.6" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700332554192)"/>
+<text class="lab" x="806.0" y="583.25" font-weight="600">(9) sampler at T = 0.7</text>
+<line class="grid" x1="806.0" x2="986.0" y1="713.2" y2="713.2"/>
+<text class="tick" x="800.0" y="717.2" text-anchor="end">0</text>
+<line class="grid" x1="806.0" x2="986.0" y1="689.2" y2="689.2"/>
+<text class="tick" x="800.0" y="693.2" text-anchor="end">0.2</text>
+<line class="grid" x1="806.0" x2="986.0" y1="665.2" y2="665.2"/>
+<text class="tick" x="800.0" y="669.2" text-anchor="end">0.4</text>
+<line class="grid" x1="806.0" x2="986.0" y1="641.2" y2="641.2"/>
+<text class="tick" x="800.0" y="645.2" text-anchor="end">0.6</text>
+<line class="grid" x1="806.0" x2="986.0" y1="617.2" y2="617.2"/>
+<text class="tick" x="800.0" y="621.2" text-anchor="end">0.8</text>
+<line class="grid" x1="806.0" x2="986.0" y1="593.2" y2="593.2"/>
+<text class="tick" x="800.0" y="597.2" text-anchor="end">1</text>
+<line class="axis" x1="806.0" x2="986.0" y1="713.2" y2="713.2"/>
+<line class="axis" x1="806.0" x2="806.0" y1="713.25" y2="717.25"/>
+<text class="tick" x="806.0" y="729.25" text-anchor="middle">0</text>
+<line class="axis" x1="845.1" x2="845.1" y1="713.25" y2="717.25"/>
+<text class="tick" x="845.1" y="729.25" text-anchor="middle">5</text>
+<line class="axis" x1="884.3" x2="884.3" y1="713.25" y2="717.25"/>
+<text class="tick" x="884.3" y="729.25" text-anchor="middle">10</text>
+<line class="axis" x1="923.4" x2="923.4" y1="713.25" y2="717.25"/>
+<text class="tick" x="923.4" y="729.25" text-anchor="middle">15</text>
+<line class="axis" x1="962.5" x2="962.5" y1="713.25" y2="717.25"/>
+<text class="tick" x="962.5" y="729.25" text-anchor="middle">20</text>
+<text class="lab" x="762.0" y="653.25" text-anchor="middle" transform="rotate(-90 762.0 653.25)">reward</text>
+<clipPath id="clip140700341932144"><rect x="806.0" y="591.25" width="180.0" height="124.0"/></clipPath>
+<polyline points="806.0,692.6 813.8,692.6 821.7,687.0 829.5,688.9 837.3,672.0 845.1,687.0 853.0,687.0 860.8,673.9 868.6,670.1 876.4,677.6 884.3,664.5 892.1,668.2 899.9,660.8 907.7,638.2 915.6,653.2 923.4,647.6 931.2,649.5 939.0,623.2 946.9,610.1 954.7,660.8 962.5,627.0 970.3,632.6 978.2,643.9 986.0,634.5" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700341932144)"/>
+<polyline points="806.0,687.0 813.8,687.0 821.7,690.8 829.5,679.5 837.3,688.9 845.1,679.5 853.0,687.0 860.8,700.1 868.6,694.5 876.4,683.2 884.3,698.2 892.1,698.2 899.9,683.2 907.7,668.2 915.6,698.2 923.4,698.2 931.2,711.4 939.0,653.2 946.9,683.2 954.7,683.2 962.5,698.2 970.3,683.2 978.2,698.2 986.0,698.2" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700341932144)"/>
+<line class="grid" x1="806.0" x2="986.0" y1="942.3" y2="942.3"/>
+<text class="tick" x="800.0" y="946.3" text-anchor="end">0</text>
+<line class="grid" x1="806.0" x2="986.0" y1="904.2" y2="904.2"/>
+<text class="tick" x="800.0" y="908.2" text-anchor="end">5</text>
+<line class="grid" x1="806.0" x2="986.0" y1="866.2" y2="866.2"/>
+<text class="tick" x="800.0" y="870.2" text-anchor="end">10</text>
+<line class="grid" x1="806.0" x2="986.0" y1="828.1" y2="828.1"/>
+<text class="tick" x="800.0" y="832.1" text-anchor="end">15</text>
+<line class="grid" x1="806.0" x2="986.0" y1="790.1" y2="790.1"/>
+<text class="tick" x="800.0" y="794.1" text-anchor="end">20</text>
+<line class="axis" x1="806.0" x2="986.0" y1="942.3" y2="942.3"/>
+<line class="axis" x1="806.0" x2="806.0" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="806.0" y="958.2500000000001" text-anchor="middle">0</text>
+<line class="axis" x1="845.1" x2="845.1" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="845.1" y="958.2500000000001" text-anchor="middle">5</text>
+<line class="axis" x1="884.3" x2="884.3" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="884.3" y="958.2500000000001" text-anchor="middle">10</text>
+<line class="axis" x1="923.4" x2="923.4" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="923.4" y="958.2500000000001" text-anchor="middle">15</text>
+<line class="axis" x1="962.5" x2="962.5" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="962.5" y="958.2500000000001" text-anchor="middle">20</text>
+<text class="lab" x="896.0" y="976.2500000000001" text-anchor="middle">step</text>
+<text class="lab" x="762.0" y="847.7500000000001" text-anchor="middle" transform="rotate(-90 762.0 847.7500000000001)">max ratio</text>
+<clipPath id="clip140700175156768"><rect x="806.0" y="751.2500000000001" width="180.0" height="193.0"/></clipPath>
+<polyline points="806.0,933.1 813.8,933.7 821.7,934.2 829.5,934.0 837.3,933.6 845.1,934.1 853.0,933.7 860.8,934.3 868.6,934.4 876.4,934.2 884.3,934.0 892.1,933.4 899.9,933.9 907.7,933.2 915.6,934.2 923.4,933.9 931.2,934.0 939.0,933.4 946.9,933.7 954.7,932.8 962.5,934.2 970.3,933.8 978.2,933.6 986.0,932.6" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700175156768)"/>
+<polyline points="806.0,922.1 813.8,925.3 821.7,923.1 829.5,917.9 837.3,917.3 845.1,895.9 853.0,905.3 860.8,901.5 868.6,908.0 876.4,921.1 884.3,921.7 892.1,907.7 899.9,934.7 907.7,763.5 915.6,923.1 923.4,934.7 931.2,820.6 939.0,934.7 946.9,922.9 954.7,934.7 962.5,919.0 970.3,917.2 978.2,923.1 986.0,919.5" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700175156768)"/>
+<text class="lab" x="1056.0" y="583.25" font-weight="600">(10) reference = policy</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="713.2" y2="713.2"/>
+<text class="tick" x="1050.0" y="717.2" text-anchor="end">0</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="689.2" y2="689.2"/>
+<text class="tick" x="1050.0" y="693.2" text-anchor="end">0.2</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="665.2" y2="665.2"/>
+<text class="tick" x="1050.0" y="669.2" text-anchor="end">0.4</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="641.2" y2="641.2"/>
+<text class="tick" x="1050.0" y="645.2" text-anchor="end">0.6</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="617.2" y2="617.2"/>
+<text class="tick" x="1050.0" y="621.2" text-anchor="end">0.8</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="593.2" y2="593.2"/>
+<text class="tick" x="1050.0" y="597.2" text-anchor="end">1</text>
+<line class="axis" x1="1056.0" x2="1236.0" y1="713.2" y2="713.2"/>
+<line class="axis" x1="1056.0" x2="1056.0" y1="713.25" y2="717.25"/>
+<text class="tick" x="1056.0" y="729.25" text-anchor="middle">0</text>
+<line class="axis" x1="1095.1" x2="1095.1" y1="713.25" y2="717.25"/>
+<text class="tick" x="1095.1" y="729.25" text-anchor="middle">5</text>
+<line class="axis" x1="1134.3" x2="1134.3" y1="713.25" y2="717.25"/>
+<text class="tick" x="1134.3" y="729.25" text-anchor="middle">10</text>
+<line class="axis" x1="1173.4" x2="1173.4" y1="713.25" y2="717.25"/>
+<text class="tick" x="1173.4" y="729.25" text-anchor="middle">15</text>
+<line class="axis" x1="1212.5" x2="1212.5" y1="713.25" y2="717.25"/>
+<text class="tick" x="1212.5" y="729.25" text-anchor="middle">20</text>
+<text class="lab" x="1012.0" y="653.25" text-anchor="middle" transform="rotate(-90 1012.0 653.25)">reward</text>
+<clipPath id="clip140700392730224"><rect x="1056.0" y="591.25" width="180.0" height="124.0"/></clipPath>
+<polyline points="1056.0,692.6 1063.8,692.6 1071.7,683.2 1079.5,687.0 1087.3,677.6 1095.1,688.9 1103.0,685.1 1110.8,672.0" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700392730224)"/>
+<polyline points="1056.0,692.6 1063.8,692.6 1071.7,687.0 1079.5,688.9 1087.3,672.0 1095.1,687.0 1103.0,687.0 1110.8,673.9" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700392730224)"/>
+<line class="grid" x1="1056.0" x2="1236.0" y1="942.3" y2="942.3"/>
+<text class="tick" x="1050.0" y="946.3" text-anchor="end">0</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="902.6" y2="902.6"/>
+<text class="tick" x="1050.0" y="906.6" text-anchor="end">0.025</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="862.9" y2="862.9"/>
+<text class="tick" x="1050.0" y="866.9" text-anchor="end">0.05</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="823.3" y2="823.3"/>
+<text class="tick" x="1050.0" y="827.3" text-anchor="end">0.075</text>
+<line class="grid" x1="1056.0" x2="1236.0" y1="783.6" y2="783.6"/>
+<text class="tick" x="1050.0" y="787.6" text-anchor="end">0.1</text>
+<line class="axis" x1="1056.0" x2="1236.0" y1="942.3" y2="942.3"/>
+<line class="axis" x1="1056.0" x2="1056.0" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="1056.0" y="958.2500000000001" text-anchor="middle">0</text>
+<line class="axis" x1="1095.1" x2="1095.1" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="1095.1" y="958.2500000000001" text-anchor="middle">5</text>
+<line class="axis" x1="1134.3" x2="1134.3" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="1134.3" y="958.2500000000001" text-anchor="middle">10</text>
+<line class="axis" x1="1173.4" x2="1173.4" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="1173.4" y="958.2500000000001" text-anchor="middle">15</text>
+<line class="axis" x1="1212.5" x2="1212.5" y1="942.2500000000001" y2="946.2500000000001"/>
+<text class="tick" x="1212.5" y="958.2500000000001" text-anchor="middle">20</text>
+<text class="lab" x="1146.0" y="976.2500000000001" text-anchor="middle">step</text>
+<text class="lab" x="1012.0" y="847.7500000000001" text-anchor="middle" transform="rotate(-90 1012.0 847.7500000000001)">KL to reference</text>
+<clipPath id="clip140700392731088"><rect x="1056.0" y="751.2500000000001" width="180.0" height="193.0"/></clipPath>
+<polyline points="1056.0,936.6 1063.8,922.5 1071.7,917.0 1079.5,902.5 1087.3,896.4 1095.1,884.6 1103.0,861.7 1110.8,763.9" fill="none" stroke="var(--s1)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700392731088)"/>
+<polyline points="1056.0,942.3 1063.8,942.3 1071.7,942.3 1079.5,942.3 1087.3,942.3 1095.1,942.3 1103.0,942.3 1110.8,942.3" fill="none" stroke="var(--s8)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round" clip-path="url(#clip140700392731088)"/>
+<line x1="20" x2="38" y1="62" y2="62" stroke="var(--s1)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="44" y="66" font-size="12" text-anchor="start">healthy (matched control)</text>
+<line x1="237" x2="255" y1="62" y2="62" stroke="var(--s8)" stroke-width="2" stroke-linecap="round"/>
+<text class="t2" x="261" y="66" font-size="12" text-anchor="start">with the fault</text>
+</svg>

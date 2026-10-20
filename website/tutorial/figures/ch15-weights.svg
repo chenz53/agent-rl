@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 360" width="980" height="360" role="img" aria-label="Four objectives, one form"><style>
+svg{--plate:#fcfcfb;--hi:#18181b;--mid:#71717a;--lo:#d4d4d8;--accent:#2a78d6;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+@media (prefers-color-scheme: dark){svg{--plate:#111113;--hi:#fafafa;--mid:#a1a1aa;--lo:#3f3f46;--accent:#3987e5}}
+.plate{fill:var(--plate)}
+.sil{fill:var(--plate);stroke:var(--hi);stroke-width:.9;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.crease{fill:none;stroke:var(--mid);stroke-width:.9;stroke-linecap:round;opacity:.75;vector-effect:non-scaling-stroke}
+.floor{fill:var(--lo)}
+.guide{fill:none;stroke:var(--lo);stroke-width:.9;stroke-dasharray:2 4;vector-effect:non-scaling-stroke}
+.track{fill:none;stroke:var(--mid);stroke-width:.9;stroke-linecap:round;stroke-linejoin:round;vector-effect:non-scaling-stroke}
+.accent{fill:none;stroke:var(--accent);stroke-width:1.4;stroke-linecap:round;stroke-linejoin:round}
+.pulse{fill:none;stroke:var(--accent);stroke-width:2.6;stroke-linecap:round;stroke-dasharray:10 400;
+  animation:flow 3.2s linear infinite}
+@keyframes flow{from{stroke-dashoffset:410}to{stroke-dashoffset:0}}
+@media (prefers-reduced-motion: reduce){.pulse{animation:none;stroke-dasharray:none;opacity:0}}
+.leader{fill:none;stroke:var(--mid);stroke-width:.7;vector-effect:non-scaling-stroke}
+.dot{fill:var(--hi)}
+.num{fill:var(--mid);font-size:10px;letter-spacing:.08em}
+.name{fill:var(--hi);font-size:12px;font-weight:600;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.desc{fill:var(--mid);font-size:11px;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.cap{fill:var(--mid);font-size:10px;letter-spacing:.14em}
+.read{fill:var(--hi);font-size:11px}
+.tlabel{fill:var(--mid);font-size:10px}
+.cell{fill:var(--plate);stroke:var(--mid);stroke-width:.9}
+.cell-prompt{fill:var(--plate);stroke:var(--mid);stroke-width:.9;stroke-dasharray:1.5 2.5}
+.cell-policy{fill:var(--plate);stroke:var(--accent);stroke-width:1.4}
+.cell-reward{fill:var(--plate);stroke:var(--hi);stroke-width:.9}
+.ctext{fill:var(--hi);font-size:11px}
+.mask{fill:var(--mid);font-size:10px}
+.mask1{fill:var(--accent);font-size:10px;font-weight:600}
+.card{fill:var(--plate);stroke:var(--hi);stroke-width:.9}
+.card-soft{fill:var(--plate);stroke:var(--mid);stroke-width:.9}
+.card-accent{fill:var(--plate);stroke:var(--accent);stroke-width:1.4}
+.card-dot{fill:var(--plate);stroke:var(--mid);stroke-width:.9;stroke-dasharray:1.5 2.5}
+.ctitle{fill:var(--hi);font-size:12px;font-weight:600;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.cline{fill:var(--mid);font-size:11px;font-family:system-ui,-apple-system,"Segoe UI",sans-serif}
+.cmono{fill:var(--hi);font-size:11px}
+.chead{fill:var(--mid);font-size:10px;letter-spacing:.12em}
+.vpos{fill:var(--accent);font-size:13px;font-weight:600}
+.vneg{fill:var(--hi);font-size:13px;font-weight:600}
+.vzero{fill:var(--mid);font-size:13px}
+.ttemplate{fill:var(--mid);font-size:10px}
+.readk{fill:var(--mid);font-size:11px}
+</style><rect class="plate" width="980" height="360" rx="10"/>
+<text class="cap" x="24" y="34" text-anchor="start">FIG 15.1 · FOUR OBJECTIVES, ONE FORM: Σ w_i ∇ log π(τ_i) OVER ACTION TOKENS</text><text class="readk" x="24" y="50" text-anchor="start">they differ in where the trajectories come from and in the weight each one gets</text><text class="chead" x="38.0" y="92.0" text-anchor="start">METHOD</text><text class="chead" x="244.0" y="92.0" text-anchor="start">TRAJECTORIES τ_i FROM</text><text class="chead" x="514.0" y="92.0" text-anchor="start">WEIGHT w_i</text><text class="chead" x="744.0" y="92.0" text-anchor="start">SIGNAL ON FAILURES</text><rect class="card-soft" x="24.0" y="104.0" width="932.0" height="40.0" rx="8"></rect><text class="ctitle" x="38.0" y="129.0" text-anchor="start">SFT</text><text class="cline" x="244.0" y="129.0" text-anchor="start">an expert (demonstrations)</text><text class="cmono" x="514.0" y="129.0" text-anchor="start">1</text><text class="cline" x="744.0" y="129.0" text-anchor="start">none (no failures in data)</text><path class="crease" d="M230,113 V135"/><path class="crease" d="M500,113 V135"/><path class="crease" d="M730,113 V135"/><rect class="card-soft" x="24.0" y="156.0" width="932.0" height="40.0" rx="8"></rect><text class="ctitle" x="38.0" y="181.0" text-anchor="start">RFT / expert iteration</text><text class="cline" x="244.0" y="181.0" text-anchor="start">current policy, filtered by R = 1</text><text class="cmono" x="514.0" y="181.0" text-anchor="start">R_i / p̂  (kept only)</text><text class="cline" x="744.0" y="181.0" text-anchor="start">none: discarded</text><path class="crease" d="M230,165 V187"/><path class="crease" d="M500,165 V187"/><path class="crease" d="M730,165 V187"/><rect class="card-accent" x="24.0" y="208.0" width="932.0" height="40.0" rx="8"></rect><text class="ctitle" x="38.0" y="233.0" text-anchor="start">policy gradient</text><text class="cline" x="244.0" y="233.0" text-anchor="start">current policy (fresh samples)</text><text class="cmono" x="514.0" y="233.0" text-anchor="start">R_i − mean R of the group</text><text class="cline" x="744.0" y="233.0" text-anchor="start">pushed down (w &lt; 0)</text><path class="crease" d="M230,217 V239"/><path class="crease" d="M500,217 V239"/><path class="crease" d="M730,217 V239"/><rect class="card-soft" x="24.0" y="260.0" width="932.0" height="40.0" rx="8"></rect><text class="ctitle" x="38.0" y="285.0" text-anchor="start">DPO</text><text class="cline" x="244.0" y="285.0" text-anchor="start">fixed dataset of pairs</text><text class="cmono" x="514.0" y="285.0" text-anchor="start">± β · σ(−margin)</text><text class="cline" x="744.0" y="285.0" text-anchor="start">rejected pushed down, offline</text><path class="crease" d="M230,269 V291"/><path class="crease" d="M500,269 V291"/><path class="crease" d="M730,269 V291"/><text class="desc" x="24.0" y="330.0" text-anchor="start">Action mask everywhere: environment terms of log p(τ) carry no parameters (SFT, PG) or cancel in π/π_ref (DPO). Accent: the estimator the rest of the book builds on.</text></svg>

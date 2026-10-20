@@ -1,0 +1,585 @@
+---
+title: "12. Multi-Turn Agents and Long Horizons"
+---
+
+A BugFix episode has about four calls and seventy tokens. A SWE agent's episode has tens to hundreds of calls, and its context fills with file contents, test logs, and stack traces that the policy did not write. Most of what changes between the two is not the objective. GRPO's loss is the same; what changes is everything around it: which call deserves credit for the outcome, how many calls the agent is allowed and what each one costs, what the policy actually sees when the history no longer fits, and what happens when a call is malformed or an episode is cut off by a limit.
+
+This chapter studies those questions on the BugFix gym, where each of them can be changed with one argument and measured with the behavior statistics of [Chapter 9](/tutorial/chapters/09-grpo-and-variants#9-2-the-training-loop). We first make the invariant that holds the multi-turn machinery together explicit: observation tokens are inputs, not actions. We then compare turn-level and token-level credit in training, vary the turn budget and the step penalty and watch information gathering change, break the single-sequence view of an episode with context management, and handle tool errors, early termination, and mixtures of single-turn and multi-turn data. The design problems at the end reproduce the four classic pathologies of agent RL: submitting immediately, never submitting, truncated episodes, and context overflow.
+
+```python
+#@save
+import dataclasses
+import random
+import torch
+import torch.nn.functional as F
+import agentrl as arl
+```
+
+```python
+import copy
+torch.set_num_threads(4)                     # the shared check host is loaded; see Chapter 10
+tok = arl.build_tokenizer(arl.make_tasks('all'))
+train_tasks, heldout_tasks = arl.make_tasks('train'), arl.make_tasks('heldout')
+rl_base = arl.make_rl_base(tok)
+
+def held_out(policy, cfg, n=16):
+    """Behavior statistics on held-out tasks in cfg's environment, 16 episodes per task."""
+    return arl.evaluate(policy, heldout_tasks, tok, n, generator=torch.Generator().manual_seed(7), cfg=cfg)
+```
+
+## 12.1 Observations are inputs, not actions
+
+A multi-turn trajectory interleaves two kinds of tokens. **Policy tokens** were sampled by $\pi_\theta$; they are the actions, and the policy gradient of [Chapter 6](/tutorial/chapters/06-policy-gradient) is a sum over them. **Observation tokens** (tool output, and the template tokens around it) were produced by the environment; the policy conditions on them but never chose them. The derivation of Section 6.1 makes the consequence exact: the environment's transition probabilities do not depend on $\theta$, so their log-probabilities drop out of $\nabla_\theta \log p_\theta(\tau)$, and a loss term on an observation token would be a gradient toward *predicting the environment*, which is a different objective. The action mask of [Chapter 5](/tutorial/chapters/05-trajectories-and-templates) enforces this. We check it directly: compute a policy-gradient loss on a batch, differentiate with respect to the logits, and count which positions receive any gradient, by owner.
+
+```python
+cfg = arl.RLConfig()
+trajs = arl.sample_groups(rl_base, lambda: arl.make_env(cfg), train_tasks[:2], tok, cfg, torch.Generator().manual_seed(0))
+batch = arl.collate(trajs, tok.pad_id)
+logits = rl_base(batch['ids'])[:, :-1].detach().requires_grad_()            # [B, T-1, V]
+arl.reinforce_loss(arl.selected_log_probs(logits, batch['ids'][:, 1:]), torch.ones(len(trajs)),
+                   batch['action_mask']).backward()
+touched = logits.grad.abs().sum(-1) > 0                                     # [B, T-1]
+owner = arl.pad_rows([t.owner[1:] for t in trajs], touched.shape[1], -1)    # owner of each predicted token
+for name, code in arl.OWNER.items():
+    print(f'{name:<9} predicted positions {int((owner == code).sum()):4d} | with gradient {int((touched & (owner == code)).sum()):4d}')
+```
+
+Output:
+
+```text
+template  predicted positions   82 | with gradient    0
+prompt    predicted positions   96 | with gradient    0
+policy    predicted positions  201 | with gradient  201
+tool      predicted positions  491 | with gradient    0
+```
+
+Only the policy positions receive gradient; every prompt, template, and tool position has an exactly zero gradient. The invariant matters more as episodes grow, because the share of the context that the policy wrote shrinks. We run the RL base agent with turn budgets of 6, 12, and 24 and measure that share, the context length, and how often an episode ends because the next call would not fit in TinyAgent's 256-token context.
+
+```python
+for max_turns in [6, 12, 24]:
+    cfg = arl.RLConfig(max_turns=max_turns)
+    trajs = arl.sample_groups(rl_base, lambda: arl.make_env(cfg), train_tasks, tok, cfg, torch.Generator().manual_seed(1))
+    policy_share = sum(float(t.action_mask.sum()) for t in trajs) / sum(len(t.ids) - 1 for t in trajs)
+    overflow = sum(t.info['stop'] == 'truncated' for t in trajs) / len(trajs)
+    print(f'max_turns {max_turns:2d} | tokens per episode {sum(len(t.ids) for t in trajs) / len(trajs):5.1f}'
+          f' (max {max(len(t.ids) for t in trajs)}) | policy share {policy_share:.2f} | context overflow {overflow:.2f}')
+```
+
+Output:
+
+```text
+max_turns  6 | tokens per episode  38.0 (max 144) | policy share 0.30 | context overflow 0.00
+max_turns 12 | tokens per episode  45.3 (max 182) | policy share 0.30 | context overflow 0.00
+max_turns 24 | tokens per episode  49.3 (max 249) | policy share 0.31 | context overflow 0.01
+```
+
+The RL base agent rarely uses a large budget, because it submits early: mean episode length grows only from 38 to 49 tokens when the budget goes from 6 to 24 turns, while the longest episode grows from 144 to 249 tokens, and at 24 turns 1% of episodes run out of context. In every setting only 30% of the predicted positions are the policy's own; the other 70% are prompt, template, and tool tokens that carry no gradient. In a SWE agent whose observations are file contents and test logs, the policy's share is a few percent, so a mask bug that trains on observations would put almost all of the loss on predicting the environment.
+
+## 12.2 Credit assignment across turns
+
+With an outcome reward and a group baseline, every policy token of an episode receives the same advantage ([Section 7.6](/tutorial/chapters/07-advantages-and-credit#7-6-turn-level-advantages)). The only way the decisive edit can earn more credit than a useless `test` is by comparison *across* episodes: the useless call appears in successes and failures alike, so on average its probability does not change. A **per-turn reward** makes the question sharper. With a cost $c$ per call, the return of an episode with $K$ calls that ends in verdict $v \in \{0, 1\}$ is
+
+$$
+R(\tau) = v - cK = \sum_{k=0}^{K-1} r_k, \qquad r_k = -c + v\,[k = K-1],
+$$
+
+and the cost of a call is known the moment it is made. An outcome advantage $A(\tau) = R(\tau) - b$ still shares the total among all calls. A turn-level advantage $A_k$ built from $r_k$ and a value $V(s_k)$ at the start of each call can, in principle, charge each call for its own cost and credit it with the change in value it causes. `per_call_rewards` lays the $r_k$ out on tokens: $-c$ on the last token of every call and the verdict on the episode's last policy token. `masked_whiten` normalizes advantages over policy tokens, as PPO implementations do for GAE advantages ([Section 8.4](/tutorial/chapters/08-ppo#8-4-the-value-loss-and-the-ppo-loop)).
+
+```python
+#@save
+def per_call_rewards(trajs, mask, step_penalty=0.0):
+    """Token rewards [B, T]: -step_penalty on each call's last token, hidden-test verdict on the episode's last."""
+    last_of_call = mask * (1 - F.pad(mask, (0, 1))[:, 1:])                 # 1 where a call ends
+    verdict = torch.tensor([float(t.info['submitted'] and t.info['hidden_pass']) for t in trajs])
+    return -step_penalty * last_of_call + arl.outcome_rewards(verdict, mask)
+
+
+def masked_whiten(x, mask, eps=1e-6):
+    """Normalize x to mean 0, std 1 over positions where mask is 1; zero elsewhere. [B, T] -> [B, T]."""
+    mean = arl.masked_mean(x, mask)
+    std = arl.masked_mean((x - mean) ** 2, mask).sqrt()
+    return (x - mean) / (std + eps) * mask
+```
+
+We train three arms with the same reward, the hidden verdict minus 0.05 per call, from the same RL base agent: outcome GRPO (the book's default loop), token-level GAE, and turn-level GAE, both with $\lambda = 0.95$ and a critic. The critic is copied from the policy and warmed up for 60 steps on 192 base-agent episodes, as [Section 8.4](/tutorial/chapters/08-ppo#8-4-the-value-loss-and-the-ppo-loop) recommends, and then takes one regression step per training step on the batch's returns-to-go.
+
+```python
+STEP_COST = 0.05
+cost_cfg = arl.RLConfig(reward=arl.make_reward('hidden', step_penalty=STEP_COST))
+torch.manual_seed(0)
+warm_trajs = [t for seed in range(3) for t in arl.sample_groups(rl_base, lambda: arl.make_env(cost_cfg), train_tasks, tok,
+                                                               cost_cfg, torch.Generator().manual_seed(seed))]
+warm = arl.collate(warm_trajs, tok.pad_id)
+warm_returns = arl.returns_to_go(per_call_rewards(warm_trajs, warm['action_mask'], STEP_COST), warm['action_mask'])
+critic, gen = arl.make_critic(rl_base), torch.Generator().manual_seed(1)
+critic_opt = torch.optim.Adam(critic.parameters(), lr=1e-3)
+for _ in range(60):
+    idx = torch.randint(len(warm_trajs), (64,), generator=gen)
+    loss = arl.value_loss(arl.critic_values(critic, warm['ids'][idx]), warm_returns[idx], warm_returns[idx],
+                          warm['action_mask'][idx], clip=None)
+    critic_opt.zero_grad(); loss.backward(); critic_opt.step()
+```
+
+`train_credit` is `train_rl` with the advantage computation swapped for a critic-based one: per-call rewards, critic values, GAE at the token or the turn level, whitening, the same clipped update, and one critic step.
+
+```python
+def train_credit(scheme, steps=40, lam=0.95, seed=0):
+    """GRPO's loop with token- or turn-level GAE advantages from a critic -> (policy, critic, history)."""
+    torch.manual_seed(seed)
+    g = torch.Generator().manual_seed(seed)
+    policy, value_model = copy.deepcopy(rl_base), copy.deepcopy(critic)
+    popt, vopt = torch.optim.Adam(policy.parameters(), lr=cost_cfg.lr), torch.optim.Adam(value_model.parameters(), lr=1e-3)
+    history = []
+    for step in range(steps):
+        trajs, _ = arl.sample_step(policy, lambda: arl.make_env(cost_cfg), train_tasks, tok, cost_cfg, g)
+        batch = arl.collate(trajs, tok.pad_id)
+        mask, rewards = batch['action_mask'], per_call_rewards(trajs, batch['action_mask'], STEP_COST)
+        with torch.no_grad():
+            values = arl.critic_values(value_model, batch['ids'])                          # [B, T-1]
+        if scheme == 'token':
+            adv = arl.gae_advantages(rewards, values, mask, 1.0, lam)[0]
+        else:
+            adv = arl.turn_advantages(rewards, values, mask, batch['turn_ids'], 1.0, lam)
+        arl.rl_update(policy, popt, batch, masked_whiten(adv, mask), cost_cfg, generator=g)
+        vloss = arl.value_loss(arl.critic_values(value_model, batch['ids']), values,
+                               arl.returns_to_go(rewards, mask), mask, clip=None)
+        vopt.zero_grad(); vloss.backward(); vopt.step()
+        history.append(dict(step=step, **arl.behavior_stats(trajs)))
+    return policy, value_model, history
+```
+
+```python
+credit_runs = {}
+policy = copy.deepcopy(rl_base)
+credit_runs['outcome (GRPO)'] = (policy, None, arl.train_rl(policy, train_tasks, tok, cost_cfg, 40))
+credit_runs['token GAE'] = train_credit('token')
+credit_runs['turn GAE'] = train_credit('turn')
+for name, (policy, _, history) in credit_runs.items():
+    s = held_out(policy, cost_cfg)
+    late = lambda key: sum(h[key] for h in history[30:]) / 10
+    print(f"{name:<15} train pass, steps 30-39 {late('pass_rate'):.2f} | tests {late('tests'):.2f} | held-out: pass"
+          f" {s['pass_rate']:.3f} | reads {s['reads']:.2f} | tests {s['tests']:.2f} | edits {s['edits']:.2f} | turns {s['turns']:.2f}")
+```
+
+Output:
+
+```text
+outcome (GRPO)  train pass, steps 30-39 0.67 | tests 0.01 | held-out: pass 0.656 | reads 1.01 | tests 0.01 | edits 0.78 | turns 2.81
+token GAE       train pass, steps 30-39 0.72 | tests 0.92 | held-out: pass 0.787 | reads 1.03 | tests 0.97 | edits 0.98 | turns 4.01
+turn GAE        train pass, steps 30-39 0.72 | tests 0.33 | held-out: pass 0.769 | reads 1.02 | tests 0.29 | edits 0.89 | turns 3.83
+```
+
+All three arms learn to read. They differ in what they do with the cost. Outcome GRPO removed the useless `test` call almost entirely (0.01 per held-out episode), and it also learned something we did not want: it applies an edit in only 78% of episodes, submitting after a read without editing when it is unsure, because a failure with fewer calls costs less, and its held-out pass rate is 0.656. The two critic-based arms kept more of the cost-free habits: token-level GAE kept testing in nearly every episode (0.97 tests) and turn-level GAE in about a third (0.29), and both passed more held-out episodes, 0.787 and 0.769. The per-turn cost of 0.05 is small next to the noise of a critic whose explained variance is a few percent ([Section 7.4](/tutorial/chapters/07-advantages-and-credit#7-4-learning-a-critic)), so the critic arms mostly ignored it, while the group comparison of outcome GRPO saw it directly, in episodes of the same task that differed in length.
+
+> **Evidence.** Measured here, one seed per arm, 40 steps. The arms' differences in `tests` are not robust: in exploratory runs that differed only in floating-point summation order (thread count), token-level GAE dropped the `test` call too. What the comparison supports is the mechanism: a turn-level or token-level advantage can only charge a call for its own cost if the critic resolves that cost, and outcome advantages charge every call of a longer episode for the length. Figure 12.1 shows one episode's turn-level credit.
+
+![Figure 12.1: Turn-level credit on one successful held-out episode of the turn-GAE policy: per-call reward, the critic's value at the start of each call, the TD error, and the turn-level advantage (unwhitened). The text below compares the spread of token-level GAE within each call.](/tutorial/figures/ch12-turn-credit.svg)
+
+Figure 12.1 reads one episode of the turn-GAE policy (read, `fix_comparison`, test, submit) through its own critic. Every call costs 0.05, and the submit carries the verdict. The critic's TD errors say that the read and the decisive edit *lowered* the value (−0.116 and −0.031) and that the useless test and the submit raised it (+0.070 and +0.305): after 40 steps the critic still assigns credit almost backward, as Chapter 7's critic did. With $\lambda = 0.95$ the turn advantages chain the later TD errors back, so every call ends up positive, from +0.180 for the read to +0.361 for the test. Token-level GAE on the same episode also varies *within* each call, by up to 0.17 inside the edit, which is pure critic noise. This is the general situation: turn-level credit is exactly as good as the values at turn boundaries, and a value model trained on a few hundred binary outcomes does not supply good ones.
+
+## 12.3 Turn budgets and step penalties
+
+Two numbers define how much an agent may do: the **turn budget** (`max_turns`), a hard limit after which the episode ends unsubmitted, and the **step penalty**, a soft cost per call in reward units. [Section 2.9](/tutorial/chapters/02-rl-fundamentals#2-9-design-problems-in-practice) solved the repair MDP exactly and found that the optimal policy keeps its shape for costs up to 0.3 and gives up above 0.4. A learning agent does not face the optimal policy's trade-off; it faces its *own*: a call is worth paying for only if the policy's current use of it raises the expected verdict by more than the cost. We train the default configuration with a budget of 3 turns instead of 6, and with a step penalty of 0.3, and compare them with the default and with the 0.05 penalty of Section 12.2. Every arm uses the hidden-test verdict, the RL base agent, and 40 steps.
+
+```python
+budget_runs = {'default': arl.RLConfig(), 'penalty 0.05': cost_cfg,
+               'penalty 0.3': arl.RLConfig(reward=arl.make_reward('hidden', step_penalty=0.3)),
+               'max_turns 3': arl.RLConfig(max_turns=3)}
+histories = {'penalty 0.05': credit_runs['outcome (GRPO)'][2]}
+policies, logs = {'penalty 0.05': credit_runs['outcome (GRPO)'][0]}, {}
+for name, cfg in budget_runs.items():
+    if name not in histories:
+        policies[name], logs[name] = copy.deepcopy(rl_base), []
+        histories[name] = arl.train_rl(policies[name], train_tasks, tok, cfg, 40,
+                                       env_factory=lambda cfg=cfg, log=logs[name]: arl.LoggedEnv(arl.make_env(cfg), log))
+print(f'{"arm":<13} | held-out pass  reads  tests  edits  turns | batch reward, steps 30-39')
+for name, cfg in budget_runs.items():
+    s = held_out(policies[name], cfg)
+    print(f"{name:<13} | {s['pass_rate']:13.3f} {s['reads']:6.2f} {s['tests']:6.2f} {s['edits']:6.2f} {s['turns']:6.2f} |"
+          f" {sum(h['reward'] for h in histories[name][30:]) / 10:+.3f}")
+```
+
+Output:
+
+```text
+arm           | held-out pass  reads  tests  edits  turns | batch reward, steps 30-39
+default       |         0.762   1.02   0.80   0.96   3.88 | +0.711
+penalty 0.05  |         0.656   1.01   0.01   0.78   2.81 | +0.529
+penalty 0.3   |         0.000   0.00   0.00   0.00   1.00 | -0.302
+max_turns 3   |         0.200   0.00   0.00   0.99   2.03 | +0.181
+```
+
+The budget and the penalty each produce a different agent from the same starting point. The default keeps an unneeded `test` in 80% of episodes, because it costs nothing. A penalty of 0.05 per call removes the test and some edits along with it (Section 12.2). A penalty of 0.3 produces the degenerate agent of Section 2.9: it submits on its first call in every held-out episode, with pass rate 0 and reward −0.30, the cost of one call. And a budget of 3 turns produces a blind guesser: no reads, one edit, a submit, and a pass rate of 0.200, exactly the best single blind op of [Section 9.4](/tutorial/chapters/09-grpo-and-variants#9-4-shortcut-features-in-environment-design). Read, edit, submit fits in 3 turns, but with no slack: the starting policy's rare reading episodes almost always run out of turns before submitting, so reading earns less than guessing and is extinguished. (In an exploratory run that differed only in thread count, the 3-turn arm did learn to read and reached 0.41; a budget with no slack makes the outcome depend on early luck.)
+
+![Figure 12.2: Behavior over training under four budgets and penalties: hidden-test pass rate, reads, tests, and turns per episode in the training batch (5-step moving average). RL base agent, 40 GRPO steps of 64 episodes, one seed.](/tutorial/figures/ch12-behavior.svg)
+
+Figure 12.2 shows the dynamics. Under the 0.3 penalty, turns collapse to 1 within about 10 steps, before the pass rate has any chance to rise. Under the 3-turn budget, reads fall to 0 within the first 10 steps while the pass rate stays near the blind ceiling of 0.2. The default overshoots to about 1.4 reads per episode by step 12 and settles at 1. The 0.05 penalty learns to read more slowly, reaching one read per episode only around step 25, because every read is charged before its benefit is learned; its `tests` rise with the default's at first and then collapse after step 27, once reading is established and the test is the only call left whose cost buys nothing. A cost shapes *how* a skill is executed once the skill exists, slows its discovery when it is small, and prevents it when it is large relative to the starting policy's success rate.
+
+## 12.4 Context management changes the policy's input
+
+A long episode eventually does not fit in the context window. Production agents manage the context in three main ways: **truncation** (drop the oldest turns), **observation masking** (keep every call but replace old tool outputs by a placeholder), and **summarization** (replace a span of history by a model-written summary). Lindenbauer et al. (2025) report that, for SWE-agent on SWE-bench Verified, simple observation masking halved cost relative to the raw agent and matched LLM summarization's solve rate. Whatever the method, it changes what the policy conditions on, and therefore two things that the single-sequence view of [Chapter 5](/tutorial/chapters/05-trajectories-and-templates) took for granted.
+
+First, the **input distribution** changes. A policy trained with full histories has never seen a history with a placeholder where the source code was. Second, **an episode is no longer one sequence**. With full context, the prefix of call $k$ is the prefix of call $k+1$, so one forward pass over the whole episode scores every call. With masking, call $k+1$ is generated from a prefix that differs from the one call $k$ saw, so each call is a separate (prompt, completion) sample, and the trainer must score each call under the exact prefix the sampler used, or it computes probabilities of tokens under contexts that never produced them, the retokenization-drift failure of Section 5.4 in another form.
+
+`context_view` implements observation masking on the token log of an `Episode`: before call $k$, it drops the tool tokens of every turn older than the last `keep_obs`, keeping the `<obs> </obs>` template tokens as the placeholder. `keep_obs=None` is the full context.
+
+```python
+#@save
+def context_view(ids, owner, turn, k, keep_obs=None):
+    """Token ids the policy sees before call k: tool tokens of turns older than the last keep_obs are dropped."""
+    if keep_obs is None:
+        return list(ids)
+    tool = arl.OWNER['tool']
+    return [i for i, o, t in zip(ids, owner, turn) if not (o == tool and t < k - keep_obs)]
+
+
+def call_sample(traj, view, call_ids, call_logp):
+    """One call as its own Trajectory: ids = view + call; mask and sampling log-probs on the call tokens only."""
+    ids, n = torch.tensor(view + call_ids), len(call_ids)
+    mask, logp = torch.zeros(len(ids) - 1), torch.zeros(len(ids) - 1)
+    mask[-n:], logp[-n:] = 1.0, torch.tensor(call_logp)
+    return arl.Trajectory(ids, mask, logp, traj.reward, traj.info, turn=torch.zeros(len(ids), dtype=torch.long))
+```
+
+`context_rollout_batch` is Chapter 5's lockstep sampler with one change: each call is generated from `context_view` of the episode so far, and the (view, call) pair is recorded. It returns the full episodes, for statistics, and the per-call samples, each tagged with its episode's index, for training.
+
+```python
+#@save
+def context_rollout_batch(model, envs, tasks, tok, keep_obs=None, max_turns=6, temperature=1.0, generator=None):
+    """Lockstep episodes whose calls see context_view -> (episode Trajectories, [(episode index, call Trajectory)])."""
+    episodes = [arl.Episode(env, task, tok, max_turns, getattr(model, 'max_len', 256)) for env, task in zip(envs, tasks)]
+    calls, views, samples = [([], []) for _ in episodes], [None] * len(episodes), []
+    active = list(range(len(episodes)))
+    while active:
+        for b in active:
+            if not calls[b][0]:                                      # a new call starts: fix its view
+                e = episodes[b]
+                views[b] = context_view(e.ids, e.owner, e.turn, len(e.actions), keep_obs)
+        rows = [torch.tensor(views[b] + calls[b][0]) for b in active]
+        last = torch.tensor([len(r) - 1 for r in rows])
+        with torch.no_grad():
+            logits = model(arl.pad_rows(rows, int(last.max()) + 1, tok.pad_id))     # [A, T, V]
+        next_ids, logps = arl.sample_next(logits[torch.arange(len(rows)), last], temperature, generator=generator)
+        for b, i, lp in zip(active, next_ids.tolist(), logps.tolist()):
+            calls[b][0].append(i)
+            calls[b][1].append(lp)
+            if i == tok.call_end_id or len(calls[b][0]) == arl.MAX_CALL_TOKENS:
+                samples.append((b, views[b], *calls[b]))
+                episodes[b].act(*calls[b])
+                calls[b] = ([], [])
+        active = [b for b in active if not episodes[b].done]
+    trajs = [arl.make_trajectory(e) for e in episodes]
+    return trajs, [(b, call_sample(trajs[b], view, ids, logp)) for b, view, ids, logp in samples]
+```
+
+Two checks pin down correctness. With `keep_obs=None` and the same generator, the sampler must reproduce `rollout_batch` exactly, and the per-call samples, scored separately, must give the same log-probabilities as the episodes scored as single sequences.
+
+```python
+cfg = arl.RLConfig()
+tasks = [t for t in train_tasks[:4] for _ in range(4)]
+reference = arl.rollout_batch(rl_base, [arl.make_env(cfg) for _ in tasks], tasks, tok, 6, 1.0, torch.Generator().manual_seed(0))
+episodes, samples = context_rollout_batch(rl_base, [arl.make_env(cfg) for _ in tasks], tasks, tok, None, 6, 1.0,
+                                          torch.Generator().manual_seed(0))
+print('identical episodes:', all(torch.equal(a.ids, b.ids) for a, b in zip(reference, episodes)), '| calls:', len(samples))
+with torch.no_grad():
+    per_episode = [float((arl.sequence_log_probs(rl_base, t.ids[None])[0] * t.action_mask).sum()) for t in episodes]
+    per_call = [0.0] * len(episodes)
+    for b, s in samples:
+        per_call[b] += float((arl.sequence_log_probs(rl_base, s.ids[None])[0] * s.action_mask).sum())
+print(f'max |log p(episode) - sum of per-call log p| = {max(abs(a - b) for a, b in zip(per_episode, per_call)):.1e}')
+```
+
+Output:
+
+```text
+identical episodes: True | calls: 61
+max |log p(episode) - sum of per-call log p| = 2.1e-06
+```
+
+With the full context, the per-call sampler reproduces the single-sequence sampler token for token, and the 61 calls of the 16 episodes, scored as separate samples, give the same log-probabilities as the episodes scored whole, up to $2.1 \times 10^{-6}$, float32 summation order. Under masking only the first check changes: the samples differ from any single sequence, and only the per-call scoring is correct.
+
+Training on per-call samples needs one more decision: the advantage. The verdict belongs to the episode, so we compute group advantages over episodes, as before, and give every call of an episode its episode's advantage. With `token_mean` aggregation this is the same objective as the single-sequence update: the same tokens, the same advantages, the same normalizer. Only the contexts differ.
+
+```python
+def train_context(steps=40, keep_obs=1, seed=0):
+    """GRPO on per-call samples whose contexts are masked to the last keep_obs observations -> policy."""
+    cfg, policy = arl.RLConfig(seed=seed), copy.deepcopy(rl_base)
+    torch.manual_seed(seed)
+    g, opt = torch.Generator().manual_seed(seed), torch.optim.Adam(policy.parameters(), lr=cfg.lr)
+    for _ in range(steps):
+        order = torch.randperm(len(train_tasks), generator=g)[:cfg.prompts_per_step].tolist()
+        names = random.Random(int(torch.randint(2 ** 31, (1,), generator=g)))
+        tasks = [arl.randomize_names(train_tasks[i], names) for i in order for _ in range(cfg.group_size)]
+        trajs, samples = context_rollout_batch(policy, [arl.make_env(cfg) for _ in tasks], tasks, tok, keep_obs,
+                                               cfg.max_turns, cfg.temperature, g)
+        episode_adv = arl.compute_advantages({'rewards': torch.tensor([t.reward for t in trajs])}, cfg)   # [E]
+        batch = arl.collate([s for _, s in samples], tok.pad_id)
+        arl.rl_update(policy, opt, batch, episode_adv[torch.tensor([b for b, _ in samples])], cfg, generator=g)
+    return policy
+```
+
+`evaluate_context` samples held-out episodes under a given context policy. We cross two training conditions, full context (the default run of Section 12.3) and observation masking with `keep_obs=1`, with three evaluation conditions: full, `keep_obs=1`, and `keep_obs=0`, which removes every tool output.
+
+```python
+#@save
+def evaluate_context(model, tasks, tok, keep_obs=None, n_samples=16, seed=7, cfg=None):
+    """Behavior statistics of n_samples episodes per task, sampled with context_view(keep_obs) and renamed tasks."""
+    cfg, names = cfg or arl.RLConfig(), random.Random(seed)
+    batch_tasks = [arl.randomize_names(t, names) for t in tasks for _ in range(n_samples)]
+    trajs, _ = context_rollout_batch(model, [arl.make_env(cfg) for _ in batch_tasks], batch_tasks, tok, keep_obs,
+                                     cfg.max_turns, cfg.temperature, torch.Generator().manual_seed(seed))
+    return arl.behavior_stats(trajs)
+```
+
+```python
+context_policies = {'full': policies['default'], 'keep_obs=1': train_context(keep_obs=1)}
+context_table = {}
+for train_name, policy in context_policies.items():
+    for eval_keep in [None, 1, 0]:
+        s = evaluate_context(policy, heldout_tasks, tok, eval_keep)
+        context_table[train_name, eval_keep] = s
+        print(f"trained {train_name:<10} evaluated keep_obs={str(eval_keep):<4} | pass {s['pass_rate']:.3f} |"
+              f" reads {s['reads']:.2f} | tests {s['tests']:.2f} | turns {s['turns']:.2f}")
+```
+
+Output:
+
+```text
+trained full       evaluated keep_obs=None | pass 0.731 | reads 1.01 | tests 0.82 | turns 3.87
+trained full       evaluated keep_obs=1    | pass 0.725 | reads 1.27 | tests 0.05 | turns 3.39
+trained full       evaluated keep_obs=0    | pass 0.006 | reads 1.27 | tests 0.02 | turns 2.33
+trained keep_obs=1 evaluated keep_obs=None | pass 0.500 | reads 1.04 | tests 0.07 | turns 5.29
+trained keep_obs=1 evaluated keep_obs=1    | pass 0.794 | reads 1.04 | tests 0.02 | turns 3.38
+trained keep_obs=1 evaluated keep_obs=0    | pass 0.006 | reads 1.02 | tests 0.01 | turns 2.29
+```
+
+Read the table along the rows. The policy trained with full context and evaluated with masking keeps its pass rate (0.731 to 0.725) and changes its behavior: tests fall from 0.82 to 0.05 per episode, and reads rise from 1.01 to 1.27, because after the edit it sees a history in which the source was replaced by a placeholder, an input it never saw in training. The policy trained with masking and evaluated with full context loses most of its advantage: its pass rate falls from 0.794 to 0.500, and its episodes lengthen to 5.29 turns, as it meets the source still visible after its edit and does not know how to proceed. Each policy is best under the context it was trained with, and the mismatch is not symmetric. With every tool output removed (`keep_obs=0`) both fail completely, which confirms that the information comes from the observations. The default setting of `context_rollout_batch` is the full context, and Chapter 5's sampler remains the book's default; any context policy must be applied identically in training and evaluation, which Figure 12.3 summarizes.
+
+![Figure 12.3: Held-out pass rate and tests per episode for each pair of training and evaluation context policies. Rows: how the policy was trained; columns: how it is evaluated.](/tutorial/figures/ch12-context.svg)
+
+## 12.5 Tool errors, malformed calls, and early termination
+
+A call can fail in three ways: it does not parse (`<call> edit </call>` with a missing argument), it names a tool or argument that does not exist, or it is valid and the tool fails (a test run that crashes, a timeout). The gym answers the first two with an error observation and charges a turn, which is the design of most agent harnesses; the Model Context Protocol, for example, returns tool failures as results flagged `isError` so the model can see them and recover ([Section 4.7](/tutorial/chapters/04-environments-and-tools#4-7-real-coding-environments-and-isolation)). The alternative is **early termination**: end the episode on an error, as failed. It saves the compute of an episode that has gone wrong and gives a sharper signal against malformed output, and it removes any chance to learn recovery. `EarlyStopEnv` ends an episode unsubmitted after `max_invalid` errors.
+
+```python
+#@save
+class EarlyStopEnv(arl.EditBudgetEnv):
+    """EditBudgetEnv that ends the episode, unsubmitted, after max_invalid malformed or unknown calls."""
+    def __init__(self, max_turns=6, reward='hidden', max_edits=1, max_invalid=1):
+        super().__init__(max_turns, reward, max_edits)
+        self.max_invalid = max_invalid
+
+    def step(self, action_text):
+        obs, reward, done, info = super().step(action_text)
+        if done or self.n_invalid < self.max_invalid:
+            return obs, reward, done, info
+        self.done = True
+        info = dict(self.final_info(submitted=False), stop='invalid')
+        return obs, self.reward_fn(info), True, info
+```
+
+How much is at stake depends on how often the policy errs and whether it recovers. We evaluate the RL base agent on the training tasks in both environments, and read the malformed-call rate of the default run from its environment log at the start and end of training.
+
+```python
+cfg = arl.RLConfig()
+for name, factory in [('error observation', lambda: arl.make_env(cfg)), ('early stop', lambda: EarlyStopEnv())]:
+    trajs = arl.sample_groups(rl_base, factory, train_tasks, tok, cfg, torch.Generator().manual_seed(2))
+    erred = [t for t in trajs if t.info['n_invalid'] > 0]
+    print(f"{name:<18} episodes with an error {len(erred) / len(trajs):.3f} | their pass rate"
+          f" {sum(t.reward for t in erred) / max(len(erred), 1):.3f} | overall pass {sum(t.reward for t in trajs) / len(trajs):.3f}"
+          f" | policy tokens per episode {sum(float(t.action_mask.sum()) for t in trajs) / len(trajs):.1f}")
+steps = arl.log_by_step(histories['default'], logs['default'])
+for window in [range(0, 5), range(35, 40)]:
+    infos = [i for k in window for i in steps[k]]
+    print(f'default run, steps {window.start}-{window.stop - 1}: malformed calls per turn'
+          f' {sum(i["n_invalid"] for i in infos) / sum(i["n_turns"] for i in infos):.4f}')
+```
+
+Output:
+
+```text
+error observation  episodes with an error 0.044 | their pass rate 0.143 | overall pass 0.131 | policy tokens per episode 12.3
+early stop         episodes with an error 0.050 | their pass rate 0.000 | overall pass 0.144 | policy tokens per episode 11.6
+default run, steps 0-4: malformed calls per turn 0.0189
+default run, steps 35-39: malformed calls per turn 0.0138
+```
+
+The base agent makes an error in about 5% of episodes. With error observations, those episodes recover and pass at 0.143, about the base agent's overall rate; with early termination they pass at 0 by construction. The overall pass rates (0.131 and 0.144) differ only by sampling noise, because the two environments produce different episodes after the first error, and early stopping saved about 6% of the policy tokens. The training log shows a less obvious fact: GRPO barely reduced malformed calls, from 1.9% to 1.4% of turns over 40 steps. A malformed call costs a turn, and the default budget of 6 has two turns of slack over the 4 the policy needs, so an error has almost no effect on the reward and almost no gradient against it. Format errors disappear under RL only when they cost reward: a tight budget, early termination, or `make_reward(invalid_penalty=...)`.
+
+## 12.6 Mixing single-turn and multi-turn data
+
+Agent post-training rarely uses agent episodes alone. Single-turn data (a prompt with all the information and one answer, as in math RLVR or code generation from a specification) is cheaper to sample, has no environment latency, and teaches the same underlying skill. The BugFix version of a single-turn task gives the source in the prompt and grades the first call: `single_turn` appends the read projection of the source to the issue, and `MixedTurnEnv` grades such tasks after one call, as if submitted, while running every other task as a normal episode. The environment decides by inspecting the task, so one factory serves a mixed batch.
+
+```python
+#@save
+def single_turn(task):
+    """Copy of task whose prompt includes the source, graded after one call by MixedTurnEnv."""
+    return dataclasses.replace(task, issue=task.issue + '\n' + arl.compact_source(task.source))
+
+
+class MixedTurnEnv(arl.EditBudgetEnv):
+    """EditBudgetEnv that ends single_turn tasks after the first call and grades them as submitted."""
+    def reset(self, task):
+        self.single = '\n' in task.issue
+        return super().reset(task)
+
+    def step(self, action_text):
+        obs, reward, done, info = super().step(action_text)
+        if done or not self.single:
+            return obs, reward, done, info
+        self.done = True
+        info = self.final_info(submitted=True)
+        return obs, self.reward_fn(info), True, info
+```
+
+A policy trained only on multi-turn episodes meets a single-turn task as an unfamiliar input. We evaluate the default run's policy on held-out tasks in both formats, then train one policy on a 50/50 mixture of the two formats over the training tasks and evaluate it the same way.
+
+```python
+mixed_cfg = arl.RLConfig()
+mixed_factory = lambda: MixedTurnEnv(mixed_cfg.max_turns, mixed_cfg.reward, mixed_cfg.max_edits)
+mixed_policy = copy.deepcopy(rl_base)
+mixed_history = arl.train_rl(mixed_policy, train_tasks + [single_turn(t) for t in train_tasks], tok, mixed_cfg, 40,
+                             env_factory=mixed_factory)
+for name, policy in [('multi-turn only', policies['default']), ('50/50 mixture', mixed_policy)]:
+    cells = []
+    for fmt, tasks in [('multi-turn', heldout_tasks), ('single-turn', [single_turn(t) for t in heldout_tasks])]:
+        s = arl.evaluate(policy, tasks, tok, 16, generator=torch.Generator().manual_seed(7), cfg=mixed_cfg,
+                         env_factory=mixed_factory)
+        cells.append(f"{fmt} pass {s['pass_rate']:.3f} (reads {s['reads']:.2f})")
+    print(f'{name:<16}', ' | '.join(cells))
+```
+
+Output:
+
+```text
+multi-turn only  multi-turn pass 0.762 (reads 1.02) | single-turn pass 0.000 (reads 0.00)
+50/50 mixture    multi-turn pass 0.719 (reads 1.03) | single-turn pass 0.256 (reads 0.03)
+```
+
+The policy trained only on multi-turn episodes passes none of the single-turn tasks: on the prompt that already contains the source it never reads (0.00 reads), and its first call, which ends the episode, is never the right edit, because a single call graded immediately is a situation its training never contained. The mixture-trained policy passes 25.6% of single-turn held-out tasks, above the 0.20 of a blind guess, and pays for it with a lower multi-turn pass rate, 0.719 against 0.762, after the same 40 steps with half as many multi-turn episodes. Reading the op off a source in the prompt and reading it off an observation are the same skill for a large pretrained model; for TinyAgent, whose two positions differ, they transfer only partly.
+
+The mixture also changes how much each episode weighs in the loss. Under `token_mean`, an episode's weight is proportional to its number of policy tokens ([Section 6.6](/tutorial/chapters/06-policy-gradient#6-6-loss-aggregation)), and a single-turn episode has one call while a multi-turn one has about four. The block samples a batch with 4 tasks of each format from the mixed policy and measures the share of the loss weight that the single-turn episodes receive under `token_mean` and under per-sequence averaging.
+
+```python
+half = train_tasks[::5] + [single_turn(t) for t in train_tasks[1::5]]                 # 4 + 4 tasks
+kept = arl.sample_groups(mixed_policy, mixed_factory, half, tok, mixed_cfg, torch.Generator().manual_seed(3))
+tokens = torch.tensor([float(t.action_mask.sum()) for t in kept])
+single = torch.tensor([bool((t.ids[t.owner == arl.OWNER['prompt']] == tok.stoi['<nl>']).any()) for t in kept])
+print(f'single-turn share of episodes {single.float().mean():.2f} | of loss weight: token_mean'
+      f' {tokens[single].sum() / tokens.sum():.2f}, seq_mean {single.float().mean():.2f}')
+```
+
+Output:
+
+```text
+single-turn share of episodes 0.50 | of loss weight: token_mean 0.19, seq_mean 0.50
+```
+
+Half the episodes are single-turn, and they receive 19% of the `token_mean` loss weight, because each has one call against about four in a multi-turn episode. Per-sequence averaging would give them 50%. The mixture ratio that matters for the gradient is therefore the ratio of policy tokens, not of episodes, and it shifts as the multi-turn episodes get shorter or longer during training.
+
+## 12.7 Design problems in practice
+
+> **Problem: the agent learns to submit immediately.** *Symptom:* turns per episode fall to 1, the pass rate falls to 0, and the reward settles at minus one step cost. *Cause:* with a step cost $c$, an attempt that takes $K$ calls and passes with probability $p$ is worth $p - cK$, while submitting at once is worth $-c$. The policy compares these at its *current* $p$ and $K$, not at the optimal ones, so a cost that the trained agent could afford (in Section 2.9's MDP the optimal policy gives up only above 0.4) is ruinous for a starting policy with $p \approx 0.17$. *Options:* (a) a much smaller cost, or none until the pass rate is high. (b) A cost that ramps in over training. (c) Charge cost only on calls beyond a free allowance. (d) Report cost as a separate metric and select checkpoints on it instead of training on it. *Default:* (a) then (b), with the arithmetic below checked against the starting policy. The 0.3 penalty run of Section 12.3 is the reproduction.
+
+```python
+start = histories['penalty 0.3'][0]
+p, K = start['pass_rate'], start['turns']
+print(f'starting policy: pass {p:.2f}, turns {K:.2f} -> attempt worth {p - 0.3 * K:+.2f}; submit at once worth {-0.3:+.2f}')
+print('penalty 0.3 run, turns per episode by 10-step window:',
+      [round(sum(h['turns'] for h in histories['penalty 0.3'][i:i + 10]) / 10, 2) for i in range(0, 40, 10)])
+```
+
+Output:
+
+```text
+starting policy: pass 0.17, turns 3.64 -> attempt worth -0.92; submit at once worth -0.30
+penalty 0.3 run, turns per episode by 10-step window: [1.82, 1.02, 1.01, 1.01]
+```
+
+For the starting policy, an attempt is worth $0.17 - 0.3 \times 3.64 = -0.92$ and submitting at once $-0.30$, so the group comparison favors submitting immediately in almost every group. Turns per episode fall from 1.82 in the first ten steps to 1.02 in the second ten and stay there; once no episode attempts a repair, no group contains a success and the policy can never find out that repairs pay.
+
+> **Problem: the agent never submits.** *Symptom:* the submit rate falls, episodes run to the turn limit, and the reward rises toward 0 while the pass rate does not. *Cause:* an episode stopped by the turn limit is scored by the reward function as unsubmitted, which is 0 under the hidden verdict. If a wrong submission is punished (here by $-1$), not submitting is safer than submitting at the current pass rate, and the policy learns to wait out the budget. The truncation outcome is part of the reward whether or not anyone designed it. *Options:* (a) make an unsubmitted episode at least as bad as a failed submission. (b) Exclude truncated episodes from the update (next problem). (c) Never punish failure below the truncation value. *Default:* (a): the outcome of running out of turns should be the worst outcome available. We train with `wrong_submit=-1` and log the submit rate.
+
+```python
+never_cfg, never_log = arl.RLConfig(reward=arl.make_reward('hidden', wrong_submit=-1.0)), []
+never_policy = copy.deepcopy(rl_base)
+never_history = arl.train_rl(never_policy, train_tasks, tok, never_cfg, 40,
+                             env_factory=lambda: arl.LoggedEnv(arl.make_env(never_cfg), never_log))
+for k, infos in enumerate(arl.log_by_step(never_history, never_log)):
+    if k % 5 == 0 or k == 39:
+        print(f"step {k:2d} | submit rate {sum(i['submitted'] for i in infos) / len(infos):.2f} |"
+              f" pass {never_history[k]['pass_rate']:.2f} | reward {never_history[k]['reward']:+.2f} |"
+              f" turns {never_history[k]['turns']:.2f}")
+```
+
+Output:
+
+```text
+step  0 | submit rate 0.72 | pass 0.17 | reward -0.38 | turns 3.64
+step  5 | submit rate 0.23 | pass 0.17 | reward +0.11 | turns 5.44
+step 10 | submit rate 0.12 | pass 0.11 | reward +0.09 | turns 5.78
+step 15 | submit rate 0.20 | pass 0.20 | reward +0.20 | turns 5.59
+step 20 | submit rate 0.41 | pass 0.41 | reward +0.41 | turns 5.19
+step 25 | submit rate 0.58 | pass 0.56 | reward +0.55 | turns 4.86
+step 30 | submit rate 0.59 | pass 0.59 | reward +0.59 | turns 4.83
+step 35 | submit rate 0.70 | pass 0.69 | reward +0.67 | turns 4.59
+step 39 | submit rate 0.73 | pass 0.73 | reward +0.73 | turns 4.53
+```
+
+Within 10 steps the submit rate falls from 0.72 to 0.12, the episodes run to 5.78 turns of the 6 allowed, and the pass rate falls to 0.11, while the reward *rises* from −0.38 to +0.09: by not submitting, the policy avoids the −1. The run recovers here, because the policy's reading skill is improving underneath (a submission that passes is worth +1, more than the 0 of waiting), and by step 39 it submits in 73% of episodes and passes 73%. On a harder task, where the pass rate stays low, nothing would pull it back.
+
+> **Problem: timeout-truncated episodes.** *Symptom:* runs with tight turn or token limits learn slowly, learn to rush, or (as above) learn to stall; a change of limit changes the learned behavior. *Cause:* a truncated episode has no verdict. Scoring it as a failure (the gym's default) teaches the agent the limit; scoring it otherwise is a choice about what the limit means. Pardo et al. (2018) distinguish the two cases: if the limit is part of the task, the remaining time belongs in the agent's input and truncation is a real terminal outcome; if the limit only exists to make training feasible, the agent should bootstrap from the value of the state where the episode was cut, $\hat R = \sum_{k<K} r_k + V(s_K)$, which requires a critic. *Options:* (a) treat truncation as failure, and show the remaining budget in the observation. (b) Mask truncated episodes out of the loss, as DAPO's overlong filtering and DeepSWE's compact filtering do ([Chapter 20](/tutorial/chapters/20-frontier)). (c) Bootstrap with a critic. *Default:* (a) when the limit is the task's (a coding agent with a real deadline); (b) only when the limit is an engineering cap that the policy cannot use to avoid a penalty; (c) only with a critic whose explained variance has been measured. The block retrains the never-submit setting with truncated episodes masked: their advantages are set to 0, and the group baselines use only the episodes that submitted.
+
+```python
+def masked_truncation_advantages(trajs, G=8):
+    """Group mean/std over submitted episodes only; unsubmitted (truncated) episodes get advantage 0 -> [B]."""
+    r = torch.tensor([t.reward for t in trajs]).view(-1, G)
+    keep = torch.tensor([float(t.info['submitted']) for t in trajs]).view(-1, G)
+    n = keep.sum(-1, keepdim=True).clamp(min=1)
+    mean = (r * keep).sum(-1, keepdim=True) / n
+    std = (((r - mean) ** 2 * keep).sum(-1, keepdim=True) / (n - 1).clamp(min=1)).sqrt()
+    return ((r - mean) / (std + 1e-6) * keep).flatten()
+
+torch.manual_seed(0)
+g, masked_policy = torch.Generator().manual_seed(0), copy.deepcopy(rl_base)
+opt, masked_hist = torch.optim.Adam(masked_policy.parameters(), lr=never_cfg.lr), []
+for step in range(40):
+    trajs, _ = arl.sample_step(masked_policy, lambda: arl.make_env(never_cfg), train_tasks, tok, never_cfg, g)
+    arl.rl_update(masked_policy, opt, arl.collate(trajs, tok.pad_id), masked_truncation_advantages(trajs), never_cfg, generator=g)
+    masked_hist.append(dict(submit=sum(t.info['submitted'] for t in trajs) / len(trajs), **arl.behavior_stats(trajs)))
+print('masked truncation, submit rate by 10-step window:', [round(sum(h['submit'] for h in masked_hist[i:i + 10]) / 10, 2) for i in range(0, 40, 10)])
+for name, policy in [('truncation = 0', never_policy), ('truncation masked', masked_policy)]:
+    s = held_out(policy, never_cfg)
+    print(f"{name:<18} held-out pass {s['pass_rate']:.3f} | turns {s['turns']:.2f}")
+```
+
+Output:
+
+```text
+masked truncation, submit rate by 10-step window: [0.37, 0.13, 0.1, 0.09]
+truncation = 0     held-out pass 0.706 | turns 4.51
+truncation masked  held-out pass 0.075 | turns 5.84
+```
+
+Masking made it worse. The submit rate fell to 0.09 and stayed there, and the held-out pass rate is 0.075 against 0.706 when truncation is scored as 0. With truncated episodes masked, not submitting has *no* consequence: those episodes carry zero advantage, while every failed submission pushes the probability of `submit` down and nothing pushes it back up. Stalling became free. Masking a truncated episode removes the signal *against* truncation, which is what DAPO's overlong filtering intends for responses that were cut off while still productive, and what a policy will exploit when truncation is a choice it can make. Use (b) only when the policy cannot reach truncation on purpose more cheaply than by working, or with a separate cost on truncation.
+
+> **Problem: context overflow.** *Symptom:* a few long episodes end with `stop='truncated'` before any verdict, memory spikes on the longest sequences, and long-horizon tasks fail more than their difficulty suggests. *Cause:* the context grows with every observation; tool output is unbounded in real environments ([Section 4.8](/tutorial/chapters/04-environments-and-tools#4-8-design-problems-in-practice)), and the window, here 256 tokens, is fixed. Section 12.1 measured how the risk grows with the turn budget. *Options:* (a) cap each observation (head and tail with a marker). (b) Observation masking or summarization (Section 12.4), which turns an episode into per-call samples and changes the input distribution; train with the same context policy you deploy. (c) A larger window, paid in memory and attention cost. (d) Treat overflow as truncation and apply the previous problem's rule. *Default:* (a) always, (b) once episodes routinely exceed the window, and evaluation under exactly the training context policy, which Section 12.4 showed is not optional.
+
+## Summary
+
+- Observation tokens are inputs: a policy-gradient loss on a real batch put nonzero gradient on all 201 policy positions and on none of the 669 prompt, template, and tool positions. Only 30% of a BugFix episode's tokens are the policy's; in long SWE episodes it is a few percent.
+- With a per-call cost, outcome GRPO removed a useless `test` call by comparing episodes of different lengths and also learned to skip edits when unsure (held-out 0.656); critic-based token- and turn-level GAE kept more of the useless calls and passed more (0.787, 0.769). A turn-level advantage can charge a call for its own cost only if the critic resolves it.
+- Costs and budgets select different agents from one starting policy: a 0.3 step penalty made the agent submit immediately (pass 0), and a 3-turn budget with no slack extinguished reading (pass 0.200, the blind ceiling). Compare costs with the *starting* policy's success rate, not the optimal policy's.
+- Context management makes each call a separate sample that must be scored under the exact context the sampler used (checked to $2 \times 10^{-6}$), and it changes the input distribution: a masked-context policy evaluated with full context fell from 0.794 to 0.500. Train and evaluate under the same context policy.
+- Malformed calls cost no reward when the budget has slack, so RL barely removed them (1.9% to 1.4% of turns). Mixing single-turn and multi-turn tasks taught the single-turn format (0.256 vs 0.000) at some multi-turn cost, and under `token_mean` single-turn episodes got 19% of the weight at 50% of the episodes.
+- Truncation is part of the reward: with a −1 for failed submissions the agent stopped submitting for a while, and masking truncated episodes out of the loss made stalling free (held-out 0.075). All results are single-seed mechanism demonstrations on a 158k-parameter model.
+
+## Exercises
+
+1. Show that, with per-call costs and $\gamma = \lambda = 1$, turn-level GAE gives call $k$ the advantage $\sum_{j \ge k} r_j - V(s_k)$. Under what condition on the critic does it charge a useless `test` call exactly its own cost?
+2. Change an assumption: rerun the `max_turns 3` arm of Section 12.3 starting from a policy first trained for 20 steps with `max_turns=6`. Does a policy that already reads keep reading under the tight budget? What does this say about curricula over budgets?
+3. Implement summarization for the context policy of Section 12.4: replace the source observation by the name of the op that `arl.infer_op` would choose. Train with it and evaluate under full context. Which context policy transfers better, masking or summarization, and why?
+4. Add the remaining budget to the observation ("turns left 2") in a copy of `EditBudgetEnv`, as Pardo et al. recommend when the limit is part of the task, and repeat the `wrong_submit=-1` run. Does the policy still stall?
+5. In the mixed run of Section 12.6, compare `loss_mode='token_mean'` with `'seq_mean_token_mean'`. Which format improves faster under each, and how does that follow from the weight shares measured above?
+6. Bootstrapping: using the critic of Section 12.2, compute $V(s_K)$ for budget-truncated episodes of the never-submit run and train with $\hat R = \sum_k r_k + V(s_K)$ for truncated episodes. Compare with the two treatments of Section 12.7.
+7. Design review: a SWE agent trained with a 50-turn budget and full context is deployed with a 100-turn budget and observation masking after 30 turns, and its solve rate falls. List the distribution shifts involved, the measurements that would separate them, and the training changes you would propose.

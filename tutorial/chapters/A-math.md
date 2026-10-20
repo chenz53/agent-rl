@@ -1,0 +1,333 @@
+# A. Mathematical Tools
+
+This appendix collects the probability tools that the RL chapters use repeatedly. Each section gives a short derivation and then checks the result numerically in torch, so that the identity is something you have seen hold rather than something you take on faith. The chapters link here when they need a result. Nothing here is specific to language models, but every example is chosen because it reappears in one.
+
+The one function saved here, `mc_mean_and_stderr`, is used wherever the book reports a Monte Carlo estimate with an error bar.
+
+## A.1 Monte Carlo Estimates and Error Bars
+
+Almost every quantity in RL is an expectation we cannot compute exactly: the objective $J(\theta)$, a gradient, a pass rate. We estimate it by sampling. Given i.i.d. samples $x_1, \dots, x_n$ of a random variable $X$ with mean $\mu$ and variance $\sigma^2$, the sample mean $\bar X = \frac{1}{n}\sum_i x_i$ is unbiased, $\mathbb{E}[\bar X] = \mu$, and its variance is
+
+$$
+\mathrm{Var}(\bar X) = \frac{1}{n^2} \sum_{i=1}^n \mathrm{Var}(x_i) = \frac{\sigma^2}{n}.
+$$
+
+The **standard error** $\sigma/\sqrt{n}$ is the standard deviation of the estimate. In practice $\sigma$ is unknown and is replaced by the sample standard deviation $s$. By the central limit theorem, $\bar X \pm 1.96\, s/\sqrt{n}$ is an approximate 95% confidence interval. The error shrinks as $1/\sqrt{n}$: four times as many samples halve it.
+
+```python
+#@save
+import torch
+
+
+def mc_mean_and_stderr(samples):
+    """Mean and standard error of i.i.d. samples along the last axis: [..., n] -> ([...], [...])."""
+    n = samples.shape[-1]
+    return samples.mean(-1), samples.std(-1) / n ** 0.5
+```
+
+Check the coverage claim. A Bernoulli variable with $p = 0.3$ stands in for a binary reward. We draw 10,000 independent experiments of $n = 200$ samples each and count how often the interval contains the true mean.
+
+```python
+torch.manual_seed(0)
+p, n, experiments = 0.3, 200, 10_000
+rewards = (torch.rand(experiments, n) < p).float()          # [experiments, n]
+mean, stderr = mc_mean_and_stderr(rewards)                  # [experiments] each
+covered = ((mean - 1.96 * stderr <= p) & (p <= mean + 1.96 * stderr)).float().mean()
+print(f'theoretical stderr = {(p * (1 - p) / n) ** 0.5:.4f}')
+print(f'average estimated stderr = {stderr.mean():.4f}')
+print(f'95% interval coverage = {covered:.3f}')
+```
+
+Output:
+
+```text
+theoretical stderr = 0.0324
+average estimated stderr = 0.0324
+95% interval coverage = 0.946
+```
+
+The estimated standard error matches the theoretical value $\sqrt{p(1-p)/n}$, and the nominal 95% interval covers the true mean in close to 95% of experiments. The approximation degrades when $n$ is small or $p$ is near 0 or 1, which is exactly the regime of a hard task's pass rate. [Chapter 17](17-evaluation.md) uses the bootstrap and exact intervals for those cases.
+
+## A.2 The Variance of Sums
+
+A trajectory's return is a sum of rewards, and a policy-gradient estimate is a sum of per-token terms. The variance of a sum is
+
+$$
+\mathrm{Var}\Big(\sum_{i=1}^n X_i\Big) = \sum_{i} \mathrm{Var}(X_i) + 2\sum_{i<j} \mathrm{Cov}(X_i, X_j).
+$$
+
+For independent terms the covariances vanish and the variance grows linearly in $n$. For positively correlated terms it grows faster. With equal variances $\sigma^2$ and pairwise correlation $\rho$, the variance of the *mean* of $n$ terms is
+
+$$
+\mathrm{Var}(\bar X) = \frac{\sigma^2}{n}\big(1 + (n-1)\rho\big),
+$$
+
+which does not go to zero as $n \to \infty$ when $\rho > 0$. Samples that share a cause, such as $G$ completions of the same prompt or many tokens of one trajectory, carry less information than their count suggests. The **effective sample size** is $n_{\text{eff}} = n / (1 + (n-1)\rho)$.
+
+We generate correlated samples by giving every member of a group a shared component plus an independent one, and compare the measured variance of the group mean with the formula.
+
+```python
+torch.manual_seed(0)
+n, trials = 16, 200_000
+for rho in [0.0, 0.2, 0.5]:
+    shared = torch.randn(trials, 1)                              # [trials, 1]
+    own = torch.randn(trials, n)                                  # [trials, n]
+    x = rho ** 0.5 * shared + (1 - rho) ** 0.5 * own              # unit variance, corr rho
+    measured = x.mean(-1).var().item()
+    predicted = (1 + (n - 1) * rho) / n
+    print(f'rho={rho:<4} Var(mean of {n}) measured={measured:.4f} '
+          f'predicted={predicted:.4f}  n_eff={n / (1 + (n - 1) * rho):.2f}')
+```
+
+Output:
+
+```text
+rho=0.0  Var(mean of 16) measured=0.0626 predicted=0.0625  n_eff=16.00
+rho=0.2  Var(mean of 16) measured=0.2505 predicted=0.2500  n_eff=4.00
+rho=0.5  Var(mean of 16) measured=0.5315 predicted=0.5312  n_eff=1.88
+```
+
+At $\rho = 0.5$, sixteen correlated samples are worth fewer than two independent ones. This is why the book reports error bars over *independent* units, such as tasks or seeds, rather than over tokens.
+
+## A.3 Control Variates
+
+Suppose we want $\mathbb{E}[f(X)]$ and know another function $g(X)$ whose mean $\mathbb{E}[g]$ is known exactly. Then for any constant $c$,
+
+$$
+\hat\mu_c = f(X) - c\,\big(g(X) - \mathbb{E}[g]\big)
+$$
+
+is still unbiased, and its variance is $\mathrm{Var}(f) - 2c\,\mathrm{Cov}(f,g) + c^2\,\mathrm{Var}(g)$. Minimizing over $c$ gives
+
+$$
+c^* = \frac{\mathrm{Cov}(f, g)}{\mathrm{Var}(g)}, \qquad \mathrm{Var}(\hat\mu_{c^*}) = \mathrm{Var}(f)\,\big(1 - \mathrm{corr}(f,g)^2\big).
+$$
+
+The more correlated $g$ is with $f$, the more variance it removes, and the mean of $g$ does not need to be close to the mean of $f$. The **baseline** in policy gradients is a control variate: [Chapter 6](06-policy-gradient.md) subtracts $b \cdot \nabla\log\pi$, whose expectation is exactly zero by Section A.5. Here we check the formula with $f(X) = e^X$ and $g(X) = X$ for $X \sim \mathcal{N}(0, 1)$, where $\mathbb{E}[e^X] = e^{1/2}$.
+
+```python
+torch.manual_seed(0)
+x = torch.randn(1_000_000, dtype=torch.float64)
+f, g = x.exp(), x                                               # E[g] = 0 exactly
+c_star = torch.cov(torch.stack([f, g]))[0, 1] / g.var()
+for name, c in [('no control variate', 0.0), ('c = c*', c_star.item())]:
+    est = f - c * (g - 0.0)
+    print(f'{name:18s} mean={est.mean():.4f}  per-sample variance={est.var():.4f}')
+print(f'true mean = {torch.tensor(0.5, dtype=torch.float64).exp():.4f}, c* = {c_star:.4f}')
+```
+
+Output:
+
+```text
+no control variate mean=1.6468  per-sample variance=4.6666
+c = c*             mean=1.6474  per-sample variance=1.9541
+true mean = 1.6487, c* = 1.6488
+```
+
+Both estimators agree with the true mean $e^{1/2} \approx 1.6487$. The control variate cuts the per-sample variance by about 60%, the fraction $\mathrm{corr}(e^X, X)^2$. The optimal coefficient here equals $\mathbb{E}[e^X] = e^{1/2}$, because $\mathrm{Cov}(e^X, X) = \mathbb{E}[X e^X] = e^{1/2}$.
+
+## A.4 Importance Sampling
+
+We often need an expectation under one distribution $p$ but have samples from another, $q$. In RL, $p$ is the current policy and $q$ is the older policy or inference engine that generated the data. If $q(x) > 0$ wherever $p(x) f(x) \ne 0$,
+
+$$
+\mathbb{E}_{x \sim p}[f(x)] = \sum_x p(x) f(x) = \sum_x q(x) \frac{p(x)}{q(x)} f(x) = \mathbb{E}_{x \sim q}\big[w(x) f(x)\big], \qquad w(x) = \frac{p(x)}{q(x)}.
+$$
+
+The importance-weighted estimator is unbiased. Its variance is not free:
+
+$$
+\mathrm{Var}_q(w f) = \mathbb{E}_p\big[w(x) f(x)^2\big] - \big(\mathbb{E}_p[f]\big)^2,
+$$
+
+and the factor $w$ inside the expectation makes the variance large where $p$ puts much more mass than $q$. A useful diagnostic is the **effective sample size** of the weights, $n_{\text{eff}} = (\sum_i w_i)^2 / \sum_i w_i^2$, which equals $n$ when all weights are equal and approaches 1 when one weight dominates.
+
+Check unbiasedness on a categorical distribution, using a $q$ close to $p$ and one far from it.
+
+```python
+torch.manual_seed(0)
+p = torch.tensor([0.1, 0.2, 0.3, 0.4])                          # target, [K]
+f = torch.tensor([1.0, 2.0, 3.0, 4.0])                          # function values, [K]
+for name, q in [('q near p', torch.tensor([0.15, 0.2, 0.3, 0.35])),
+                ('q far from p', torch.tensor([0.7, 0.2, 0.08, 0.02]))]:
+    x = torch.multinomial(q, 100_000, replacement=True)         # samples from q, [n]
+    w = p[x] / q[x]                                               # importance weights, [n]
+    est, se = mc_mean_and_stderr(w * f[x])
+    ess = (w.sum() ** 2 / (w ** 2).sum()) / x.numel()
+    print(f'{name:13s} estimate={est:.4f} +/- {se:.4f}   ESS fraction={ess:.3f}')
+print(f'exact E_p[f] = {(p * f).sum():.4f}')
+```
+
+Output:
+
+```text
+q near p      estimate=3.0004 +/- 0.0043   ESS fraction=0.977
+q far from p  estimate=2.9571 +/- 0.0356   ESS fraction=0.108
+exact E_p[f] = 3.0000
+```
+
+Both estimates are consistent with the exact value 3.0, but the far proposal has a standard error several times larger and an effective sample size that is a small fraction of the nominal one. A few rare samples with large weights carry most of the estimate.
+
+### Products of ratios
+
+For a trajectory of $T$ steps, the importance weight is a product of per-step ratios, $w(\tau) = \prod_t \pi_\theta(a_t\mid s_t)/\pi_{\text{old}}(a_t\mid s_t)$. Even when each factor has mean 1 and small spread, the product's variance grows exponentially with $T$. Model each per-token log-ratio as an independent Gaussian with mean $-\sigma^2/2$, which makes each ratio have mean exactly 1.
+
+```python
+torch.manual_seed(0)
+sigma, n = 0.1, 100_000
+for T in [1, 10, 100, 1000]:
+    log_ratio = sigma * torch.randn(n, T) - sigma ** 2 / 2       # [n, T], E[exp] = 1
+    w = log_ratio.sum(-1).exp()                                  # trajectory weight, [n]
+    print(f'T={T:<5} mean(w)={w.mean():.3f}  std(w)={w.std():.3f}  '
+          f'max(w)={w.max():.1f}  ESS fraction={(w.sum() ** 2 / (w ** 2).sum() / n):.4f}')
+```
+
+Output:
+
+```text
+T=1     mean(w)=1.000  std(w)=0.100  max(w)=1.6  ESS fraction=0.9900
+T=10    mean(w)=0.999  std(w)=0.324  max(w)=3.7  ESS fraction=0.9048
+T=100   mean(w)=1.002  std(w)=1.321  max(w)=38.2  ESS fraction=0.3654
+T=1000  mean(w)=0.813  std(w)=18.737  max(w)=2858.7  ESS fraction=0.0019
+```
+
+The weight is unbiased in principle at every length, but at $T = 1000$ the sample mean is already wrong because a few huge weights that would restore it are too rare to have been drawn, and the effective sample size collapses. The exact variance is $e^{T\sigma^2} - 1$. This is why PPO and its successors use *per-token* ratios with clipping rather than trajectory ratios, an approximation that [Chapter 8](08-ppo.md) states precisely.
+
+## A.5 The Log-Derivative Trick
+
+The gradient of an expectation with respect to the parameters of the sampling distribution is
+
+$$
+\nabla_\theta \mathbb{E}_{x \sim p_\theta}[f(x)] = \sum_x \nabla_\theta p_\theta(x)\, f(x) = \sum_x p_\theta(x)\, \nabla_\theta \log p_\theta(x)\, f(x) = \mathbb{E}_{x \sim p_\theta}\big[f(x)\, \nabla_\theta \log p_\theta(x)\big],
+$$
+
+using $\nabla p = p\, \nabla \log p$. The right-hand side can be estimated from samples without differentiating $f$, which may be a test suite. This is the **score-function** or **REINFORCE** estimator, and $\nabla_\theta \log p_\theta(x)$ is the **score**. Setting $f \equiv 1$ gives the identity that makes baselines legal:
+
+$$
+\mathbb{E}_{x \sim p_\theta}\big[\nabla_\theta \log p_\theta(x)\big] = \nabla_\theta \sum_x p_\theta(x) = \nabla_\theta 1 = 0.
+$$
+
+Check both on a softmax distribution over five outcomes. Autograd gives the exact gradient of $\sum_x p_\theta(x) f(x)$; the score-function estimator averages $f(x)\nabla\log p_\theta(x)$ over samples.
+
+```python
+torch.manual_seed(0)
+logits = torch.tensor([0.5, -0.2, 0.1, 0.0, 0.3], requires_grad=True)   # theta, [K]
+f = torch.tensor([1.0, 0.0, 0.0, 1.0, 0.0])                            # e.g. pass/fail, [K]
+exact = torch.autograd.grad((torch.softmax(logits, -1) * f).sum(), logits)[0]
+
+n = 200_000
+x = torch.multinomial(torch.softmax(logits, -1).detach(), n, replacement=True)   # [n]
+score = torch.nn.functional.one_hot(x, 5) - torch.softmax(logits, -1).detach()   # d log p / d logits, [n, K]
+estimate = (f[x, None] * score).mean(0)
+print('exact gradient   :', [round(v, 4) for v in exact.tolist()])
+print('score estimate   :', [round(v, 4) for v in estimate.tolist()])
+print('mean score (~0)  :', [round(v, 4) for v in score.mean(0).tolist()])
+```
+
+Output:
+
+```text
+exact gradient   : [0.1539, -0.0618, -0.0835, 0.0933, -0.1019]
+score estimate   : [0.1538, -0.0617, -0.0833, 0.0929, -0.1017]
+mean score (~0)  : [-0.0003, -0.0001, 0.0007, -0.0005, 0.0002]
+```
+
+For a softmax, the score with respect to the logits is $\mathbf{e}_x - p_\theta$, the one-hot vector of the sampled outcome minus the probabilities. The estimate agrees with autograd to about three decimals, and the average score is zero up to Monte Carlo noise. [Chapter 6](06-policy-gradient.md) applies this identity to whole trajectories, where the environment's transition probabilities drop out of the score because they do not depend on $\theta$.
+
+## A.6 KL Divergence
+
+The **Kullback–Leibler divergence** from $q$ to $p$ is
+
+$$
+\mathrm{KL}(p \,\Vert\, q) = \mathbb{E}_{x \sim p}\Big[\log \frac{p(x)}{q(x)}\Big].
+$$
+
+Three properties are used throughout the book.
+
+**Nonnegativity.** By Jensen's inequality applied to the concave $\log$, $-\mathrm{KL}(p\Vert q) = \mathbb{E}_p[\log(q/p)] \le \log \mathbb{E}_p[q/p] = \log 1 = 0$, with equality only when $p = q$.
+
+**Asymmetry.** $\mathrm{KL}(p\Vert q) \ne \mathrm{KL}(q\Vert p)$ in general. *Forward* KL, $\mathrm{KL}(p_{\text{data}} \Vert \pi_\theta)$, is what maximum likelihood minimizes; it penalizes $\pi_\theta$ for missing modes of the data. *Reverse* KL, $\mathrm{KL}(\pi_\theta \Vert \pi_{\text{ref}})$, is the usual RL regularizer; it is estimated with samples from the policy and penalizes the policy for putting mass where the reference has little. [Chapter 10](10-kl-entropy-regularization.md) and [Chapter 16](16-distillation.md) discuss the consequences.
+
+**The chain rule.** For sequences generated autoregressively, $p(y) = \prod_i p(y_i \mid y_{<i})$, so the log-ratio is a sum over tokens and
+
+$$
+\mathrm{KL}(p \,\Vert\, q) = \sum_i \mathbb{E}_{y_{<i} \sim p}\Big[\mathrm{KL}\big(p(\cdot \mid y_{<i}) \,\Vert\, q(\cdot \mid y_{<i})\big)\Big].
+$$
+
+The sequence KL is the expected sum of per-token KLs along prefixes sampled from $p$. This is what justifies per-token KL penalties. Check it exactly on a two-token sequence model with a vocabulary of three.
+
+```python
+torch.manual_seed(0)
+K = 3
+p1, q1 = torch.softmax(torch.randn(K), -1), torch.softmax(torch.randn(K), -1)        # first token, [K]
+p2, q2 = torch.softmax(torch.randn(K, K), -1), torch.softmax(torch.randn(K, K), -1)  # second | first, [K, K]
+p_joint, q_joint = p1[:, None] * p2, q1[:, None] * q2                                 # [K, K]
+
+def kl(p, q):
+    return (p * (p.log() - q.log())).sum(-1)
+
+sequence_kl = kl(p_joint.flatten(), q_joint.flatten())
+per_token = kl(p1, q1) + (p1 * kl(p2, q2)).sum()             # first token + E_{y1~p}[KL of second]
+print(f'KL over sequences = {sequence_kl:.6f}')
+print(f'sum of per-token  = {per_token:.6f}')
+print(f'reverse direction = {kl(q_joint.flatten(), p_joint.flatten()):.6f}')
+```
+
+Output:
+
+```text
+KL over sequences = 0.436340
+sum of per-token  = 0.436340
+reverse direction = 0.517034
+```
+
+The two forward computations agree to all printed digits, and the reverse KL differs, which illustrates the asymmetry.
+
+## A.7 Estimating KL from Samples
+
+In training we cannot sum over all sequences, so KL is estimated from samples $x \sim q$ (the policy) of the log-ratio between the policy and a reference $p$. With $r = p(x)/q(x)$, the three estimators in John Schulman's note [*Approximating KL Divergence*](http://joschu.net/blog/kl-approx.html) (2020) for $\mathrm{KL}(q \Vert p)$ are
+
+$$
+k_1 = -\log r, \qquad k_2 = \tfrac{1}{2}(\log r)^2, \qquad k_3 = (r - 1) - \log r.
+$$
+
+$k_1$ is unbiased, because its expectation is the definition, but it is negative for many samples and has high variance. $k_3$ is also unbiased, because $\mathbb{E}_q[r - 1] = 0$, so it is $k_1$ plus a control variate in the sense of Section A.3. It is always nonnegative, since $\log r \le r - 1$. $k_2$ is biased but has low variance when $p$ and $q$ are close. Check this numerically.
+
+```python
+torch.manual_seed(0)
+q = torch.softmax(torch.randn(50), -1)                       # policy, [K]
+for scale in [0.1, 1.0]:
+    p = torch.softmax(q.log() + scale * torch.randn(50), -1)  # reference, [K]
+    true_kl = (q * (q.log() - p.log())).sum()
+    x = torch.multinomial(q, 200_000, replacement=True)
+    log_r = p.log()[x] - q.log()[x]                            # [n]
+    ks = {'k1': -log_r, 'k2': 0.5 * log_r ** 2, 'k3': log_r.exp() - 1 - log_r}
+    row = '  '.join(f'{k}: mean={v.mean():.4f} std={v.std():.4f}' for k, v in ks.items())
+    print(f'true KL={true_kl:.4f} | {row}')
+```
+
+Output:
+
+```text
+true KL=0.0040 | k1: mean=0.0040 std=0.0900  k2: mean=0.0041 std=0.0053  k3: mean=0.0040 std=0.0050
+true KL=0.5571 | k1: mean=0.5581 std=1.0667  k2: mean=0.7247 std=0.6300  k3: mean=0.5583 std=0.4170
+```
+
+When the distributions are close (first row), all three means are near the true KL, and $k_2$ and $k_3$ have a much smaller standard deviation than $k_1$. When they are far apart, $k_2$'s bias becomes visible while $k_1$ and $k_3$ remain unbiased. Which estimator to use, and what gradient each one produces when it is placed in a loss rather than a reward, are questions for [Chapter 10](10-kl-entropy-regularization.md).
+
+## Summary
+
+- A Monte Carlo mean has standard error $\sigma/\sqrt{n}$ for independent samples; `mc_mean_and_stderr` computes it, and correlated samples have a smaller effective sample size.
+- A control variate with a known mean keeps an estimator unbiased and removes the fraction $\mathrm{corr}^2$ of its variance. Policy-gradient baselines are control variates.
+- Importance sampling is unbiased, but its variance grows with the mismatch between distributions and grows exponentially with the length of a product of ratios.
+- The log-derivative trick turns the gradient of an expectation into an expectation of $f \nabla\log p$; the score has mean zero.
+- KL is nonnegative and asymmetric, and a sequence KL is the expected sum of per-token KLs. Of the sample estimators, $k_1$ and $k_3$ are unbiased and $k_3$ is never negative.
+
+## Exercises
+
+1. Show that the variance of the importance-sampling estimator is minimized by $q(x) \propto p(x)\,|f(x)|$. Why can't this choice be used in practice?
+2. In Section A.4, change $\sigma$ in the products-of-ratios experiment to 0.03. At what $T$ does the effective sample size fall below 10%? Compare with the prediction $1/(e^{T\sigma^2})$.
+3. Prove that $k_3 \ge 0$ for every sample, and that $\mathbb{E}_q[k_3] = \mathrm{KL}(q\Vert p)$.
+4. Repeat the control-variate experiment with $g(X) = X^2$, whose mean is 1. Compute $c^*$ and the variance reduction. Why is it smaller than for $g(X) = X$?
+5. Change an assumption in Section A.1: draw the 200 samples as 25 groups of 8 that share a per-group success probability drawn uniformly from $[0, 0.6]$. Does the naive standard error still give 95% coverage? Use Section A.2 to explain the result.
+6. Design review: a teammate computes a 95% interval for a pass rate from 4,000 rollouts, which are 8 samples on each of 500 tasks, treating all 4,000 as independent. What is wrong, and what should the interval be computed over?
