@@ -6,7 +6,7 @@
 
 1. **只翻译正文。** 标题、段落、列表、表格中的文字、图注（`![...]` 方括号内的文字）、提示框（Pitfall、In production、Evidence 等）、小结与练习都要翻译。代码块、`Output:` 之后的输出块、`$$` 数学块、Mermaid 图、图片路径一律原样保留，不改一个字符。`scripts/check_translation.py` 会逐字比对。
 2. **`Output:` 标签保持英文。** 它是校验器识别输出块的标记。
-3. **术语首次出现时附英文。** 每章第一次出现某个术语时写成“策略梯度（policy gradient）”，之后只用中文。缩写（PPO、GRPO、KL、SFT、RLVR、GAE、DPO 等）直接使用，不翻译。
+3. **术语首次出现时附英文。** 采用通行译名，首次解释时附英文，例如“策略梯度（policy gradient）”。后文按阅读需要保留英文，不要求每章重复双语标注。actor、critic、on-policy、off-policy、rollout 等保留英文，首次出现时说明含义；不为追求全中文而造译名。缩写（PPO、GRPO、KL、SFT、RLVR、GAE、DPO 等）直接使用，不翻译。
 4. **行内代码保持原样。** `` `train_rl` ``、`` `action_mask` ``、`` `<call> read </call>` `` 等不翻译。函数名、参数名、配置字段、文件名、工具名（`read`、`test`、`edit`、`submit`）都保持英文。
 5. **专有名称不翻译。** BugFix gym、TinyAgent、Qwen3-0.6B、DeepSWE、SWE-bench、verl、vLLM 等保持原文。
 6. **章节编号与结构不变。** 标题保留编号（如 `## 6.1 ...`），标题数量与层级必须和英文版一致。
@@ -27,10 +27,10 @@
 | return | 回报 |
 | value function | 价值函数 |
 | action-value function | 动作价值函数 |
-| advantage | 优势 |
+| advantage | 优势（advantage）；正文可按语境保留英文 |
 | baseline | 基线 |
-| critic / value model | 评论家 / 价值模型 |
-| actor | 行动者 |
+| critic / value model | critic / 价值模型 |
+| actor | actor |
 | trajectory | 轨迹 |
 | episode | 回合 |
 | rollout | rollout（采样轨迹的过程；可译“轨迹采样”，正文中多数保留 rollout） |
@@ -50,11 +50,11 @@
 | outcome reward | 结果奖励 |
 | reward shaping | 奖励塑形 |
 | potential-based shaping | 基于势函数的塑形 |
-| credit assignment | 信用分配 |
+| credit assignment | 回报归因：把奖励转成各个决策的学习信号，不等同于已识别出因果贡献 |
 | discount factor | 折扣因子 |
 | policy gradient | 策略梯度 |
 | score function | 得分函数 |
-| surrogate loss / objective | 替代损失 / 替代目标 |
+| surrogate loss / objective | 代理损失 / 代理目标 |
 | importance sampling | 重要性采样 |
 | importance ratio / probability ratio | 重要性比率 / 概率比 |
 | clipping | 裁剪 |
@@ -62,7 +62,7 @@
 | trust region | 信赖域 |
 | group (in GRPO) | 组 |
 | group size | 组大小 |
-| on-policy / off-policy | 同策略 / 异策略 |
+| on-policy / off-policy | 保留英文，区分数据生成策略是否与当前优化策略一致 |
 | staleness | 陈旧度 |
 | asynchronous | 异步 |
 | entropy | 熵 |
@@ -92,7 +92,7 @@
 | loss aggregation | 损失聚合 |
 | gradient accumulation | 梯度累积 |
 | microbatch / minibatch | 微批次 / 小批次 |
-| epoch | 轮次（epoch） |
+| epoch | epoch（完整遍历一遍批次或数据集）；与交互轮次 turn 区分 |
 | learning rate | 学习率 |
 | warm start / cold start | 热启动 / 冷启动 |
 | base model / base agent | 基座模型 / 基座智能体 |
@@ -101,7 +101,7 @@
 | expert iteration | 专家迭代 |
 | behavior cloning | 行为克隆 |
 | preference | 偏好 |
-| distillation (on-policy / off-policy) | 蒸馏（同策略 / 异策略） |
+| distillation (on-policy / off-policy) | 蒸馏（on-policy / off-policy） |
 | teacher / student | 教师 / 学生 |
 | exposure bias | 暴露偏差 |
 | inference engine | 推理引擎 |
@@ -123,10 +123,10 @@
 | contamination / leakage | 污染 / 泄漏 |
 | shortcut | 捷径 |
 | dashboard | 监控面板 |
-| sanity check | 健全性检查 |
+| sanity check | 基本检查 |
 | design review | 设计评审 |
 | Design problems in practice | 实践中的设计问题 |
-| Problem / Symptom / Cause / Options / Default | 问题 / 症状 / 原因 / 可选方案 / 默认做法 |
+| Problem / Symptom / Cause / Options / Default | 问题 / 现象 / 原因 / 可选方案 / 建议做法 |
 | Pitfall / In production / Evidence | 陷阱 / 生产实践 / 证据 |
 | Summary / Exercises | 小结 / 练习 |
 | measured here / reported / hypothesis | 本书测得 / 文献报告 / 假设 |
@@ -137,12 +137,12 @@
 | English | 中文 |
 | --- | --- |
 | issue (task text) | 问题描述（issue） |
-| bug family / variant | 缺陷族（简称“族”）/ 变体 |
+| bug family / variant | 缺陷类型 / 变体（改变名称、常数等具体代码） |
 | edit op / repair op | 编辑操作 / 修复操作 |
 | scripted policy / baseline | 脚本化策略 / 脚本化基线 |
 | oracle, blind, random, hacker (policy names) | 保留英文 |
 | demonstration | 示范 |
-| owner / ownership (of tokens) | 所有者 / 所有权 |
+| owner / ownership (of tokens) | 生成方 / 归属 |
 | predicted positions | 被预测位置 |
 | prefix / prefix stability | 前缀 / 前缀稳定性 |
 | thinking / non-thinking mode | 思考模式 / 非思考模式 |
@@ -164,10 +164,10 @@
 | zero-advantage group / informative group | 零优势组 / 有信息量的组 |
 | difficulty bias / response-length bias | 难度偏差 / 响应长度偏差 |
 | turn-level / token-level | 轮级 / token 级 |
-| critic-free | 无评论家 |
+| critic-free | 不依赖 critic |
 | dynamic sampling / clip-higher | 动态采样 / clip-higher（保留英文） |
 | dual clipping / approximate KL / early stopping | 双重裁剪 / 近似 KL / 提前停止 |
-| mode-seeking / mode-covering | 寻模 / 覆盖模式 |
+| mode-seeking / mode-covering | 保留英文，分别解释为集中于高概率模式 / 覆盖多个模式 |
 | entropy bonus | 熵奖励 |
 | curriculum | 课程学习 |
 | shortcut feature | 捷径特征 |
@@ -196,4 +196,4 @@
 | invariant / triage / bisect | 不变量 / 排查 / 二分定位 |
 | capstone | 综合实战（capstone） |
 | test-time scaling / self-play | 测试时扩展 / 自博弈 |
-| wall-clock time | 挂钟时间 |
+| wall-clock time | 实际耗时 |

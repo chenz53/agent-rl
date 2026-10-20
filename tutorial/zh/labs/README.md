@@ -3,7 +3,7 @@
 两个可选实验在一个真实的预训练模型上运行[第 19 章](../chapters/19-capstone.md)的训练方案。它们共享任务、隐藏测试奖励、组优势、裁剪损失以及 token-in/token-out 的 rollout，区别在于模型如何行动：
 
 - `qwen_grpo_bugfix.py` 保留 gym 的动作菜单：模型用某个预先编写的编辑操作调用 `edit`，由 gym 写出修改。
-- `qwen_grpo_tools.py` 给模型以 Claude Code 工具命名的通用编码工具（Read、Edit、Write、Bash），由模型自己写出修改。
+- `qwen_grpo_tools.py` 给模型以 Claude Code 工具命名的通用编程工具（Read、Edit、Write、Bash），由模型自己写出修改。
 
 我们保留了两个脚本，而没有重写第一个。第 19 章比较它们的结果，而每个结果文件都必须能由产生它的脚本复现。
 
@@ -12,7 +12,7 @@
 `qwen_grpo_bugfix.py` 从本书生成的 `agentrl` 库中取得 gym、任务、隐藏测试奖励、组优势和裁剪损失，只补充了真实模型所需要的部分：
 
 - **Qwen3 自带的、包含工具 schema 的对话模板**，使用非思考模式。模型输出 `<tool_call>{"name": ..., "arguments": {...}}</tool_call>`；一个解析器把这段 JSON 映射为 gym 的 `<call> tool [op] </call>`，其他任何输出都算作格式错误的调用，并消耗一轮。
-- **token 进 / token 出的 rollout**（第 5 章）。采样得到的 id 按采样原样保留。每个工具结果以模板中工具响应块的 token id 形式追加；脚本启动时会断言这些 id 与模板对同一段对话的渲染结果完全相等。
+- **token-in/token-out 的 rollout**（第 5 章）。采样得到的 id 按采样原样保留。每个工具结果以模板中工具响应块的 token id 形式追加；脚本启动时会断言这些 id 与模板对同一段对话的渲染结果完全相等。
 - **批量化的 Hugging Face `generate`**，温度为 1，关闭 top-k 和 top-p，使采样器的分布正是训练器求导的那个分布。未使用 vLLM。
 - **显存友好的更新。** LM head 只在策略位置上计算，梯度在多个微批次上累积，每个小批次使用同一个 token 均值归一化因子（第 14 章）。优势为零的行在反向传播中被跳过，但它们的 token 仍计入归一化因子，因此结果是精确的。
 
@@ -41,13 +41,13 @@ HF_HUB_OFFLINE=1 python tutorial/labs/qwen_grpo_bugfix.py --steps 30 --lr 1e-6 -
 | 训练前 | 0.200 [0.062, 0.388] | 1.69 | 0.61 |
 | 30 步之后 | 0.800 [0.500, 1.000] | 0.00 | 1.00 |
 
-区间是任务级自助法（bootstrap）区间。配对差值为 +0.600 [+0.325, +0.875]。总墙钟时间为 9.5 分钟。
+区间是任务级自助法（bootstrap）区间。配对差值为 +0.600 [+0.325, +0.875]。总实际耗时为 9.5 分钟。
 
 如何解读：提升主要来自模型学会了 gym 的工具调用格式以及 read、edit、test、submit 的流程。策略的熵在第 15 步降到 0.000，此后大多数组的优势都为零。最终策略是确定性的：它每次都能解决 10 个留出任务中的 8 个，而两个 `range` 任务每次都失败，因为它对它们使用了 `fix_init`。这只是一个随机种子、未做任何调参的结果，因此它演示的是机制，而不是基准测试结果。在同一主机上重跑一次，前几步采样得到的奖励完全复现，而采样器与训练器之间的对数概率差在第二位有效数字上有所不同，这表明 GPU 内核存在非确定性。
 
 ## 工具实验
 
-编辑菜单不是编码智能体的行动方式。`qwen_grpo_tools.py` 用 Claude Code 的工具接口取代它。工具名和参数遵循 Claude Code 的[工具参考文档](https://code.claude.com/docs/en/tools-reference)（2026-10-14 查阅）。工具描述是我们自己写的简短版本，脚本不会向模型提及 Claude Code。
+编辑菜单不是编程智能体的行动方式。`qwen_grpo_tools.py` 用 Claude Code 的工具接口取代它。工具名和参数遵循 Claude Code 的[工具参考文档](https://code.claude.com/docs/en/tools-reference)（2026-10-14 查阅）。工具描述是我们自己写的简短版本，脚本不会向模型提及 Claude Code。
 
 ### 接口
 
@@ -70,7 +70,7 @@ HF_HUB_OFFLINE=1 python tutorial/labs/qwen_grpo_bugfix.py --steps 30 --lr 1e-6 -
 
 - 一个新的临时目录，存放该回合文件的副本，用完即删除（评分器只复制 `<fn>.py`）；
 - `python -I -S -B`，环境中只有 `PATH`、`HOME`（即临时目录）和 `LANG`，因此不继承任何变量或密钥；
-- 10 秒的挂钟超时（Bash 的 `timeout` 可以把它调低）；
+- 10 秒的实际运行超时（Bash 的 `timeout` 可以把它调低）；
 - 子进程在导入任何仓库代码之前设定的 `resource` 限制：5 个 CPU 秒、1 GiB 地址空间、每个写出的文件 1 MiB，以及 `RLIMIT_NPROC=0`，使它无法启动新进程。
 
 训练前在运行主机上检查过工具层：fork 尝试抛出 `BlockingIOError`，一个 10^10 元素的列表抛出 `MemoryError`，一个死循环被 CPU 限制终止，子进程的环境中只有上述三个变量。
@@ -98,7 +98,7 @@ HF_HUB_OFFLINE=1 python tutorial/labs/qwen_grpo_tools.py --steps 18 --lr 1e-6 --
 | 训练前 | 0.100 [0.025, 0.212] | 0.09 | 0.85 | 0.07 | 0.99 |
 | 18 步之后 | 0.488 [0.237, 0.750] | 0.00 | 0.21 | 0.00 | 1.00 |
 
-区间是任务级自助法区间。配对差值为 +0.388 [+0.150, +0.650]。逐任务计数从 [1, 0, 0, 0, 2, 1, 0, 0, 4, 0] 变为 [8, 8, 1, 2, 8, 8, 0, 0, 4, 0]（依次为 minmax、range、compare、zero 和 init 各两个任务）。总挂钟时间为 20.0 分钟，GPU 显存峰值为 14.2 GB。
+区间是任务级自助法区间。配对差值为 +0.388 [+0.150, +0.650]。逐任务计数从 [1, 0, 0, 0, 2, 1, 0, 0, 4, 0] 变为 [8, 8, 1, 2, 8, 8, 0, 0, 4, 0]（依次为 minmax、range、compare、zero 和 init 各两个任务）。总实际耗时为 20.0 分钟，GPU 显存峰值为 14.2 GB。
 
 如何解读：
 

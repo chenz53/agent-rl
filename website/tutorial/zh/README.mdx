@@ -4,15 +4,15 @@ title: "\u667a\u80fd\u4f53\u5f3a\u5316\u5b66\u4e60\uff1a\u4ece\u7b56\u7565\u68af
 
 > 本书中文版译自英文版。英文版是唯一的规范版本，代码、运行输出与图均与英文版完全相同。
 
-本书讲授面向语言模型智能体的强化学习，也就是那些调用工具、读取观测、在多轮中行动并以验证器（verifier）为训练目标的模型。全书从策略梯度（policy gradient）的定义出发，最终搭建出一套完整、经过测试的小型编程智能体训练栈。沿途会讨论后训练团队每天都要做的设计决策：如何在变长的工具轨迹上聚合损失，评论家（critic）何时值得其开销，如何保持推理引擎与训练器一致，如何在奖励投机（reward hacking）进入评测之前发现它，以及如何读懂一个正在出问题的训练监控面板。
+本书讲解如何用强化学习训练语言模型智能体：让模型调用工具、读取结果，并根据多轮交互的最终结果改进策略。验证器（verifier）负责给结果打分。全书从策略梯度（policy gradient）的定义出发，最终搭建出一套完整、经过测试的小型编程智能体训练栈。沿途会讨论后训练团队每天都要做的设计决策：如何在变长的工具轨迹上聚合损失，何时值得为 critic（价值模型）付出额外开销，如何保持推理引擎与训练器一致，如何在奖励投机（reward hacking）进入评测之前发现它，以及如何读懂一个正在出问题的训练监控面板。
 
 ## 本书的组织方式
 
 本书逐章搭建**同一个系统**：
 
-- **BugFix gym**（第 4 章）是一族小型 Python 修复任务。智能体使用 `read`、`test`、`edit` 和 `submit` 这几个工具来修复它们。测试会执行真实代码，隐藏测试集防止过拟合，而一个漏洞利用（exploit）操作让奖励投机真实地发生。
-- **TinyAgent**（第 3 章）是一个小型 transformer 策略，在 CPU 上用强化学习训练约一分钟即可完成。它能复现大规模训练中出现的现象：格式学习、熵坍缩、长度效应、跨轮次的信用分配以及奖励投机。
-- **真实模型线索**在模型特定行为起作用的地方使用真实的 Qwen3-0.6B 分词器和模型，例如对话模板、工具调用 token、重分词漂移，以及推理引擎与训练器之间的对数概率不一致。
+- **BugFix gym**（第 4 章）是一组小型 Python 修复任务。智能体使用 `read`、`test`、`edit` 和 `submit` 这几个工具来修复它们。测试会执行真实代码，隐藏测试用于检查公开用例之外的修复效果，而一个漏洞利用（exploit）操作让奖励投机真实地发生。
+- **TinyAgent**（第 3 章）是一个小型 transformer 策略，在 CPU 上用强化学习训练约一分钟即可完成。它能复现大规模训练中出现的现象：格式学习、熵坍缩、长度效应、跨轮次的回报归因以及奖励投机。
+- **真实模型实验**在模型特定行为起作用的地方使用真实的 Qwen3-0.6B 分词器和模型，例如对话模板、工具调用 token、重分词漂移，以及推理引擎与训练器之间的对数概率不一致。
 
 每个机制都先推导，再在一个短代码块中从零实现，然后运行。其打印输出直接出现在代码下方。仿照 [D2L](https://github.com/d2l-ai/d2l-zh) 的做法，某一章构建的函数会标记为 `#@save` 并收集进 `agentrl` 包，因此后续章节直接调用 `arl.ppo_policy_loss(...)`，而不必重复实现。到了综合实战（capstone）一章，读者已经亲手写过训练栈的每一个部分。
 
@@ -29,13 +29,13 @@ title: "\u667a\u80fd\u4f53\u5f3a\u5316\u5b66\u4e60\uff1a\u4ece\u7b56\u7565\u68af
 | | [4. 环境与工具：BugFix gym](/tutorial/zh/chapters/04-environments-and-tools) | 智能体作用于什么？什么算作成功？ |
 | | [5. 轨迹、模板与掩码](/tutorial/zh/chapters/05-trajectories-and-templates) | 一个多轮回合如何变成训练张量？ |
 | **II. 策略优化** | [6. 策略梯度](/tutorial/zh/chapters/06-policy-gradient) | 奖励如何变成梯度？ |
-| | [7. 优势与信用分配](/tutorial/zh/chapters/07-advantages-and-credit) | 哪些动作应当获得功劳？ |
+| | [7. 优势与回报归因](/tutorial/zh/chapters/07-advantages-and-credit) | 哪些动作应当获得正向反馈？ |
 | | [8. PPO：安全地复用样本](/tutorial/zh/chapters/08-ppo) | 昂贵的 rollout 如何在多次更新中复用？ |
-| | [9. GRPO 与无评论家方法族](/tutorial/zh/chapters/09-grpo-and-variants) | GRPO、Dr. GRPO、DAPO、RLOO 和 GSPO 各自改变了什么？ |
+| | [9. GRPO 与不依赖 critic 的方法](/tutorial/zh/chapters/09-grpo-and-variants) | GRPO、Dr. GRPO、DAPO、RLOO 和 GSPO 各自改变了什么？ |
 | | [10. KL、熵与正则化](/tutorial/zh/chapters/10-kl-entropy-regularization) | 如何防止策略漂移或坍缩？ |
 | **III. 奖励与智能体** | [11. 奖励、验证器与奖励投机](/tutorial/zh/chapters/11-rewards-and-verifiers) | 应当奖励什么？智能体会如何作弊？ |
 | | [12. 多轮智能体与长时程](/tutorial/zh/chapters/12-multi-turn-and-long-horizons) | 回合变长时什么会出问题？ |
-| **IV. 系统** | [13. Rollout 系统与异策略校正](/tutorial/zh/chapters/13-rollout-systems) | 推理引擎、训练器和环境如何协同工作？ |
+| **IV. 系统** | [13. Rollout 系统与 off-policy 校正](/tutorial/zh/chapters/13-rollout-systems) | 推理引擎、训练器和环境如何协同工作？ |
 | | [14. 规模化与效率](/tutorial/zh/chapters/14-scaling-and-efficiency) | token、显存和 GPU 时数都花在了哪里？ |
 | **V. 超越纯强化学习** | [15. SFT、拒绝采样与偏好](/tutorial/zh/chapters/15-sft-and-rejection-sampling) | 何时示范或比较是更好的信号？ |
 | | [16. 面向智能体的蒸馏](/tutorial/zh/chapters/16-distillation) | 教师如何为学生自己的轨迹打分？ |
@@ -63,4 +63,4 @@ python3 scripts/build_tutorial_site.py                   # regenerate the Mintli
 
 ## 实验能说明什么，不能说明什么
 
-TinyAgent 实验是真实的，在 CPU 上运行，但规模很小。它们演示机制，并让故障模式可以复现，而不是基准测试结果。论文报告的结果会标注为文献报告并注明日期。建议会标注为本书的建议。环境只执行为本书编写的可信代码；第 4 章解释了真实的模型生成代码所需要的隔离。
+TinyAgent 实验均实际运行过，但模型和任务集都很小。它们用来解释机制、复现故障，不能作为大模型性能的基准证据。论文报告的结果会标注为文献报告并注明日期。建议会标注为本书的建议。环境只执行为本书编写的可信代码；第 4 章解释了真实的模型生成代码所需要的隔离。

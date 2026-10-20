@@ -1,12 +1,12 @@
 # A. 数学工具
 
-本附录汇集了强化学习各章反复用到的概率工具。每一节先给出简短推导，再用 torch 做数值检验，让每个恒等式都是你亲眼看到成立的，而不是凭信任接受的。正文各章在需要某个结果时会链接到这里。这里的内容并不专属于语言模型，但每个例子都是因为它会在某个语言模型场景中再次出现才被选中的。
+本附录整理各章反复用到的概率工具。每节给出简短推导和 PyTorch 数值检验，正文会在需要时链接到相应部分。重点不是重复一遍概率论，而是说明这些恒等式怎样用于回报、梯度和评测估计。
 
 本附录只保存了一个函数 `mc_mean_and_stderr`，全书凡是报告带误差棒的蒙特卡洛估计，都会用到它。
 
 ## A.1 蒙特卡洛估计与误差棒
 
-强化学习中几乎每个量都是无法精确计算的期望：目标 $J(\theta)$、梯度、通过率（pass rate）。我们通过采样来估计它。给定随机变量 $X$ 的独立同分布样本 $x_1, \dots, x_n$，其均值为 $\mu$、方差为 $\sigma^2$，样本均值 $\bar X = \frac{1}{n}\sum_i x_i$ 是无偏（unbiased）的，即 $\mathbb{E}[\bar X] = \mu$，其方差（variance）为
+强化学习中许多关键量都写成期望，而实际训练通常无法精确求出它们：目标 $J(\theta)$、梯度、通过率（pass rate）。我们通过采样来估计它。给定随机变量 $X$ 的独立同分布样本 $x_1, \dots, x_n$，其均值为 $\mu$、方差为 $\sigma^2$，样本均值 $\bar X = \frac{1}{n}\sum_i x_i$ 是无偏（unbiased）的，即 $\mathbb{E}[\bar X] = \mu$，其方差（variance）为
 
 $$
 \mathrm{Var}(\bar X) = \frac{1}{n^2} \sum_{i=1}^n \mathrm{Var}(x_i) = \frac{\sigma^2}{n}.
@@ -134,13 +134,13 @@ $$
 \mathbb{E}_{x \sim p}[f(x)] = \sum_x p(x) f(x) = \sum_x q(x) \frac{p(x)}{q(x)} f(x) = \mathbb{E}_{x \sim q}\big[w(x) f(x)\big], \qquad w(x) = \frac{p(x)}{q(x)}.
 $$
 
-重要性加权估计量是无偏的，但其方差并非没有代价：
+重要性加权估计量是无偏的，但分布失配可能使它的方差很大：
 
 $$
 \mathrm{Var}_q(w f) = \mathbb{E}_p\big[w(x) f(x)^2\big] - \big(\mathbb{E}_p[f]\big)^2,
 $$
 
-期望中的因子 $w$ 使得在 $p$ 比 $q$ 分配多得多质量的地方方差很大。一个有用的诊断量是权重的**有效样本量** $n_{\text{eff}} = (\sum_i w_i)^2 / \sum_i w_i^2$：所有权重相等时它等于 $n$，某个权重占主导时它趋近 1。
+期望中的因子 $w$ 使得在 $p$ 的概率远高于 $q$ 的区域方差很大。一个有用的诊断量是权重的**有效样本量** $n_{\text{eff}} = (\sum_i w_i)^2 / \sum_i w_i^2$：所有权重相等时它等于 $n$，某个权重占主导时它趋近 1。
 
 在一个类别分布上检验无偏性，分别使用接近 $p$ 和远离 $p$ 的 $q$。
 
@@ -191,7 +191,7 @@ T=100   mean(w)=1.002  std(w)=1.321  max(w)=38.2  ESS fraction=0.3654
 T=1000  mean(w)=0.813  std(w)=18.737  max(w)=2858.7  ESS fraction=0.0019
 ```
 
-在原理上，权重在每个长度下都是无偏的；但在 $T = 1000$ 时，样本均值已经出错，因为能把均值拉回来的那几个巨大权重过于稀有，没有被采到，有效样本量随之坍缩。精确方差为 $e^{T\sigma^2} - 1$。这就是为什么 PPO 及其后继方法使用带裁剪（clipping）的*逐 token* 比率而不是轨迹比率；[第 8 章](08-ppo.md)会精确说明这一近似。
+理论上，任意长度下权重的期望仍为 1；但在 $T = 1000$ 时，样本均值已经明显偏离 1，因为能把均值拉回来的那几个巨大权重过于稀有，没有被采到，有效样本量随之坍缩。精确方差为 $e^{T\sigma^2} - 1$。这就是为什么 PPO 及其后继方法使用带裁剪（clipping）的*逐 token* 比率而不是轨迹比率；[第 8 章](08-ppo.md)会精确说明这一近似。
 
 ## A.5 对数导数技巧
 
@@ -246,7 +246,7 @@ $$
 
 **非负性。** 对凹函数 $\log$ 应用 Jensen 不等式，$-\mathrm{KL}(p\Vert q) = \mathbb{E}_p[\log(q/p)] \le \log \mathbb{E}_p[q/p] = \log 1 = 0$，等号仅在 $p = q$ 时成立。
 
-**非对称性。** 一般而言 $\mathrm{KL}(p\Vert q) \ne \mathrm{KL}(q\Vert p)$。*前向 KL*（forward KL）$\mathrm{KL}(p_{\text{data}} \Vert \pi_\theta)$ 是最大似然所最小化的量，它惩罚 $\pi_\theta$ 遗漏数据中的模式。*反向 KL*（reverse KL）$\mathrm{KL}(\pi_\theta \Vert \pi_{\text{ref}})$ 是常用的强化学习正则项，它用策略的样本来估计，惩罚策略把质量放在参考策略（reference policy）几乎不放质量的地方。[第 10 章](10-kl-entropy-regularization.md)和[第 16 章](16-distillation.md)讨论其后果。
+**非对称性。** 一般而言 $\mathrm{KL}(p\Vert q) \ne \mathrm{KL}(q\Vert p)$。*前向 KL*（forward KL）$\mathrm{KL}(p_{\text{data}} \Vert \pi_\theta)$ 是最大似然所最小化的量，它惩罚 $\pi_\theta$ 遗漏数据中的模式。*反向 KL*（reverse KL）$\mathrm{KL}(\pi_\theta \Vert \pi_{\text{ref}})$ 是常用的强化学习正则项，它用策略的样本来估计，惩罚策略给参考策略（reference policy）概率极低的位置分配较多概率。[第 10 章](10-kl-entropy-regularization.md)和[第 16 章](16-distillation.md)讨论其后果。
 
 **链式法则。** 对自回归生成的序列，$p(y) = \prod_i p(y_i \mid y_{<i})$，因此对数比率是 token 上的和，并且
 
@@ -281,7 +281,7 @@ sum of per-token  = 0.436340
 reverse direction = 0.517034
 ```
 
-两种前向计算在所有打印位上都一致，而反向 KL 不同，这说明了非对称性。
+两种前向计算在显示的精度下完全一致，而反向 KL 不同，这说明了非对称性。
 
 ## A.7 从样本估计 KL
 
