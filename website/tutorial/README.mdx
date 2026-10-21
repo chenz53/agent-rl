@@ -4,7 +4,23 @@ title: "Agentic RL: From Policy Gradients to Coding Agents"
 
 *[中文版](/tutorial/zh/README) is available: the prose is translated; code, outputs, and figures are identical.*
 
-This book teaches reinforcement learning for language-model agents. That means models that call tools, read observations, act over many turns, and are trained against verifiers. It starts from the definition of a policy gradient and ends with a complete, tested training stack for a small coding agent. Along the way it covers the design decisions that post-training teams make every day: how to aggregate a loss over variable-length tool trajectories, when a critic is worth its cost, how to keep the inference engine and the trainer consistent, how to detect a reward hack before it reaches an evaluation, and how to read a training dashboard that is going wrong.
+This book is for engineers who already train language models and want to understand how to train agents: models that call tools, read observations, and act over many turns. It teaches RL from first principles while keeping the broader post-training workflow in view, including SFT, preference learning, and on-policy distillation.
+
+I've spent years training foundation models, but agentic RL has not been my main focus. As agentic RL and post-training evolve, I've found it hard to find a systematic explanation that connects the theory, code, and practical decisions. This tutorial grew out of that gap. I created it together with GPT-6 to work through the subject carefully and share what I learn along the way.
+
+The central question is concrete: **how does a coding agent's attempt to fix a bug become a learning signal?** We follow the entire path, from the model's generated tokens and tool results to trajectory tensors, verifier rewards, a loss, and a parameter update. The chapters build a small, tested training stack in PyTorch, with derivations, runnable implementations, and checked outputs. That connection makes it possible to explain both why an algorithm works and why a particular implementation can fail.
+
+## What you should be able to do
+
+After working through the code and exercises, you should be able to:
+
+- **Build a training loop:** define a coding environment and verifier, collect multi-turn rollouts, construct training tensors, update the policy, and evaluate on held-out tasks.
+- **Explain the objective:** derive policy gradients, advantages, PPO, and GRPO; trace which tokens contribute to the loss and how masks, normalization, and KL regularization change the update.
+- **Make engineering decisions:** reason about tool budgets, reward design, long-horizon credit assignment, rollout freshness, and consistency between inference and training.
+- **Diagnose failures:** investigate rising reward without better task performance, reward hacking, entropy collapse, and unstable updates using logs and controlled experiments.
+- **Evaluate new methods:** separate established results from implementation choices and open questions, then design an experiment to test an alternative.
+
+The goal is to prepare you to contribute to post-training research and engineering: implement a method, justify its assumptions, inspect its behavior, and test a proposed improvement. The small training stack gives you a system you can understand end to end; the real-model lab connects it to model-specific behavior. The final section of this page explains the limits of those experiments.
 
 ## How the book works
 
