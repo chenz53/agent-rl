@@ -121,7 +121,7 @@ Reviewed: 2026-10-13. This ledger identifies what was actually inspected. It is 
 | Source | Use | Evidence boundary |
 | --- | --- | --- |
 | [Open Source Initiative: MIT License](https://opensource.org/license/mit), checked 2026-10-20 | Standard license text in the root `LICENSE` | License text inspected; copyright holder and year filled in for this repository |
-| [Shields.io static badges](https://shields.io/badges/static-badge) and [GitHub Repo stars](https://shields.io/badges/git-hub-repo-stars), checked 2026-10-20 | README badge URL syntax and flat-square style | Official documentation inspected; Python and PyTorch minimum versions come from this repository's `pyproject.toml`. The repository is private, so the Star badge is a static link rather than an unavailable public count |
+| [Shields.io static badges](https://shields.io/badges/static-badge) and [GitHub Repo stars](https://shields.io/badges/git-hub-repo-stars), checked 2026-10-20 | README badge URL syntax and flat-square style | Official documentation inspected; Python and PyTorch minimum versions come from this repository's `pyproject.toml`. The Star badge uses the public GitHub repository star-count endpoint |
 
 ## What remains unknown
 

@@ -7,7 +7,7 @@
 [![PyTorch 2.4+](https://img.shields.io/badge/PyTorch-2.4%2B-EE4C2C?style=flat-square&logo=pytorch&logoColor=white)](https://pytorch.org/)
 [![Read in English](https://img.shields.io/badge/Read-English-2a78d6?style=flat-square)](tutorial/README.md)
 [![Read in Simplified Chinese](https://img.shields.io/badge/Read-简体中文-2a78d6?style=flat-square)](tutorial/zh/README.md)
-[![Star on GitHub](https://img.shields.io/badge/GitHub-Star_this_repo-181717?style=flat-square&logo=github)](https://github.com/chenz53/agent-rl/stargazers)
+[![GitHub Stars](https://img.shields.io/github/stars/chenz53/agent-rl?style=flat-square&logo=github&label=Stars)](https://github.com/chenz53/agent-rl/stargazers)
 
 I've spent years training foundation models, but agentic RL has not been my main focus. As agentic RL and post-training evolve, I've found it hard to find a systematic explanation that connects the theory, code, and practical decisions. This tutorial grew out of that gap. I created it together with GPT-6 to work through the subject carefully and share what I learn along the way.
 
