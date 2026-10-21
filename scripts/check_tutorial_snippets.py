@@ -4,9 +4,9 @@ Rules enforced:
   * Every ```python block that prints must be followed by an ``Output:`` text block
     whose content matches the printed stdout exactly. A block that prints nothing
     must not be followed by an Output block.
-  * A block whose first line is ``#@save`` is appended to the book library
-    ``agentrl``. Saved blocks may only contain imports, function/class definitions,
-    and constant assignments.
+  * A block whose first line is ``#@save`` is collected into a topic module
+    in the book library ``agentrl``. Saved blocks may only contain imports,
+    function/class definitions, and constant assignments.
   * Chapter N sees ``import agentrl`` built only from the saved blocks of chapters
     that precede it. Each chapter runs in a fresh namespace.
   * Display math uses ``$$`` on its own lines.
@@ -15,60 +15,18 @@ Use --chapters to execute a subset (earlier chapters still contribute their save
 blocks to the library). Use --refresh to rewrite Output blocks from actual stdout.
 """
 import argparse
-import ast
 import contextlib
 import fnmatch
 import io
 import json
 import os
-from pathlib import Path
 import re
 import sys
 import time
-import types
 
-ROOT = Path(__file__).resolve().parents[1]
-CHAPTERS = ROOT / 'tutorial' / 'chapters'
-BLOCK = re.compile(
-    r'```python\n(?P<code>.*?)\n```(?P<tail>\n\nOutput:\n\n```text\n(?P<output>.*?)\n```)?',
-    re.S,
-)
+from book_library import BLOCK, ROOT, chapter_paths, make_library, saved_blocks, validate_saved
+
 DEFAULT_THREADS = None
-SAVE_ALLOWED = (ast.Import, ast.ImportFrom, ast.FunctionDef, ast.ClassDef,
-                ast.Assign, ast.AnnAssign, ast.Expr)
-
-
-def chapter_paths():
-    return sorted(CHAPTERS.glob('*.md'))
-
-
-def saved_blocks(path):
-    """Return the code of every #@save block in a chapter, in order."""
-    blocks = []
-    for match in BLOCK.finditer(path.read_text()):
-        code = match['code']
-        if code.lstrip().startswith('#@save'):
-            blocks.append(code)
-    return blocks
-
-
-def validate_saved(path, code):
-    for node in ast.parse(code).body:
-        if not isinstance(node, SAVE_ALLOWED):
-            raise ValueError(f'{path.name}: #@save block may only define names, got {type(node).__name__}')
-        if isinstance(node, ast.Expr) and not isinstance(getattr(node, 'value', None), ast.Constant):
-            raise ValueError(f'{path.name}: #@save block may not call functions at top level')
-
-
-def make_library(paths):
-    module = types.ModuleType('agentrl')
-    module.__file__ = '<agentrl built from tutorial chapters>'
-    sys.modules['agentrl'] = module
-    for path in paths:
-        for code in saved_blocks(path):
-            validate_saved(path, code)
-            exec(compile(code, f'agentrl:{path.name}', 'exec'), module.__dict__)
-    return module
 
 
 def check_math(path, source):

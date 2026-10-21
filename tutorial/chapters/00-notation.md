@@ -60,10 +60,12 @@ import agentrl as arl
 and call `arl.policy_evaluation(...)`, `arl.TinyAgent(...)`, and so on. This is how the book becomes one build: by the capstone, every component of the training stack has been derived, implemented, and saved once, and the capstone imports it. A chapter may use only Python, PyTorch, the standard library, its own earlier blocks, and functions saved by *earlier* chapters. The checker enforces this by building `agentrl` from the preceding chapters only. To build the package locally, run
 
 ```text
-python3 scripts/build_library.py          # writes agentrl/__init__.py from all #@save blocks
+python3 scripts/build_library.py          # writes topic modules and public exports in agentrl/
 ```
 
-Never edit `agentrl/__init__.py` by hand; edit the chapter and rebuild.
+The generated package groups implementations by topic: `policy.py` contains TinyAgent and token probabilities, `environments.py` contains BugFix gym, `trajectories.py` records rollouts, and `ppo.py` and `grpo.py` implement policy updates. `__init__.py` only re-exports these definitions, so `arl.TinyAgent` and `agentrl.policy.TinyAgent` are the same class. The [module index](../../agentrl/README.md) maps every module to its source chapter.
+
+The generator resolves `arl.name` inside saved code into an explicit import from the defining module. It retains the implementation and comments, and adds a pointer to each source block. Both the generated package and the chapter checker use this module graph; the checker loads only earlier chapters. Never edit generated files in `agentrl/` by hand; edit the chapter and rebuild.
 
 **Checking a chapter.** `scripts/check_tutorial_snippets.py` executes chapters and compares every block's stdout with the `Output:` block that follows it. Authors run it on the book's check host, which has PyTorch installed, through a wrapper that copies the repository to a private directory:
 
@@ -150,7 +152,7 @@ Chapters 1–9 form the spine and should be read in order. After Chapter 9, the 
 
 ## Exercises
 
-1. Run `python3 scripts/build_library.py` and open `agentrl/__init__.py`. Which chapter defines each function?
+1. Run `python3 scripts/build_library.py` and open `agentrl/README.md`, then `agentrl/policy.py`. Which chapter defines each function? Compare with `agentrl/__init__.py`: which file contains the implementation, and which exposes the public API?
 2. Change one printed number in a chapter's `Output:` block and run the checker on that chapter. Read the error message it produces.
 3. In the code block of Section 0.2, change the mask so that the first trajectory includes its first token. Predict the new masked sum before running it. Which kind of token is usually at position 0, and why should it be masked?
 4. Pick one claim in [Chapter 1, Section 1.6](01-introduction.md#16-public-reference-points) and find its entry in [sources.md](../sources.md). What does the entry say was *not* checked?

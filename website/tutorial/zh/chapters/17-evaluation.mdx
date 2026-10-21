@@ -501,12 +501,12 @@ renamed = [arl.randomize_names(t, rng).fn_name for t in train_tasks for _ in ran
 print(f'training episodes renamed to a held-out function name: {sum(x in heldout_names for x in renamed) / len(renamed):.2f}')
 
 def heldout_pass_with_pool(model, pool, seed=4):
-    """Held-out pass@1 when episodes are renamed only to names in pool (temporarily replaces arl.FN_NAMES)."""
-    saved, arl.FN_NAMES = arl.FN_NAMES, sorted(pool)
+    """Held-out pass@1 when episodes are renamed only to names in pool (temporarily replaces arl.grpo.FN_NAMES)."""
+    saved, arl.grpo.FN_NAMES = arl.grpo.FN_NAMES, sorted(pool)
     try:
         return sample_counts(model, heldout_tasks, tok, 32, cfg, torch.Generator().manual_seed(seed)).sum().item() / 320
     finally:
-        arl.FN_NAMES = saved
+        arl.grpo.FN_NAMES = saved
 
 for name, pool in [('training names', train_names), ('held-out names', heldout_names)]:
     print(f'held-out tasks renamed to {name:<15} GRPO 80 pass@1 {heldout_pass_with_pool(trained, pool):.3f}')

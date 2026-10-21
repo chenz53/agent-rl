@@ -114,7 +114,7 @@ flowchart LR
 
 ## As built: Chapters 1–5 (authoritative for downstream authors)
 
-Read the saved blocks in the chapters themselves, or the generated `agentrl/__init__.py`, for exact code. This section summarizes their contracts.
+Read the saved blocks in the chapters themselves, or the generated topic modules listed in `agentrl/README.md`, for the implementation. `agentrl/__init__.py` only re-exports their public API. This section summarizes their contracts.
 
 - **Ch1** saves `CLAMP_ISSUE`, `CLAMP_BUGGY`, and `CLAMP_FIXED`.
 - **Ch2** saves `REPAIR_STATES`, `REPAIR_ACTIONS`, `repair_transitions`, `make_repair_mdp(step_cost=0.0) -> (P[S,A,S], R[S,A])`, `discounted_return(rewards, gamma)`, `policy_evaluation(P, R, policy, gamma)`, and `value_iteration(...)`. Appendix A saves `mc_mean_and_stderr(samples)`.
@@ -144,7 +144,7 @@ Read the saved blocks in the chapters themselves, or the generated `agentrl/__in
 
 ## As built: Chapters 6–7 (authoritative for downstream authors)
 
-All saved code lives in the chapters' `#@save` blocks; the generated `agentrl/__init__.py` has the exact text. Tensor arguments named `mask` are the `[B, T-1]` action masks from `collate`, aligned to `ids[:, 1:]`, and every function below returns zeros where the mask is 0.
+All saved code lives in the chapters' `#@save` blocks. The generated topic modules retain those implementations and comments, resolve `arl.name` to explicit module dependencies, and point back to each source block; `agentrl/__init__.py` only re-exports names. Tensor arguments named `mask` are the `[B, T-1]` action masks from `collate`, aligned to `ids[:, 1:]`, and every function below returns zeros where the mask is 0.
 
 - **Ch6** saves:
   - `masked_mean(x, mask, dim=None)`: `sum(x * mask) / sum(mask)` (scalar when `dim=None`, else reduced over `dim`; denominator clamped at 1e-8).

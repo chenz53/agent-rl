@@ -68,7 +68,7 @@ Code quality is the largest complaint about the previous edition. Code blocks mu
 
 ### The `#@save` mechanism
 
-A block whose **first line** is `#@save` becomes part of the generated `agentrl` package. Rules:
+A block whose **first line** is `#@save` becomes part of a topic module in the generated `agentrl` package. `scripts/book_library.py` owns the chapter-to-module map, import resolution, and the shared loader used by the checker. `__init__.py` contains explicit public re-exports only. Rules:
 
 - A saved block contains only imports, `def`, `class`, and constant assignments. It does not print or call anything at top level.
 - A saved block prints nothing, so it has no `Output:` block.
@@ -77,6 +77,8 @@ A block whose **first line** is `#@save` becomes part of the generated `agentrl`
 - Save only functions the outline lists in that chapter's API, or that a later chapter will plausibly reuse. A demo-only helper stays unsaved.
 - Never change the signature of a function another chapter saved. If a chapter needs to extend one, define a new function and explain why.
 - A saved function needs a one-line docstring that states shapes.
+- The generator preserves saved implementations and comments, resolves `arl.name` to the module that defines it, and adds source pointers. Topic modules use explicit dependencies on earlier chapters rather than importing the public facade. Regenerate with `python3 scripts/build_library.py`; use `--check` to detect stale generated files.
+- Mutable settings belong to their defining module. Rebinding a public re-export does not update a function's module globals. For example, Chapter 17 temporarily changes `arl.grpo.FN_NAMES`, not `arl.FN_NAMES`.
 
 ### Output blocks
 

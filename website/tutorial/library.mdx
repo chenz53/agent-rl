@@ -2,10 +2,12 @@
 title: "The agentrl library"
 ---
 
-The book builds `agentrl` one `#@save` block at a time. Each entry links to the chapter that derives it. Regenerate the package with `python3 scripts/build_library.py`.
+The book builds `agentrl` one `#@save` block at a time. Each entry links to the chapter that derives it. Implementations live in topic modules; `agentrl/__init__.py` only re-exports the public API. Regenerate the package with `python3 scripts/build_library.py`.
 
 
 ## [2. Reinforcement Learning Fundamentals](/tutorial/chapters/02-rl-fundamentals)
+
+Implementation: `agentrl/mdp.py`.
 
 | Definition | Summary |
 | --- | --- |
@@ -16,6 +18,8 @@ The book builds `agentrl` one `#@save` block at a time. Each entry links to the 
 | `value_iteration(P, R, gamma, iters=10000, tol=1e-12)` | Optimal values and a greedy policy. P [S, A, S], R [S, A] -> (V* [S], actions [S]). |
 
 ## [3. Language Models as Policies](/tutorial/chapters/03-language-models-as-policies)
+
+Implementation: `agentrl/policy.py`.
 
 | Definition | Summary |
 | --- | --- |
@@ -28,6 +32,8 @@ The book builds `agentrl` one `#@save` block at a time. Each entry links to the 
 | `chunked_log_probs(hidden, weight, ids, chunk_size=128)` | Selected-token log-probs without a full [B, T, V] tensor: hidden [B, T, D], weight [V, D], ids [B, T] -> [B, T]. |
 
 ## [4. Environments and Tools: the BugFix Gym](/tutorial/chapters/04-environments-and-tools)
+
+Implementation: `agentrl/environments.py`.
 
 | Definition | Summary |
 | --- | --- |
@@ -56,6 +62,8 @@ The book builds `agentrl` one `#@save` block at a time. Each entry links to the 
 
 ## [5. Trajectories, Templates, and Masks](/tutorial/chapters/05-trajectories-and-templates)
 
+Implementation: `agentrl/trajectories.py`.
+
 | Definition | Summary |
 | --- | --- |
 | `class Tokenizer` | Word-level tokenizer: whitespace words (newline -> &lt;nl>) &lt;-> ids; specials have fixed ids. |
@@ -72,6 +80,8 @@ The book builds `agentrl` one `#@save` block at a time. Each entry links to the 
 
 ## [6. Policy Gradients](/tutorial/chapters/06-policy-gradient)
 
+Implementation: `agentrl/policy_gradient.py`.
+
 | Definition | Summary |
 | --- | --- |
 | `masked_mean(x, mask, dim=None)` | Mean of x where mask is 1: x, mask [B, T] -> scalar (dim=None) or reduced over dim. |
@@ -82,6 +92,8 @@ The book builds `agentrl` one `#@save` block at a time. Each entry links to the 
 | `policy_gradient_step(model, optimizer, batch, advantages, mode='token_mean', norm_const=None, max_grad_norm=1.0)` | One REINFORCE update on a collated batch; advantages [B] or [B, T-1] -> dict(loss, grad_norm). |
 
 ## [7. Advantages and Credit Assignment](/tutorial/chapters/07-advantages-and-credit)
+
+Implementation: `agentrl/advantages.py`.
 
 | Definition | Summary |
 | --- | --- |
@@ -97,12 +109,16 @@ The book builds `agentrl` one `#@save` block at a time. Each entry links to the 
 
 ## [8. PPO: Reusing Samples Safely](/tutorial/chapters/08-ppo)
 
+Implementation: `agentrl/ppo.py`.
+
 | Definition | Summary |
 | --- | --- |
 | `ppo_policy_loss(logp, old_logp, advantages, mask, clip_low=0.2, clip_high=0.2, mode='token_mean', dual_clip=None, norm_const=None)` | Clipped surrogate on policy tokens: logp, old_logp, mask [B, T]; advantages [B] or [B, T] -> (loss, stats). |
 | `value_loss(values, old_values, returns, mask, clip=0.2)` | Clipped value regression on policy tokens: values, old_values, returns, mask [B, T] -> scalar. |
 
 ## [9. GRPO and the Critic-Free Family](/tutorial/chapters/09-grpo-and-variants)
+
+Implementation: `agentrl/grpo.py`.
 
 | Definition | Summary |
 | --- | --- |
@@ -124,6 +140,8 @@ The book builds `agentrl` one `#@save` block at a time. Each entry links to the 
 
 ## [10. KL, Entropy, and Regularization](/tutorial/chapters/10-kl-entropy-regularization)
 
+Implementation: `agentrl/regularization.py`.
+
 | Definition | Summary |
 | --- | --- |
 | `kl_estimate(logp, ref_logp, kind='k3')` | Per-token KL(pi_theta || pi_ref) estimate [B, T]; kind 'k1'|'k2'|'k3', or 'k1+'|'k3+' = value of k, gradient of k2. |
@@ -134,6 +152,8 @@ The book builds `agentrl` one `#@save` block at a time. Each entry links to the 
 
 ## [11. Rewards, Verifiers, and Reward Hacking](/tutorial/chapters/11-rewards-and-verifiers)
 
+Implementation: `agentrl/rewards.py`.
+
 | Definition | Summary |
 | --- | --- |
 | `make_reward(kind='hidden', exploit_penalty=0.0, invalid_penalty=0.0, step_penalty=0.0, wrong_submit=0.0)` | Reward hook for BugFixEnv: terminal info dict -> float, a verifier score plus penalty terms. |
@@ -143,6 +163,8 @@ The book builds `agentrl` one `#@save` block at a time. Each entry links to the 
 | `flaky_reward(reward, false_neg=0.0, false_pos=0.0, seed=0)` | Wrap reward(info): a pass reads as 0 w.p. false_neg; a failed submission reads as 1 w.p. false_pos. |
 
 ## [12. Multi-Turn Agents and Long Horizons](/tutorial/chapters/12-multi-turn-and-long-horizons)
+
+Implementation: `agentrl/multiturn.py`.
 
 | Definition | Summary |
 | --- | --- |
@@ -158,6 +180,8 @@ The book builds `agentrl` one `#@save` block at a time. Each entry links to the 
 
 ## [13. Rollout Systems and Off-Policy Correction](/tutorial/chapters/13-rollout-systems)
 
+Implementation: `agentrl/rollout_systems.py`.
+
 | Definition | Summary |
 | --- | --- |
 | `agent_episode_durations(n, generator, mean_turns=8, max_turns=40, tokens_per_turn=(100, 600), decode_rate=40.0, tool_median=2.0, tool_sigma=1.0)` | Simulated wall-clock seconds of n agent episodes -> [n]. Turns ~ geometric, tool latency ~ log-normal. |
@@ -168,6 +192,8 @@ The book builds `agentrl` one `#@save` block at a time. Each entry links to the 
 | `train_offpolicy(model, tasks, tok, cfg, steps, lag=0, correction='none', cap=2.0, sampler=None)` | train_rl with a behavior policy `lag` updates old (optionally sampler(model)) -> history of dicts. |
 
 ## [14. Scaling and Efficiency](/tutorial/chapters/14-scaling-and-efficiency)
+
+Implementation: `agentrl/efficiency.py`.
 
 | Definition | Summary |
 | --- | --- |
@@ -180,6 +206,8 @@ The book builds `agentrl` one `#@save` block at a time. Each entry links to the 
 
 ## [15. SFT, Rejection Sampling, and Preferences](/tutorial/chapters/15-sft-and-rejection-sampling)
 
+Implementation: `agentrl/sft.py`.
+
 | Definition | Summary |
 | --- | --- |
 | `sft_loss(model, batch)` | Masked NLL on policy tokens: batch from collate (ids [B, T], action_mask [B, T-1]) -> scalar. |
@@ -190,11 +218,15 @@ The book builds `agentrl` one `#@save` block at a time. Each entry links to the 
 
 ## [16. Distillation for Agents](/tutorial/chapters/16-distillation)
 
+Implementation: `agentrl/distillation.py`.
+
 | Definition | Summary |
 | --- | --- |
 | `distill_loss(student_logits, teacher_logits, mask, kind='reverse_kl')` | Per-token KL between student and (detached) teacher: logits [B, T, V], mask [B, T] -> masked mean. |
 
 ## [17. Evaluation](/tutorial/chapters/17-evaluation)
+
+Implementation: `agentrl/evaluation.py`.
 
 | Definition | Summary |
 | --- | --- |
@@ -206,6 +238,8 @@ The book builds `agentrl` one `#@save` block at a time. Each entry links to the 
 | `required_units(sd, effect, alpha=0.05, power=0.8)` | Units (tasks, seeds) for a two-sided z-test to detect a mean difference `effect` given per-unit sd. |
 
 ## [18. Debugging RL Runs](/tutorial/chapters/18-debugging-rl-runs)
+
+Implementation: `agentrl/debugging.py`.
 
 | Definition | Summary |
 | --- | --- |
@@ -221,6 +255,8 @@ The book builds `agentrl` one `#@save` block at a time. Each entry links to the 
 | `sanity_checks(model, trajs, tok, cfg, bug=None)` | Invariants of the instrumented trainer on one batch at step 0 -> dict check -> (measured value, passed). |
 
 ## [A. Mathematical Tools](/tutorial/chapters/A-math)
+
+Implementation: `agentrl/math_utils.py`.
 
 | Definition | Summary |
 | --- | --- |

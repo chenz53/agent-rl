@@ -14,7 +14,7 @@ ROOT = Path(__file__).resolve().parents[1]
 TUTORIAL = ROOT / 'tutorial'
 SITE = ROOT / 'website'
 sys.path.insert(0, str(ROOT / 'scripts'))
-from check_tutorial_snippets import saved_blocks  # noqa: E402
+from book_library import CHAPTER_MODULES, saved_blocks  # noqa: E402
 
 PARTS = [
     ('Front matter', lambda n: n == '00'),
@@ -110,6 +110,7 @@ def convert(source, url_of):
 def library_page():
     """An API index of every #@save definition, grouped by defining chapter."""
     rows = ['The book builds `agentrl` one `#@save` block at a time. Each entry links to the chapter that derives it. '
+            'Implementations live in topic modules; `agentrl/__init__.py` only re-exports the public API. '
             'Regenerate the package with `python3 scripts/build_library.py`.\n']
     for path in sorted((TUTORIAL / 'chapters').glob('*.md')):
         entries = []
@@ -124,7 +125,10 @@ def library_page():
                     entries.append(f'| `{sig}` | {escape_prose(doc)} |')
         if entries:
             title = path.read_text().splitlines()[0].removeprefix('# ')
-            rows.append(f'\n## [{title}](/tutorial/chapters/{path.stem})\n\n| Definition | Summary |\n| --- | --- |\n' + '\n'.join(entries))
+            module = CHAPTER_MODULES[path.stem.split('-')[0]]
+            rows.append(f'\n## [{title}](/tutorial/chapters/{path.stem})\n\n'
+                        f'Implementation: `agentrl/{module}.py`.\n\n'
+                        '| Definition | Summary |\n| --- | --- |\n' + '\n'.join(entries))
     return '\n'.join(rows)
 
 

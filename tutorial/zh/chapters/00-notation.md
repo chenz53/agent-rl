@@ -60,10 +60,12 @@ import agentrl as arl
 然后调用 `arl.policy_evaluation(...)`、`arl.TinyAgent(...)` 等。这些组件会逐章积累：到综合实战（capstone）一章时，训练栈的每个组件都已经推导、实现并保存过一次，综合实战章节直接导入它们。一章只能使用 Python、PyTorch、标准库、本章前面的代码块，以及*更早*章节保存的函数。检查器只用前面的章节构建 `agentrl`，以此强制执行这条规则。要在本地构建这个包，运行
 
 ```text
-python3 scripts/build_library.py          # writes agentrl/__init__.py from all #@save blocks
+python3 scripts/build_library.py          # writes topic modules and public exports in agentrl/
 ```
 
-不要手工编辑 `agentrl/__init__.py`；应当修改章节并重新构建。
+生成的包按主题存放实现：`policy.py` 包含 TinyAgent 和 token 概率计算，`environments.py` 包含 BugFix gym，`trajectories.py` 记录 rollout，`ppo.py` 和 `grpo.py` 实现策略更新。`__init__.py` 只导出接口，所以 `arl.TinyAgent` 和 `agentrl.policy.TinyAgent` 是同一个类。[模块索引](../../../agentrl/README.md)列出了各模块对应的来源章节。
+
+生成器把已保存代码中的 `arl.name` 解析为对定义模块的显式导入，保留实现和注释，并标注每个代码块的来源。生成包和逐章检查器使用同一套模块依赖关系；检查某章时，只加载此前章节的模块。不要手工编辑 `agentrl/` 中的生成文件，应当修改章节并重新构建。
 
 **检查一章。** `scripts/check_tutorial_snippets.py` 执行各章，并将每个代码块的标准输出与其后的 `Output:` 块进行比较。作者在本书的检查主机（已安装 PyTorch）上运行它，通过一个包装脚本把仓库复制到一个私有目录中：
 
@@ -150,7 +152,7 @@ flowchart LR
 
 ## 练习
 
-1. 运行 `python3 scripts/build_library.py` 并打开 `agentrl/__init__.py`。每个函数是在哪一章定义的？
+1. 运行 `python3 scripts/build_library.py`，先看 `agentrl/README.md`，再打开 `agentrl/policy.py`。每个函数来自哪一章？对照 `agentrl/__init__.py`：哪个文件存放实现，哪个文件导出公共接口？
 2. 修改某一章 `Output:` 块中的一个打印数字，然后对这一章运行检查器。阅读它产生的错误信息。
 3. 在 0.2 节的代码块中修改掩码，使第一条轨迹包含它的第一个 token。在运行前先预测新的掩码求和结果。位置 0 上通常是哪一类 token？为什么它应该被掩掉？
 4. 在[第 1 章 1.6 节](01-introduction.md#16-公开的参考系统)中挑一个论断，并在 [sources.md](../../sources.md) 中找到它的条目。该条目说明了哪些内容*没有*查验？
