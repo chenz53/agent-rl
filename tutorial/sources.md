@@ -116,6 +116,13 @@ Reviewed: 2026-10-13. This ledger identifies what was actually inspected. It is 
 | Qwen3-0.6B tools lab (`tutorial/labs/qwen_grpo_tools.py`), run 2026-10-14 for Ch19 | Measured: held-out pass@1 0.100 -> 0.488 after 18 GRPO steps with Read/Edit/Write/Bash tools; tool failures 0.85 -> 0.21 per episode; Bash calls 0.07 -> 0.00; results in `tutorial/labs/results/` | Book's own measurement; one seed; process isolation with resource limits, not a security sandbox; an earlier attempt stopped by out-of-memory at step 2 is logged, not used as a result; not a benchmark |
 | [Hairline](https://github.com/lucasmarkes/hairline) (Lucas Marques, MIT) and its [design essay](https://lucasmarkes.com/lab/hairline), checked 2026-10-14 | Visual language for mechanism diagrams: one isometric projection, one stroke weight, rounded solids with a bright outline and dim crease, filled plates, callouts outside the drawing, one accent stroke | README and essay read; no code copied; `scripts/hairline.py` is an independent static-SVG re-implementation without pointer interaction |
 
+## Repository presentation and licensing
+
+| Source | Use | Evidence boundary |
+| --- | --- | --- |
+| [Open Source Initiative: MIT License](https://opensource.org/license/mit), checked 2026-10-20 | Standard license text in the root `LICENSE` | License text inspected; copyright holder and year filled in for this repository |
+| [Shields.io static badges](https://shields.io/badges/static-badge) and [GitHub Repo stars](https://shields.io/badges/git-hub-repo-stars), checked 2026-10-20 | README badge URL syntax and flat-square style | Official documentation inspected; Python and PyTorch minimum versions come from this repository's `pyproject.toml`. The repository is private, so the Star badge is a static link rather than an unavailable public count |
+
 ## What remains unknown
 
 Private vendor loss details, training mixtures, and final-stage scheduling are not established by these sources. We describe public methods and our own experiments. A claim of adoption needs a specific public report with scope and date, rather than a general statement that “all labs do this.”

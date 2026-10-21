@@ -1,6 +1,6 @@
 """Generate the Mintlify reading edition (website/) from the canonical tutorial Markdown.
 
-Canonical sources: tutorial/README.md, tutorial/chapters/*.md, tutorial/figures/*.svg,
+Canonical sources: tutorial/README.md, tutorial/chapters/*.md, tutorial/figures/ image assets,
 tutorial/sources.md, tutorial/editorial-guide.md. Never edit website/ by hand.
 """
 import ast
@@ -26,6 +26,8 @@ PARTS = [
     ('Part VI · Practice', lambda n: n in {'17', '18', '19', '20'}),
     ('Appendices', lambda n: n.isalpha()),
 ]
+
+IMAGE_SUFFIXES = {'.svg', '.png', '.jpg', '.jpeg', '.webp'}
 
 ZH_PARTS = ['前言', '第一部分 · 基础', '第二部分 · 策略优化', '第三部分 · 奖励与智能体', '第四部分 · 系统',
             '第五部分 · 超越纯强化学习', '第六部分 · 实践', '附录']
@@ -85,7 +87,7 @@ def convert(source, url_of):
         if not path_part:
             return f'{bang}[{label}](#{site_anchor(source, anchor)})'
         resolved = (source.parent / path_part).resolve()
-        if resolved.suffix == '.svg':
+        if resolved.suffix.lower() in IMAGE_SUFFIXES:
             return f'{bang}[{label}](/tutorial/figures/{resolved.name})'
         if resolved in url_of:
             if sep:
@@ -154,8 +156,10 @@ def main():
     (SITE / 'tutorial' / 'library.mdx').write_text('---\ntitle: "The agentrl library"\n---\n\n' + library_page() + '\n')
     figures = SITE / 'tutorial' / 'figures'
     figures.mkdir(parents=True, exist_ok=True)
-    for svg in sorted((TUTORIAL / 'figures').glob('*.svg')):
-        shutil.copyfile(svg, figures / svg.name)
+    image_assets = sorted(p for p in (TUTORIAL / 'figures').iterdir()
+                          if p.is_file() and p.suffix.lower() in IMAGE_SUFFIXES)
+    for asset in image_assets:
+        shutil.copyfile(asset, figures / asset.name)
     title, body = convert(TUTORIAL / 'README.md', url_of)
     (SITE / 'index.mdx').write_text('---\ntitle: ' + json.dumps(title) + '\n---\n\n' + body + '\n')
 
@@ -187,7 +191,7 @@ def main():
     (SITE / 'docs.json').write_text(json.dumps(config, indent=2) + '\n')
     for stale in ('about.mdx', 'build-manifest.json'):
         (SITE / stale).unlink(missing_ok=True)
-    print(f'Generated {len(pages)} pages ({len(chapters)} chapters, {len(zh_chapters)} translated) and {len(list(figures.glob("*.svg")))} figures')
+    print(f'Generated {len(pages)} pages ({len(chapters)} chapters, {len(zh_chapters)} translated) and {len(image_assets)} figures')
 
 
 if __name__ == '__main__':
