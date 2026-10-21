@@ -42,17 +42,6 @@ Start with the [English edition](tutorial/README.md) or the [中文版](tutorial
 | `scripts/` | Checker, library builder, figure toolkit, site builder, remote runners. |
 | `website/` | **Generated** Mintlify reading edition. Do not edit; run `scripts/build_tutorial_site.py`. |
 
-## Verify
-
-```sh
-scripts/remote_check.sh full              # execute all chapters on the GPU host and compare outputs
-python3 scripts/build_library.py
-python3 scripts/check_translation.py --fix-anchors --require-all   # Chinese edition in sync
-python3 scripts/build_tutorial_site.py && (cd website && mint broken-links)
-```
-
-The checker runs on the `vp` host, which already has PyTorch and the Qwen3-0.6B cache. The scripts never install packages.
-
 ## License
 
 Unless otherwise noted, the original code and tutorial content in this repository are licensed under the [MIT License](LICENSE). Third-party materials retain their respective licenses and attribution requirements.
