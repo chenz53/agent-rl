@@ -6,7 +6,7 @@
 
 **About the author.** I'm [Zekai Chen (@chenz53)](https://x.com/zekaic8), a researcher who has spent years training foundation models. The book's source code and issue tracker live at [github.com/chenz53/agent-rl](https://github.com/chenz53/agent-rl); corrections and suggestions are welcome.
 
-This book is for anyone already train language models and want to understand how to train agents: models that call tools, read observations, and act over many turns. It teaches RL from first principles while keeping the broader post-training workflow in view, including SFT, preference learning, and on-policy distillation.
+This book is for anyone who already trains language models and wants to understand how to train agents: models that call tools, read observations, and act over many turns. It teaches RL from first principles while keeping the broader post-training workflow in view, including SFT, preference learning, and on-policy distillation.
 
 I've spent years training foundation models, but agentic RL has not been my main focus. As agentic RL and post-training evolve, I've found it hard to find a systematic explanation that connects the theory, code, and practical decisions. This tutorial grew out of that gap. I created it together with GPT-6 to work through the subject carefully and share what I learn along the way.
 
